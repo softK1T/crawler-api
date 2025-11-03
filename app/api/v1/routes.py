@@ -10,7 +10,7 @@ router = APIRouter(prefix="/v1", tags=["crawler"])
 
 @router.post("/fetch", response_model=SubmitResponse, status_code=202)
 def submit_fetch(req: FetchRequest):
-    task = fetch_page.delay(req.url, headers=req.headers, timeout_s=req.timeout_s)
+    task = fetch_page.delay(str(req.url), headers=req.headers, timeout_s=req.timeout_s)
     return SubmitResponse(task_id=task.id)
 
 @router.get("/jobs/{task_id}", response_model=JobStatus)

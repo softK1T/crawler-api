@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, name="app.worker.tasks.fetch_page", acks_late=True)
-def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout: int = 10) -> Dict[str, Any] | None:
+def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout_s: int = 10) -> Dict[str, Any] | None:
     started = perf_counter()
     hdrs = dict(DEFAULT_HEADERS)
     if headers:
@@ -24,7 +24,7 @@ def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout: i
         crawler = Crawler(
             proxy_file=settings.proxy_file,
             max_retries=settings.max_retries,
-            timeout=float(timeout or settings.request_timeout_secs),
+            timeout=float(timeout_s or settings.request_timeout_secs),
             delay=settings.request_delay_secs,
             headers=hdrs,
             use_http2=settings.use_http2,
@@ -46,8 +46,7 @@ def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout: i
                 "error_message": "All retries failed",
             }
             save_result(self.request.id, error_payload)
-            self.update_state(state=states.FAILURE, meta=error_payload['error_message'])
-            return {"stored": True, "task_id": self.request.id, "url": url, "error": error_payload['error_message']}
+            raise RuntimeError("All retries failed")
 
         body_b64_gz = base64.b64encode(gzip.compress(body_bytes)).decode('utf-8')
         result = {
@@ -56,7 +55,7 @@ def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout: i
             "status_code": 200,
             "content_type": None,
             "response_time_ms": elapsed,
-            "headers_trunc": {k: v for k, v in crawler.headers.items() if k in settings.headers_to_log},
+            "headers_trunc": {k: v for k, v in crawler.headers.items()},
             "body_encoding": "base64+gzip",
             "body": body_b64_gz,
             "error_type": None,
@@ -79,5 +78,4 @@ def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout: i
             "error_message": str(e),
         }
         save_result(self.request.id, error_payload)
-        self.update_state(state=states.FAILURE, meta={"error": str(e)})
-        return {"stored": True, "task_id": self.request.id, "url": url, "error": str(e)}
+        raise

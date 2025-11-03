@@ -7,4 +7,5 @@ celery_app = Celery(
     backend=settings.celery_result_backend,
 )
 celery_app.conf.task_routes = {"app.worker.tasks.*": {"queue": "crawler"}}
+celery_app.conf.imports = ["app.worker.tasks.fetch"]
 celery_app.autodiscover_tasks(["app.worker.tasks"])
