@@ -1,1 +1,1 @@
-from .fetch import fetch_page
+from .crawl import crawl_page
