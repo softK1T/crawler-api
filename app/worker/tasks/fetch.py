@@ -15,7 +15,8 @@ log = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, name="app.worker.tasks.fetch_page", acks_late=True)
-def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout_s: int = 10) -> Dict[str, Any] | None:
+def fetch_page(self, url: str, headers: Dict[str, str] | None = None,
+               timeout_s: int = 10, batch_id: str | None = None) -> Dict[str, Any] | None:
     started = perf_counter()
     hdrs = dict(DEFAULT_HEADERS)
     if headers:
@@ -35,6 +36,7 @@ def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout_s:
         if body_bytes is None:
             error_payload = {
                 "task_id": self.request.id,
+                "batch_id": batch_id,
                 "url": url,
                 "status_code": None,
                 "content_type": None,
@@ -51,6 +53,7 @@ def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout_s:
         body_b64_gz = base64.b64encode(gzip.compress(body_bytes)).decode('utf-8')
         result = {
             "task_id": self.request.id,
+            "batch_id": batch_id,
             "url": url,
             "status_code": 200,
             "content_type": None,
@@ -67,6 +70,7 @@ def fetch_page(self, url: str, headers: Dict[str, str] | None = None, timeout_s:
         elapsed_ms = int((perf_counter() - started) * 1000)
         error_payload = {
             "task_id": self.request.id,
+            "batch_id": batch_id,
             "url": url,
             "status_code": None,
             "content_type": None,
