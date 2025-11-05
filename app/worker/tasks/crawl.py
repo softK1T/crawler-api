@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 
 from celery import states
 from app.core.config import settings
-from app.services import storage
+from app.services.storage import storage
 from app.services.crawler import Crawler, DEFAULT_HEADERS
 from app.worker.celery_app import celery_app
 

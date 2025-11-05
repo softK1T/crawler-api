@@ -2,7 +2,7 @@ import uuid
 import time
 from typing import List, Optional
 from app.services.job_service import JobService
-from app.services.storage import save_batch_info, get_batch_info
+from app.services.storage import storage
 from app.schemas.responses import BatchResponse, BatchStatusResponse, JobStatusResponse
 
 
@@ -23,7 +23,7 @@ class BatchService:
             "created_at": time.time(),
             "total_count": len(urls)
         }
-        save_batch_info(batch_id, batch_info)
+        storage.save_batch_info(batch_id, batch_info)
 
         return BatchResponse(
             batch_id=batch_id,
@@ -33,7 +33,7 @@ class BatchService:
 
     @staticmethod
     def get_batch_status(batch_id: str) -> Optional[BatchStatusResponse]:
-        batch_info = get_batch_info(batch_id)
+        batch_info = storage.get_batch_info(batch_id)
         if not batch_info:
             return None
 
@@ -61,7 +61,7 @@ class BatchService:
 
     @staticmethod
     def get_batch_results(batch_id: str) -> Optional[dict]:
-        batch_info = get_batch_info(batch_id)
+        batch_info = storage.get_batch_info(batch_id)
         if not batch_info:
             return None
 

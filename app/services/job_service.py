@@ -1,7 +1,7 @@
 from celery.result import AsyncResult
 from typing import Optional
 from app.worker.celery_app import celery_app
-from app.services.storage import get_result
+from app.services.storage import storage
 from app.schemas.responses import JobStatusResponse, CrawlResult, TaskState
 from app.worker.tasks.crawl import crawl_page
 
@@ -22,7 +22,7 @@ class JobService:
 
     @staticmethod
     def get_job_result(job_id: str) -> Optional[CrawlResult]:
-        payload = get_result(job_id)
+        payload = storage.get_job_result(job_id)
         if not payload:
             return None
 
