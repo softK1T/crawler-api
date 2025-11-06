@@ -1,4 +1,6 @@
+import hashlib
 import itertools
+import logging
 import random
 import time
 from typing import Optional, Dict, Any
@@ -17,6 +19,7 @@ DEFAULT_HEADERS = {
     "User-Agent": random.choice(HEADERS_POOL),
 }
 
+
 def auth_line_to_proxy_url(line: str) -> Optional[str]:
     s = line.strip()
     if not s:
@@ -24,10 +27,19 @@ def auth_line_to_proxy_url(line: str) -> Optional[str]:
     if "://" in s:
         s = s.split("://", 1)[1]
     parts = s.split(":")
-    if len(parts) != 4:
+
+    if len(parts) == 2:
+        # ip:port
+        host, port = parts
+        return f"http://{host}:{port}"
+    elif len(parts) == 4:
+        # ip:port:user:pass
+        host, port, user, pwd = parts
+        return f"http://{user}:{pwd}@{host}:{port}"
+    else:
+        logging.warning(f"Unsupported proxy format: {line}")
         return None
-    host, port, user, pwd = parts
-    return f"http://{user}:{pwd}@{host}:{port}"
+
 
 def to_httpx_proxy(proxy_auth_line: Optional[str]) -> Optional[str]:
     if not proxy_auth_line:
@@ -39,15 +51,16 @@ def to_httpx_proxy(proxy_auth_line: Optional[str]) -> Optional[str]:
         proxy_uri = "http://" + proxy_uri
     return proxy_uri
 
+
 class Crawler:
     def __init__(
-        self,
-        proxy_file: Optional[str],
-        max_retries: int = 3,
-        timeout: float = 10.0,
-        delay: float = 1.0,
-        headers: Optional[Dict[str, str]] = None,
-        use_http2: bool = True,
+            self,
+            proxy_file: Optional[str],
+            max_retries: int = 3,
+            timeout: float = 10.0,
+            delay: float = 1.0,
+            headers: Optional[Dict[str, str]] = None,
+            use_http2: bool = True,
     ):
         self.proxy_file = proxy_file
         self.max_retries = max_retries
@@ -67,14 +80,25 @@ class Crawler:
         self._proxy_cycle = itertools.cycle(proxies) if proxies else None
         self._bad_proxies: set[str] = set()
 
+        self._request_count = 0
+        self._current_proxy = None
+
+    import time
+    import hashlib
+
     def pick_proxy_line(self) -> Optional[str]:
-        if not self._proxy_cycle:
+        if not self._proxies:
             return None
-        for _ in range(len(self._proxies)):
-            picked = next(self._proxy_cycle)
-            if picked not in self._bad_proxies:
-                return picked
-        return None
+
+        available_proxies = [p for p in self._proxies if p not in self._bad_proxies]
+        if not available_proxies:
+            return None
+
+        time_seed = int(time.time() / 10)
+        hash_seed = hashlib.md5(str(time_seed).encode()).hexdigest()
+        proxy_index = int(hash_seed[:8], 16) % len(available_proxies)
+
+        return available_proxies[proxy_index]
 
     def crawl_bytes(self, url: str) -> Optional[bytes]:
         tries = 0
@@ -83,17 +107,17 @@ class Crawler:
             proxy_line = self.pick_proxy_line()
             proxy_url = to_httpx_proxy(proxy_line)
             try:
-                print("Crawling", url, "proxy:", proxy_url, "UA:", self.headers.get("User-Agent"))
+                print(f"Crawling {url} with proxy {proxy_url} UA: {self.headers.get('User-Agent')}")
                 timeout = httpx.Timeout(connect=6, read=self.timeout, write=10, pool=5)
-                # proxy=<str> per docs; HTTP/2 enabled if installed via httpx[http2]
                 with httpx.Client(
-                    http2=self.use_http2,
-                    proxy=proxy_url,
-                    timeout=timeout,
-                    follow_redirects=True,
-                    headers=self.headers,
+                        http2=self.use_http2,
+                        proxy=proxy_url,
+                        timeout=timeout,
+                        follow_redirects=True,
+                        headers=self.headers,
                 ) as client:
                     res = client.get(url)
+                    self._request_count += 1
                     if 200 <= res.status_code < 300:
                         return res.content
                     else:

@@ -6,7 +6,7 @@ services:
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -22,6 +22,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_URL=redis://redis:6379/2
+      - PROXY_FILE=/app/proxies.txt
     ports:
       - "8000:8000"
     command: >
@@ -38,6 +39,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_URL=redis://redis:6379/2
+      - PROXY_FILE=/app/proxies.txt
     command: >
       celery -A app.worker.celery_app.celery_app worker -Q crawler -l info --concurrency=2
     volumes:

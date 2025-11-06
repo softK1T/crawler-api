@@ -12,7 +12,7 @@ class Settings(BaseModel):
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/2")
     result_ttl_secs: int = int(os.getenv("RESULT_TTL_SECS", "86400"))
 
-    proxy_file: str | None = os.getenv("PROXY_FILE")
+    proxy_file: str = os.getenv("PROXY_FILE")
     max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
     request_timeout_secs: int = int(os.getenv("REQUEST_TIMEOUT_SECS", "15"))
     request_delay_secs: float = float(os.getenv("REQUEST_DELAY_SECS", "1.0"))
