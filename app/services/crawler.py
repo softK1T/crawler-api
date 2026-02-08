@@ -1,13 +1,14 @@
-# app/services/crawler.py
-
 import itertools
 import logging
 import random
 import time
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
-import httpx
 
+import httpx
+import redis
+
+from app.core.config import settings
 
 HEADERS_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -31,6 +32,8 @@ GENERIC_BAN_INDICATORS = [
     "too many requests",
     "please verify",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 def build_headers(url: str, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -69,33 +72,59 @@ def auth_line_to_proxy_url(line: str) -> Optional[str]:
         host, port, user, pwd = parts
         return f"http://{user}:{pwd}@{host}:{port}"
     else:
-        logging.warning(f"Unsupported proxy format: {line}")
+        logger.warning(f"Unsupported proxy format: {line}")
         return None
 
 
+class ProxyRateLimiter:
+    KEY_PREFIX = "proxy_cd:"
+
+    def __init__(self, redis_url: str, per_proxy_delay: float):
+        self._redis = redis.Redis.from_url(redis_url, decode_responses=True)
+        self._delay_ms = int(per_proxy_delay * 1000)
+
+    def try_acquire(self, proxy: str) -> bool:
+        key = f"{self.KEY_PREFIX}{proxy}"
+        return self._redis.set(key, "1", nx=True, px=self._delay_ms) is not None
+
+    def wait_and_acquire(self, proxies: List[str], timeout: float = 60) -> Optional[str]:
+        deadline = time.time() + timeout
+        candidates = list(proxies)
+        while time.time() < deadline:
+            random.shuffle(candidates)
+            for proxy in candidates:
+                if self.try_acquire(proxy):
+                    return proxy
+            time.sleep(0.3)
+        return None
+
+    def ttl_remaining(self, proxy: str) -> float:
+        ttl_ms = self._redis.pttl(f"{self.KEY_PREFIX}{proxy}")
+        return max(0.0, ttl_ms / 1000) if ttl_ms and ttl_ms > 0 else 0.0
+
+
 class SmartProxyPool:
-    def __init__(self, proxy_list: List[str]):
+    def __init__(self, proxy_list: List[str], per_proxy_delay: float = 5.0,
+                 redis_url: Optional[str] = None):
         self.proxies = proxy_list
-        self.proxy_cycle = itertools.cycle(proxy_list) if proxy_list else None
+        self.per_proxy_delay = per_proxy_delay
 
         self.bad_proxies: set[str] = set()
         self.blocked_proxies: set[str] = set()
-        self.proxy_usage_count: Dict[str, int] = {}
-        self.proxy_last_used: Dict[str, float] = {}
-        self.proxy_success_rate: Dict[str, float] = {}
         self.proxy_total_requests: Dict[str, int] = {}
         self.proxy_successful_requests: Dict[str, int] = {}
+        self.proxy_success_rate: Dict[str, float] = {}
 
         self.max_requests_per_proxy = 15
-        self.cooldown_time = 300
         self.min_success_rate = 0.3
-        self.rotation_interval = 10
-
-        self.current_proxy: Optional[str] = None
-        self.requests_with_current = 0
         self.total_requests = 0
 
-        logging.info(f"Loaded {len(proxy_list)} proxies")
+        self.rate_limiter = ProxyRateLimiter(
+            redis_url=redis_url or settings.redis_url,
+            per_proxy_delay=per_proxy_delay,
+        )
+
+        logger.info(f"Loaded {len(proxy_list)} proxies, per-proxy delay: {per_proxy_delay}s")
 
     def _update_proxy_stats(self, proxy: str, success: bool):
         if proxy not in self.proxy_total_requests:
@@ -110,90 +139,58 @@ class SmartProxyPool:
         successful = self.proxy_successful_requests[proxy]
         self.proxy_success_rate[proxy] = successful / total if total > 0 else 0.0
 
-    def _is_proxy_available(self, proxy: str) -> bool:
-        current_time = time.time()
-
+    def _is_healthy(self, proxy: str) -> bool:
         if proxy in self.bad_proxies or proxy in self.blocked_proxies:
             return False
 
-        usage_count = self.proxy_usage_count.get(proxy, 0)
-        if usage_count >= self.max_requests_per_proxy:
-            last_used = self.proxy_last_used.get(proxy, 0)
-            if current_time - last_used < self.cooldown_time:
-                return False
-            else:
-                self.proxy_usage_count[proxy] = 0
-
         if self.proxy_total_requests.get(proxy, 0) >= 5:
-            success_rate = self.proxy_success_rate.get(proxy, 1.0)
-            if success_rate < self.min_success_rate:
-                logging.warning(f"Proxy {proxy} low success rate: {success_rate:.2f}")
+            if self.proxy_success_rate.get(proxy, 1.0) < self.min_success_rate:
+                logger.warning(f"Proxy {proxy} low success rate")
                 self.bad_proxies.add(proxy)
                 return False
 
         return True
 
-    def get_available_proxies(self) -> List[str]:
-        return [p for p in self.proxies if self._is_proxy_available(p)]
+    def get_healthy_proxies(self) -> List[str]:
+        return [p for p in self.proxies if self._is_healthy(p)]
 
-    def pick_proxy_line(self) -> Optional[str]:
-        available_proxies = self.get_available_proxies()
-
-        if not available_proxies:
-            logging.error("No available proxies")
+    def pick_proxy_line(self, timeout: float = 60) -> Optional[str]:
+        healthy = self.get_healthy_proxies()
+        if not healthy:
+            logger.error("No healthy proxies available")
             return None
 
         self.total_requests += 1
 
-        if (self.current_proxy and
-                self.requests_with_current >= self.rotation_interval):
-            logging.info(f"Forced rotation after {self.requests_with_current} requests")
-            self.current_proxy = None
-            self.requests_with_current = 0
+        healthy.sort(
+            key=lambda p: self.proxy_success_rate.get(p, 1.0),
+            reverse=True,
+        )
 
-        if (not self.current_proxy or
-                self.current_proxy not in available_proxies):
-            available_proxies.sort(
-                key=lambda p: self.proxy_success_rate.get(p, 1.0),
-                reverse=True
-            )
+        for proxy in healthy:
+            if self.rate_limiter.try_acquire(proxy):
+                logger.debug(f"Acquired proxy: {proxy}")
+                return proxy
 
-            top_proxies = available_proxies[:min(3, len(available_proxies))]
-            self.current_proxy = random.choice(top_proxies)
-            self.requests_with_current = 0
-
-            logging.info(f"Selected proxy: {self.current_proxy}")
-
-        current_time = time.time()
-        self.proxy_usage_count[self.current_proxy] = \
-            self.proxy_usage_count.get(self.current_proxy, 0) + 1
-        self.proxy_last_used[self.current_proxy] = current_time
-        self.requests_with_current += 1
-
-        return self.current_proxy
-
-    def mark_proxy_blocked(self, proxy: str):
+        logger.info("All proxies on cooldown, waiting...")
+        proxy = self.rate_limiter.wait_and_acquire(healthy, timeout=timeout)
         if proxy:
-            self.blocked_proxies.add(proxy)
-            logging.error(f"Proxy {proxy} blocked by target site")
-
-    def mark_proxy_bad(self, proxy: str):
-        if proxy:
-            self.bad_proxies.add(proxy)
-            logging.warning(f"Proxy {proxy} marked as bad")
+            logger.debug(f"Acquired proxy after wait: {proxy}")
+        return proxy
 
     def report_request_result(self, proxy: str, success: bool, blocked: bool = False):
         if blocked:
-            self.mark_proxy_blocked(proxy)
+            self.blocked_proxies.add(proxy)
+            logger.error(f"Proxy blocked: {proxy}")
         elif not success:
-            self.mark_proxy_bad(proxy)
+            self.bad_proxies.add(proxy)
+            logger.warning(f"Proxy marked bad: {proxy}")
 
         self._update_proxy_stats(proxy, success and not blocked)
 
     def reset_proxy(self, proxy: str):
         self.bad_proxies.discard(proxy)
         self.blocked_proxies.discard(proxy)
-        self.proxy_usage_count[proxy] = 0
         self.proxy_total_requests[proxy] = 0
         self.proxy_successful_requests[proxy] = 0
         self.proxy_success_rate[proxy] = 0.0
@@ -201,22 +198,15 @@ class SmartProxyPool:
     def reset_all(self):
         for proxy in self.proxies:
             self.reset_proxy(proxy)
-        self.current_proxy = None
-        self.requests_with_current = 0
 
     def get_stats(self) -> Dict[str, Any]:
-        available = len(self.get_available_proxies())
-        blocked = len(self.blocked_proxies)
-        bad = len(self.bad_proxies)
-
+        healthy = len(self.get_healthy_proxies())
         return {
             "total_proxies": len(self.proxies),
-            "available": available,
-            "blocked": blocked,
-            "bad": bad,
-            "current_proxy": self.current_proxy,
+            "healthy": healthy,
+            "blocked": len(self.blocked_proxies),
+            "bad": len(self.bad_proxies),
             "total_requests": self.total_requests,
-            "requests_with_current": self.requests_with_current,
         }
 
 
@@ -246,12 +236,14 @@ class Crawler:
             try:
                 with open(proxy_file, "r") as f:
                     proxies = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
-                logging.info(f"Loaded {len(proxies)} proxies from {proxy_file}")
+                logger.info(f"Loaded {len(proxies)} proxies from {proxy_file}")
             except FileNotFoundError:
-                logging.error(f"Proxy file not found: {proxy_file}")
-                proxies = []
+                logger.error(f"Proxy file not found: {proxy_file}")
 
-        self.proxy_pool = SmartProxyPool(proxies) if proxies else None
+        self.proxy_pool = SmartProxyPool(
+            proxy_list=proxies,
+            per_proxy_delay=delay,
+        ) if proxies else None
 
         self._request_count = 0
         self._successful_requests = 0
@@ -261,10 +253,8 @@ class Crawler:
     def is_blocked_response(self, content: str) -> bool:
         if not content or len(content) < self.min_content_length:
             return True
-
         if len(content) > 50_000:
             return False
-
         content_lower = content.lower()
         return any(indicator in content_lower for indicator in self.ban_indicators)
 
@@ -288,15 +278,13 @@ class Crawler:
 
             if 200 <= res.status_code < 300:
                 content = res.content.decode("utf-8", "replace")
-
                 if self.is_blocked_response(content):
                     raise BlockedError(f"Blocked response from {url}")
-
                 self._successful_requests += 1
                 return res.content
 
             elif res.status_code == 404:
-                logging.warning(f"404 Not Found: {url}")
+                logger.warning(f"404 Not Found: {url}")
                 return None
 
             elif res.status_code in (403, 429, 503):
@@ -315,84 +303,58 @@ class Crawler:
         return self._crawl_direct(url)
 
     def _crawl_direct(self, url: str) -> Optional[bytes]:
-        tries = 0
-        while tries < self.max_retries:
+        for attempt in range(1, self.max_retries + 1):
             try:
-                logging.info(f"Crawling {url} (direct, attempt {tries + 1})")
+                logger.info(f"Crawling {url} (direct, attempt {attempt})")
                 return self._do_request(url)
             except BlockedError as e:
-                logging.warning(f"Blocked: {e}")
+                logger.warning(f"Blocked: {e}")
                 self._blocked_requests += 1
-                tries += 1
-                time.sleep(self.delay * (tries + 1) * 3)
+                time.sleep(self.delay * attempt * 3)
             except Exception as e:
-                logging.error(f"Error: {str(e)[:100]}")
+                logger.error(f"Error: {str(e)[:100]}")
                 self._failed_requests += 1
-                tries += 1
-                time.sleep(self.delay * (tries + 1))
+                time.sleep(self.delay * attempt)
         return None
 
     def _crawl_with_proxies(self, url: str) -> Optional[bytes]:
-        tries = 0
-        last_exc: Optional[Exception] = None
-
-        while tries < self.max_retries:
+        for attempt in range(1, self.max_retries + 1):
             proxy_line = self.proxy_pool.pick_proxy_line()
             if not proxy_line:
-                logging.error("No available proxies")
+                logger.error("No proxies available")
                 break
 
             try:
-                logging.info(f"Crawling {url} via proxy (attempt {tries + 1})")
+                logger.info(f"Crawling {url} via proxy (attempt {attempt})")
                 result = self._do_request(url, proxy_line)
                 self.proxy_pool.report_request_result(proxy_line, True)
-
-                if self._request_count % 10 == 0:
-                    stats = self.proxy_pool.get_stats()
-                    logging.info(
-                        f"Stats: {self._successful_requests}/{self._request_count} success, "
-                        f"{stats['available']}/{stats['total_proxies']} proxies available"
-                    )
-
                 return result
 
             except BlockedError as e:
-                logging.warning(f"Blocked via {proxy_line}: {e}")
+                logger.warning(f"Blocked via {proxy_line}: {e}")
                 self.proxy_pool.report_request_result(proxy_line, False, blocked=True)
                 self._blocked_requests += 1
-                tries += 1
-                time.sleep(self.delay * 3)
 
             except Exception as e:
-                last_exc = e
-                logging.error(f"Error with {proxy_line}: {str(e)[:100]}")
+                logger.error(f"Error with {proxy_line}: {str(e)[:100]}")
                 self.proxy_pool.report_request_result(proxy_line, False)
                 self._failed_requests += 1
-                tries += 1
-                delay_multiplier = min(tries, 3)
-                time.sleep(self.delay * delay_multiplier)
 
-        if last_exc:
-            logging.error(f"All retries failed: {last_exc}")
         return None
 
     def crawl(self, url: str) -> Optional[str]:
         data = self.crawl_bytes(url)
-        if data is None:
-            return None
-        return data.decode("utf-8", "replace")
+        return data.decode("utf-8", "replace") if data else None
 
     def get_stats(self) -> Dict[str, Any]:
-        proxy_stats = self.proxy_pool.get_stats() if self.proxy_pool else {}
         total = self._request_count or 1
-
         return {
             "total_requests": self._request_count,
             "successful_requests": self._successful_requests,
             "blocked_requests": self._blocked_requests,
             "failed_requests": self._failed_requests,
             "success_rate": self._successful_requests / total,
-            "proxy_stats": proxy_stats,
+            "proxy_stats": self.proxy_pool.get_stats() if self.proxy_pool else {},
         }
 
 
