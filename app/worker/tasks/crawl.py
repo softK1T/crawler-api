@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 from celery import states
 from app.core.config import settings
 from app.services.storage import storage
-from app.services.crawler import Crawler, DEFAULT_HEADERS
+from app.services.crawler import Crawler
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -19,17 +19,13 @@ def crawl_page(self, url: str, headers: Optional[Dict[str, str]] = None,
     started = perf_counter()
     job_id = self.request.id
 
-    request_headers = dict(DEFAULT_HEADERS)
-    if headers:
-        request_headers.update(headers)
-
     try:
         crawler = Crawler(
             proxy_file=settings.proxy_file,
             max_retries=settings.max_retries,
             timeout=float(timeout),
             delay=settings.request_delay_secs,
-            headers=request_headers,
+            headers=headers,
             use_http2=settings.use_http2,
         )
 
@@ -63,7 +59,7 @@ def crawl_page(self, url: str, headers: Optional[Dict[str, str]] = None,
             "status_code": 200,
             "content_type": "text/html",
             "response_time_ms": elapsed_ms,
-            "headers_trunc": {k: v for k, v in request_headers.items()},
+            "headers_trunc": {},
             "body_encoding": "base64+gzip",
             "body": body_encoded,
             "error_type": None,
@@ -76,7 +72,7 @@ def crawl_page(self, url: str, headers: Optional[Dict[str, str]] = None,
             "job_id": job_id,
             "url": url,
             "status_code": 200,
-            "response_time_ms": elapsed_ms
+            "response_time_ms": elapsed_ms,
         }
 
     except Exception as e:
