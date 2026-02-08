@@ -1,36 +1,57 @@
-import hashlib
+# app/services/crawler.py
+
 import itertools
 import logging
 import random
 import time
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
 import httpx
 
+
 HEADERS_POOL = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:134.0) Gecko/20100101 Firefox/134.0",
 ]
 
-DEFAULT_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
-    "Accept-Language": "en-US,en;q=0.9,uk;q=0.8",
-    "Connection": "keep-alive",
-    "Host": "djinni.co",
-    "User-Agent": random.choice(HEADERS_POOL),
-}
-
-BAN_INDICATORS = [
+GENERIC_BAN_INDICATORS = [
+    "access denied",
+    "forbidden",
     "has been blocked",
     "blocked",
-    "magic@djinni.co",
-    "your ip address",
-    "contact us at",
-    "access denied",
-    "forbidden"
+    "captcha",
+    "cf-challenge",
+    "enable javascript",
+    "unusual traffic",
+    "rate limit",
+    "too many requests",
+    "please verify",
 ]
+
+
+def build_headers(url: str, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    parsed = urlparse(url)
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "en-US,en;q=0.9,pl;q=0.8,uk;q=0.7",
+        "Connection": "keep-alive",
+        "Host": parsed.netloc,
+        "User-Agent": random.choice(HEADERS_POOL),
+        "DNT": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
 
 
 def auth_line_to_proxy_url(line: str) -> Optional[str]:
@@ -50,17 +71,6 @@ def auth_line_to_proxy_url(line: str) -> Optional[str]:
     else:
         logging.warning(f"Unsupported proxy format: {line}")
         return None
-
-
-def to_httpx_proxy(proxy_auth_line: Optional[str]) -> Optional[str]:
-    if not proxy_auth_line:
-        return None
-    proxy_uri = auth_line_to_proxy_url(proxy_auth_line)
-    if not proxy_uri:
-        return None
-    if "://" not in proxy_uri:
-        proxy_uri = "http://" + proxy_uri
-    return proxy_uri
 
 
 class SmartProxyPool:
@@ -165,7 +175,7 @@ class SmartProxyPool:
     def mark_proxy_blocked(self, proxy: str):
         if proxy:
             self.blocked_proxies.add(proxy)
-            logging.error(f"Proxy {proxy} blocked by djinni")
+            logging.error(f"Proxy {proxy} blocked by target site")
 
     def mark_proxy_bad(self, proxy: str):
         if proxy:
@@ -180,6 +190,20 @@ class SmartProxyPool:
 
         self._update_proxy_stats(proxy, success and not blocked)
 
+    def reset_proxy(self, proxy: str):
+        self.bad_proxies.discard(proxy)
+        self.blocked_proxies.discard(proxy)
+        self.proxy_usage_count[proxy] = 0
+        self.proxy_total_requests[proxy] = 0
+        self.proxy_successful_requests[proxy] = 0
+        self.proxy_success_rate[proxy] = 0.0
+
+    def reset_all(self):
+        for proxy in self.proxies:
+            self.reset_proxy(proxy)
+        self.current_proxy = None
+        self.requests_with_current = 0
+
     def get_stats(self) -> Dict[str, Any]:
         available = len(self.get_available_proxies())
         blocked = len(self.blocked_proxies)
@@ -188,30 +212,34 @@ class SmartProxyPool:
         return {
             "total_proxies": len(self.proxies),
             "available": available,
-            "blocked_by_djinni": blocked,
+            "blocked": blocked,
             "bad": bad,
             "current_proxy": self.current_proxy,
             "total_requests": self.total_requests,
-            "requests_with_current": self.requests_with_current
+            "requests_with_current": self.requests_with_current,
         }
 
 
 class Crawler:
     def __init__(
             self,
-            proxy_file: Optional[str],
+            proxy_file: Optional[str] = None,
             max_retries: int = 3,
-            timeout: float = 10.0,
+            timeout: float = 15.0,
             delay: float = 1.0,
             headers: Optional[Dict[str, str]] = None,
             use_http2: bool = True,
+            ban_indicators: Optional[List[str]] = None,
+            min_content_length: int = 500,
     ):
         self.proxy_file = proxy_file
         self.max_retries = max_retries
         self.timeout = timeout
         self.delay = delay
-        self.headers = headers or DEFAULT_HEADERS.copy()
+        self.extra_headers = headers
         self.use_http2 = use_http2
+        self.ban_indicators = ban_indicators or GENERIC_BAN_INDICATORS
+        self.min_content_length = min_content_length
 
         proxies: list[str] = []
         if proxy_file:
@@ -228,27 +256,80 @@ class Crawler:
         self._request_count = 0
         self._successful_requests = 0
         self._blocked_requests = 0
+        self._failed_requests = 0
 
     def is_blocked_response(self, content: str) -> bool:
-        if not content or len(content) < 100:
+        if not content or len(content) < self.min_content_length:
             return True
 
         content_lower = content.lower()
-        return any(indicator in content_lower for indicator in BAN_INDICATORS)
+        return any(indicator in content_lower for indicator in self.ban_indicators)
 
-    def is_valid_djinni_page(self, content: str) -> bool:
-        if not content or len(content) < 1000:
-            return False
+    def _build_client(self, proxy_url: Optional[str] = None) -> httpx.Client:
+        kwargs = {
+            "http2": self.use_http2,
+            "timeout": httpx.Timeout(connect=10, read=self.timeout, write=10, pool=5),
+            "follow_redirects": True,
+        }
+        if proxy_url:
+            kwargs["proxy"] = proxy_url
+        return httpx.Client(**kwargs)
 
-        content_lower = content.lower()
-        valid_indicators = ["djinni", "вакансии", "jobs", "vacancy"]
-        return any(indicator in content_lower for indicator in valid_indicators)
+    def _do_request(self, url: str, proxy_line: Optional[str] = None) -> Optional[bytes]:
+        proxy_url = auth_line_to_proxy_url(proxy_line) if proxy_line else None
+        request_headers = build_headers(url, self.extra_headers)
+
+        with self._build_client(proxy_url) as client:
+            res = client.get(url, headers=request_headers)
+            self._request_count += 1
+
+            if 200 <= res.status_code < 300:
+                content = res.content.decode("utf-8", "replace")
+
+                if self.is_blocked_response(content):
+                    raise BlockedError(f"Blocked response from {url}")
+
+                self._successful_requests += 1
+                return res.content
+
+            elif res.status_code == 404:
+                logging.warning(f"404 Not Found: {url}")
+                return None
+
+            elif res.status_code in (403, 429, 503):
+                raise BlockedError(f"HTTP {res.status_code} from {url}")
+
+            else:
+                raise httpx.HTTPStatusError(
+                    f"HTTP {res.status_code}",
+                    request=res.request,
+                    response=res,
+                )
 
     def crawl_bytes(self, url: str) -> Optional[bytes]:
-        if not self.proxy_pool:
-            logging.error("No proxy pool available")
-            return None
+        if self.proxy_pool:
+            return self._crawl_with_proxies(url)
+        return self._crawl_direct(url)
 
+    def _crawl_direct(self, url: str) -> Optional[bytes]:
+        tries = 0
+        while tries < self.max_retries:
+            try:
+                logging.info(f"Crawling {url} (direct, attempt {tries + 1})")
+                return self._do_request(url)
+            except BlockedError as e:
+                logging.warning(f"Blocked: {e}")
+                self._blocked_requests += 1
+                tries += 1
+                time.sleep(self.delay * (tries + 1) * 3)
+            except Exception as e:
+                logging.error(f"Error: {str(e)[:100]}")
+                self._failed_requests += 1
+                tries += 1
+                time.sleep(self.delay * (tries + 1))
+        return None
+
+    def _crawl_with_proxies(self, url: str) -> Optional[bytes]:
         tries = 0
         last_exc: Optional[Exception] = None
 
@@ -258,69 +339,38 @@ class Crawler:
                 logging.error("No available proxies")
                 break
 
-            proxy_url = to_httpx_proxy(proxy_line)
-
-            current_headers = self.headers.copy()
-            current_headers["User-Agent"] = random.choice(HEADERS_POOL)
-
             try:
-                logging.info(f"Crawling {url} via {proxy_line}")
+                logging.info(f"Crawling {url} via proxy (attempt {tries + 1})")
+                result = self._do_request(url, proxy_line)
+                self.proxy_pool.report_request_result(proxy_line, True)
 
-                timeout = httpx.Timeout(connect=6, read=self.timeout, write=10, pool=5)
-                with httpx.Client(
-                        http2=self.use_http2,
-                        proxy=proxy_url,
-                        timeout=timeout,
-                        follow_redirects=True,
-                        headers=current_headers,
-                ) as client:
-                    res = client.get(url)
-                    self._request_count += 1
+                if self._request_count % 10 == 0:
+                    stats = self.proxy_pool.get_stats()
+                    logging.info(
+                        f"Stats: {self._successful_requests}/{self._request_count} success, "
+                        f"{stats['available']}/{stats['total_proxies']} proxies available"
+                    )
 
-                    if 200 <= res.status_code < 300:
-                        content = res.content.decode("utf-8", "replace")
+                return result
 
-                        if self.is_blocked_response(content):
-                            logging.error(f"Proxy {proxy_line} blocked by djinni")
-                            self.proxy_pool.report_request_result(proxy_line, False, blocked=True)
-                            self._blocked_requests += 1
-                            tries += 1
-                            time.sleep(self.delay * 3)
-                            continue
-
-                        if not self.is_valid_djinni_page(content):
-                            logging.warning(f"Invalid djinni page from {proxy_line}")
-                            self.proxy_pool.report_request_result(proxy_line, False)
-                            tries += 1
-                            time.sleep(self.delay)
-                            continue
-
-                        self.proxy_pool.report_request_result(proxy_line, True)
-                        self._successful_requests += 1
-
-                        if self._request_count % 10 == 0:
-                            stats = self.proxy_pool.get_stats()
-                            logging.info(f"Stats: {self._successful_requests}/{self._request_count} success, "
-                                         f"{stats['available']}/{stats['total_proxies']} proxies available, "
-                                         f"{stats['blocked_by_djinni']} blocked")
-
-                        return res.content
-                    else:
-                        logging.warning(f"HTTP {res.status_code} from {proxy_line}")
-                        self.proxy_pool.report_request_result(proxy_line, False)
+            except BlockedError as e:
+                logging.warning(f"Blocked via {proxy_line}: {e}")
+                self.proxy_pool.report_request_result(proxy_line, False, blocked=True)
+                self._blocked_requests += 1
+                tries += 1
+                time.sleep(self.delay * 3)
 
             except Exception as e:
                 last_exc = e
                 logging.error(f"Error with {proxy_line}: {str(e)[:100]}")
                 self.proxy_pool.report_request_result(proxy_line, False)
-
-            tries += 1
-            delay_multiplier = min(tries, 3)
-            time.sleep(self.delay * delay_multiplier)
+                self._failed_requests += 1
+                tries += 1
+                delay_multiplier = min(tries, 3)
+                time.sleep(self.delay * delay_multiplier)
 
         if last_exc:
             logging.error(f"All retries failed: {last_exc}")
-
         return None
 
     def crawl(self, url: str) -> Optional[str]:
@@ -331,11 +381,17 @@ class Crawler:
 
     def get_stats(self) -> Dict[str, Any]:
         proxy_stats = self.proxy_pool.get_stats() if self.proxy_pool else {}
+        total = self._request_count or 1
 
         return {
             "total_requests": self._request_count,
             "successful_requests": self._successful_requests,
             "blocked_requests": self._blocked_requests,
-            "success_rate": self._successful_requests / self._request_count if self._request_count > 0 else 0,
-            "proxy_stats": proxy_stats
+            "failed_requests": self._failed_requests,
+            "success_rate": self._successful_requests / total,
+            "proxy_stats": proxy_stats,
         }
+
+
+class BlockedError(Exception):
+    pass
