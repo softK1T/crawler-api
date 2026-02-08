@@ -11,8 +11,11 @@ class JobService:
     @staticmethod
     def create_job(url: str, headers: Optional[Dict[str, str]] = None,
                    timeout: int = 15, delay: float = 1.0,
-                   use_proxy: bool = True) -> str:
-        task = crawl_page.delay(url, headers, timeout, delay, use_proxy)
+                   use_proxy: bool = True, countdown: float = 0) -> str:
+        task = crawl_page.apply_async(
+            args=[url, headers, timeout, delay, use_proxy],
+            countdown=countdown,
+        )
         return task.id
 
     @staticmethod
@@ -21,7 +24,7 @@ class JobService:
         return JobStatusResponse(
             job_id=job_id,
             state=result.state,
-            created_at=None
+            created_at=None,
         )
 
     @staticmethod

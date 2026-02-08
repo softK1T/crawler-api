@@ -14,13 +14,14 @@ class BatchService:
         batch_id = str(uuid.uuid4())
         job_ids = []
 
-        for url in urls:
+        for i, url in enumerate(urls):
             job_id = JobService.create_job(
                 url=url,
                 headers=headers,
                 timeout=timeout,
                 delay=delay,
                 use_proxy=use_proxy,
+                countdown=i * delay,
             )
             job_ids.append(job_id)
 
@@ -51,7 +52,6 @@ class BatchService:
         for job_id in job_ids:
             job_status = JobService.get_job_status(job_id)
             jobs.append(job_status)
-
             if job_status.state in ["SUCCESS", "FAILURE"]:
                 completed += 1
 
