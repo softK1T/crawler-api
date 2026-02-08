@@ -9,26 +9,33 @@ from app.schemas.responses import BatchResponse, BatchStatusResponse, JobStatusR
 class BatchService:
     @staticmethod
     def create_batch(urls: List[str], headers: Optional[dict] = None,
-                     timeout: int = 15) -> BatchResponse:
+                     timeout: int = 15, delay: float = 1.0,
+                     use_proxy: bool = True) -> BatchResponse:
         batch_id = str(uuid.uuid4())
         job_ids = []
 
         for url in urls:
-            job_id = JobService.create_job(url, headers, timeout)
+            job_id = JobService.create_job(
+                url=url,
+                headers=headers,
+                timeout=timeout,
+                delay=delay,
+                use_proxy=use_proxy,
+            )
             job_ids.append(job_id)
 
         batch_info = {
             "batch_id": batch_id,
             "job_ids": job_ids,
             "created_at": time.time(),
-            "total_count": len(urls)
+            "total_count": len(urls),
         }
         storage.save_batch_info(batch_id, batch_info)
 
         return BatchResponse(
             batch_id=batch_id,
             job_ids=job_ids,
-            total_count=len(urls)
+            total_count=len(urls),
         )
 
     @staticmethod
@@ -56,7 +63,7 @@ class BatchService:
             total=total,
             completed=completed,
             progress=progress,
-            jobs=jobs
+            jobs=jobs,
         )
 
     @staticmethod
@@ -84,5 +91,5 @@ class BatchService:
             "total": len(job_ids),
             "successful": successful,
             "failed": failed,
-            "results": results
+            "results": results,
         }

@@ -11,7 +11,9 @@ def create_crawl_batch(request: BatchCrawlRequest):
     return BatchService.create_batch(
         urls=[str(url) for url in request.urls],
         headers=request.headers,
-        timeout=request.timeout
+        timeout=request.timeout,
+        delay=request.delay,
+        use_proxy=request.use_proxy,
     )
 
 
