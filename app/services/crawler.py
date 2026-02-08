@@ -262,6 +262,9 @@ class Crawler:
         if not content or len(content) < self.min_content_length:
             return True
 
+        if len(content) > 50_000:
+            return False
+
         content_lower = content.lower()
         return any(indicator in content_lower for indicator in self.ban_indicators)
 
