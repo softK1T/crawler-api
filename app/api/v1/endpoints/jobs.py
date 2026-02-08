@@ -11,7 +11,9 @@ def create_crawl_job(request: CrawlRequest):
     job_id = JobService.create_job(
         url=str(request.url),
         headers=request.headers,
-        timeout=request.timeout
+        timeout=request.timeout,
+        delay=request.delay,
+        use_proxy=request.use_proxy,
     )
     return JobResponse(job_id=job_id)
 

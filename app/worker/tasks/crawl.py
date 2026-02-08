@@ -4,7 +4,6 @@ import logging
 from time import perf_counter
 from typing import Dict, Any, Optional
 
-from celery import states
 from app.core.config import settings
 from app.services.storage import storage
 from app.services.crawler import Crawler
@@ -15,16 +14,20 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, name="crawl_page", acks_late=True)
 def crawl_page(self, url: str, headers: Optional[Dict[str, str]] = None,
-               timeout: int = 15, batch_id: Optional[str] = None) -> Dict[str, Any]:
+               timeout: int = 15, delay: float = 1.0,
+               use_proxy: bool = True,
+               batch_id: Optional[str] = None) -> Dict[str, Any]:
     started = perf_counter()
     job_id = self.request.id
 
+    proxy_file = settings.proxy_file if use_proxy else None
+
     try:
         crawler = Crawler(
-            proxy_file=settings.proxy_file,
+            proxy_file=proxy_file,
             max_retries=settings.max_retries,
             timeout=float(timeout),
-            delay=settings.request_delay_secs,
+            delay=delay,
             headers=headers,
             use_http2=settings.use_http2,
         )

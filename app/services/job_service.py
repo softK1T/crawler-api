@@ -1,36 +1,32 @@
-from celery.result import AsyncResult
-from typing import Optional
-from app.worker.celery_app import celery_app
-from app.services.storage import storage
-from app.schemas.responses import JobStatusResponse, CrawlResult, TaskState
+import logging
+from typing import Optional, Dict
 from app.worker.tasks.crawl import crawl_page
+from app.services.storage import storage
+from app.schemas.responses import JobStatusResponse, CrawlResult
+
+logger = logging.getLogger(__name__)
 
 
 class JobService:
     @staticmethod
-    def create_job(url: str, headers: Optional[dict] = None, timeout: int = 15) -> str:
-        task = crawl_page.delay(url, headers=headers, timeout=timeout)
+    def create_job(url: str, headers: Optional[Dict[str, str]] = None,
+                   timeout: int = 15, delay: float = 1.0,
+                   use_proxy: bool = True) -> str:
+        task = crawl_page.delay(url, headers, timeout, delay, use_proxy)
         return task.id
 
     @staticmethod
     def get_job_status(job_id: str) -> JobStatusResponse:
-        result = AsyncResult(job_id, app=celery_app)
+        result = crawl_page.AsyncResult(job_id)
         return JobStatusResponse(
             job_id=job_id,
-            state=TaskState(result.state)
+            state=result.state,
+            created_at=None
         )
 
     @staticmethod
     def get_job_result(job_id: str) -> Optional[CrawlResult]:
-        payload = storage.get_job_result(job_id)
-        if not payload:
+        data = storage.get_job_result(job_id)
+        if not data:
             return None
-
-        return CrawlResult(
-            job_id=job_id,
-            url=payload.get("url"),
-            status_code=payload.get("status_code"),
-            response_time_ms=payload.get("response_time_ms", 0),
-            body=payload.get("body"),
-            error=payload.get("error_message")
-        )
+        return CrawlResult(**data)

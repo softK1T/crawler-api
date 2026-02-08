@@ -1,12 +1,18 @@
-from pydantic import BaseModel, AnyHttpUrl, Field
+from pydantic import BaseModel, HttpUrl
 from typing import Optional, Dict, List
 
+
 class CrawlRequest(BaseModel):
-    url: AnyHttpUrl
+    url: HttpUrl
     headers: Optional[Dict[str, str]] = None
-    timeout: int = Field(default=15, ge=1, le=300, description="Timeout in seconds")
+    timeout: int = 15
+    delay: float = 1.0
+    use_proxy: bool = True
+
 
 class BatchCrawlRequest(BaseModel):
-    urls: List[AnyHttpUrl] = Field(..., min_items=1, max_items=100)
+    urls: List[HttpUrl]
     headers: Optional[Dict[str, str]] = None
-    timeout: int = Field(default=15, ge=1, le=300, description="Timeout in seconds")
+    timeout: int = 15
+    delay: float = 1.0
+    use_proxy: bool = True
