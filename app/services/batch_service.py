@@ -21,7 +21,7 @@ class BatchService:
                 timeout=timeout,
                 delay=delay,
                 use_proxy=use_proxy,
-                countdown=i * delay,
+                countdown=0,
             )
             job_ids.append(job_id)
 
