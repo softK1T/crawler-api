@@ -18,8 +18,8 @@ class Settings(BaseModel):
     request_delay_secs: float = float(os.getenv("REQUEST_DELAY_SECS", "1.0"))
     use_http2: bool = os.getenv("USE_HTTP2", "true").lower() == "true"
 
-    max_batch_size: int = int(os.getenv("MAX_BATCH_SIZE", "100"))
-    batch_timeout_secs: int = int(os.getenv("BATCH_TIMEOUT_SECS", "300"))
+    max_batch_size: int = int(os.getenv("MAX_BATCH_SIZE", "1000"))
+    batch_timeout_secs: int = int(os.getenv("BATCH_TIMEOUT_SECS", "900"))
 
 
 settings = Settings()
