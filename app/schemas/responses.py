@@ -35,5 +35,10 @@ class CrawlResult(BaseModel):
     url: str
     status_code: Optional[int]
     response_time_ms: int
-    body: Optional[str]
-    error: Optional[str] = None
+    body: Optional[str] = None
+    body_encoding: Optional[str] = None
+    batch_id: Optional[str] = None
+    content_type: Optional[str] = None
+    headers_trunc: Optional[dict] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None

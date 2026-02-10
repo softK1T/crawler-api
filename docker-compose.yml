@@ -41,6 +41,6 @@ services:
       - REDIS_URL=redis://redis:6379/2
       - PROXY_FILE=/app/proxies.txt
     command: >
-      celery -A app.worker.celery_app.celery_app worker -Q crawler -l info --concurrency=2
+      celery -A app.worker.celery_app.celery_app worker -Q crawler -l info --concurrency=50 --pool=gevent
     volumes:
       - ./:/app
