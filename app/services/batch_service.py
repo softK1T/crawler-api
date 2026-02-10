@@ -81,7 +81,7 @@ class BatchService:
             result = JobService.get_job_result(job_id)
             if result:
                 results.append(result)
-                if result.error is None:
+                if result.error_type is None:
                     successful += 1
                 else:
                     failed += 1
