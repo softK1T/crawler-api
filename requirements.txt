@@ -1,7 +1,7 @@
-fastapi>=0.104.1
-uvicorn[standard]>=0.24.0
-pydantic>=2.5.0
-httpx[http2]>=0.25.2
-celery>=5.3.4
-redis>=5.0.1
-gevent>=24.2.1
+fastapi
+uvicorn[standard]
+httpx[http2]
+celery[redis]
+redis
+pydantic
+pydantic-settings
