@@ -1,15 +1,31 @@
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 import redis as redis_sync
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.security import verify_api_key
 
 logger = logging.getLogger(__name__)
+
+CORRELATION_ID_HEADER = "X-Correlation-ID"
+
+
+class CorrelationIDMiddleware(BaseHTTPMiddleware):
+    """
+    Reads X-Correlation-ID from request headers (or generates one).
+    Injects it into every response so clients can trace distributed calls.
+    """
+    async def dispatch(self, request: Request, call_next):
+        correlation_id = request.headers.get(CORRELATION_ID_HEADER) or str(uuid.uuid4())
+        request.state.correlation_id = correlation_id
+        response = await call_next(request)
+        response.headers[CORRELATION_ID_HEADER] = correlation_id
+        return response
 
 
 @asynccontextmanager
@@ -28,6 +44,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+app.add_middleware(CorrelationIDMiddleware)
 app.include_router(api_router)
 
 
@@ -44,7 +61,6 @@ async def health_check():
     """
     checks: dict = {}
 
-    # Check Redis
     try:
         r = redis_sync.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
         r.ping()
