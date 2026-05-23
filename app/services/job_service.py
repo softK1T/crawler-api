@@ -1,5 +1,7 @@
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict
+
 from app.worker.tasks.crawl import crawl_page
 from app.services.storage import storage
 from app.schemas.responses import JobStatusResponse, CrawlResult
@@ -16,15 +18,18 @@ class JobService:
             args=[url, headers, timeout, delay, use_proxy],
             countdown=countdown,
         )
+        # Persist created_at so /status can return a real timestamp
+        storage.save_job_created_at(task.id, datetime.now(timezone.utc).isoformat())
         return task.id
 
     @staticmethod
     def get_job_status(job_id: str) -> JobStatusResponse:
         result = crawl_page.AsyncResult(job_id)
+        created_at = storage.get_job_created_at(job_id)
         return JobStatusResponse(
             job_id=job_id,
             state=result.state,
-            created_at=None,
+            created_at=created_at,
         )
 
     @staticmethod

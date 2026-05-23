@@ -2,7 +2,7 @@ import itertools
 import logging
 import random
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -34,6 +34,9 @@ GENERIC_BAN_INDICATORS = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# Type alias: (body_bytes, status_code, content_type, response_headers)
+CrawlRaw = Tuple[bytes, int, str, Dict[str, str]]
 
 
 def build_headers(url: str, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -268,7 +271,8 @@ class Crawler:
             kwargs["proxy"] = proxy_url
         return httpx.Client(**kwargs)
 
-    def _do_request(self, url: str, proxy_line: Optional[str] = None) -> Optional[bytes]:
+    def _do_request(self, url: str, proxy_line: Optional[str] = None) -> Optional[CrawlRaw]:
+        """Returns (body_bytes, status_code, content_type, response_headers) or raises."""
         proxy_url = auth_line_to_proxy_url(proxy_line) if proxy_line else None
         request_headers = build_headers(url, self.extra_headers)
 
@@ -276,12 +280,17 @@ class Crawler:
             res = client.get(url, headers=request_headers)
             self._request_count += 1
 
+            # Extract real metadata from response
+            content_type = res.headers.get("content-type", "")
+            # Truncate headers to avoid storing huge blobs in Redis
+            headers_trunc = dict(list(res.headers.items())[:20])
+
             if 200 <= res.status_code < 300:
                 content = res.content.decode("utf-8", "replace")
                 if self.is_blocked_response(content):
                     raise BlockedError(f"Blocked response from {url}")
                 self._successful_requests += 1
-                return res.content
+                return res.content, res.status_code, content_type, headers_trunc
 
             elif res.status_code == 404:
                 logger.warning(f"404 Not Found: {url}")
@@ -297,12 +306,18 @@ class Crawler:
                     response=res,
                 )
 
-    def crawl_bytes(self, url: str) -> Optional[bytes]:
+    def crawl_raw(self, url: str) -> Optional[CrawlRaw]:
+        """Returns (body_bytes, status_code, content_type, headers_trunc) or None."""
         if self.proxy_pool:
             return self._crawl_with_proxies(url)
         return self._crawl_direct(url)
 
-    def _crawl_direct(self, url: str) -> Optional[bytes]:
+    def crawl_bytes(self, url: str) -> Optional[bytes]:
+        """Backward-compatible: returns just body bytes."""
+        result = self.crawl_raw(url)
+        return result[0] if result else None
+
+    def _crawl_direct(self, url: str) -> Optional[CrawlRaw]:
         for attempt in range(1, self.max_retries + 1):
             try:
                 logger.info(f"Crawling {url} (direct, attempt {attempt})")
@@ -317,7 +332,7 @@ class Crawler:
                 time.sleep(self.delay * attempt)
         return None
 
-    def _crawl_with_proxies(self, url: str) -> Optional[bytes]:
+    def _crawl_with_proxies(self, url: str) -> Optional[CrawlRaw]:
         for attempt in range(1, self.max_retries + 1):
             proxy_line = self.proxy_pool.pick_proxy_line()
             if not proxy_line:
