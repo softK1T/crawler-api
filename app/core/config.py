@@ -1,25 +1,44 @@
-from pydantic import BaseModel
-import os
+from typing import List, Optional
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseModel):
-    api_host: str = os.getenv("API_HOST", "0.0.0.0")
-    api_port: int = int(os.getenv("API_PORT", "8000"))
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
 
-    celery_broker_url: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    celery_result_backend: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
 
-    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/2")
-    result_ttl_secs: int = int(os.getenv("RESULT_TTL_SECS", "86400"))
+    # Comma-separated API keys, e.g. "key1,key2,key3"
+    # Leave empty to disable auth (dev/local only)
+    api_keys_raw: str = ""
 
-    proxy_file: str = os.getenv("PROXY_FILE")
-    max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
-    request_timeout_secs: int = int(os.getenv("REQUEST_TIMEOUT_SECS", "15"))
-    request_delay_secs: float = float(os.getenv("REQUEST_DELAY_SECS", "1.0"))
-    use_http2: bool = os.getenv("USE_HTTP2", "true").lower() == "true"
+    # SSRF protection toggle (disable only in fully trusted internal envs)
+    ssrf_enabled: bool = True
 
-    max_batch_size: int = int(os.getenv("MAX_BATCH_SIZE", "1000"))
-    batch_timeout_secs: int = int(os.getenv("BATCH_TIMEOUT_SECS", "900"))
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+
+    redis_url: str = "redis://localhost:6379/2"
+    result_ttl_secs: int = 86400
+
+    proxy_file: Optional[str] = None
+    max_retries: int = 3
+    request_timeout_secs: int = 15
+    request_delay_secs: float = 1.0
+    use_http2: bool = True
+
+    max_batch_size: int = 1000
+    batch_timeout_secs: int = 900
+
+    @property
+    def api_keys(self) -> List[str]:
+        """Return parsed list of non-empty API keys."""
+        return [k.strip() for k in self.api_keys_raw.split(",") if k.strip()]
 
 
 settings = Settings()
