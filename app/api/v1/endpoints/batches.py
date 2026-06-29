@@ -26,6 +26,7 @@ async def create_crawl_batch(
         project_id=request.project_id,
         extract=request.extract,
         mode=request.mode,
+        proxy_country=request.proxy_country,
     )
 
 

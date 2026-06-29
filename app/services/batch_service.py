@@ -17,6 +17,7 @@ class BatchService:
         project_id: Optional[str] = None,
         extract: Optional[Dict[str, str]] = None,
         mode: str = "static",
+        proxy_country: Optional[str] = None,
     ) -> BatchResponse:
         batch_id = str(uuid.uuid4())
         job_ids = []
@@ -32,6 +33,7 @@ class BatchService:
                 project_id=project_id,
                 extract=extract,
                 mode=mode,
+                proxy_country=proxy_country,
             )
             job_ids.append(job_id)
 

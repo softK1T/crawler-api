@@ -1,4 +1,3 @@
-import itertools
 import logging
 import random
 import time
@@ -62,7 +61,7 @@ def build_headers(url: str, extra_headers: Optional[Dict[str, str]] = None) -> D
 
 
 def html_to_markdown(html: str) -> str:
-    """Convert HTML to clean Markdown using BeautifulSoup."""
+    """Convert HTML to clean Markdown."""
     try:
         import html2text
         h = html2text.HTML2Text()
@@ -71,7 +70,6 @@ def html_to_markdown(html: str) -> str:
         h.body_width = 0
         return h.handle(html)
     except ImportError:
-        # Fallback: strip tags
         soup = BeautifulSoup(html, "html.parser")
         return soup.get_text(separator="\n", strip=True)
 
@@ -79,7 +77,7 @@ def html_to_markdown(html: str) -> str:
 def extract_with_selectors(html: str, selectors: Dict[str, str]) -> Dict[str, Any]:
     """Extract data from HTML using CSS selectors map."""
     soup = BeautifulSoup(html, "html.parser")
-    result = {}
+    result: Dict[str, Any] = {}
     for field, selector in selectors.items():
         elements = soup.select(selector)
         if not elements:
@@ -92,6 +90,14 @@ def extract_with_selectors(html: str, selectors: Dict[str, str]) -> Dict[str, An
 
 
 def auth_line_to_proxy_url(line: str) -> Optional[str]:
+    """
+    Parse a proxy line into an httpx-compatible URL.
+    Supported formats:
+      host:port
+      host:port:user:pass
+      host:port:user:pass:COUNTRY   (5-part geo-tagged format, country stripped here)
+      http://user:pass@host:port    (full URL, auto-stripped)
+    """
     s = line.strip()
     if not s:
         return None
@@ -105,8 +111,12 @@ def auth_line_to_proxy_url(line: str) -> Optional[str]:
     elif len(parts) == 4:
         host, port, user, pwd = parts
         return f"http://{user}:{pwd}@{host}:{port}"
+    elif len(parts) == 5:
+        # host:port:user:pass:COUNTRY — strip country tag
+        host, port, user, pwd, _country = parts
+        return f"http://{user}:{pwd}@{host}:{port}"
     else:
-        logger.warning(f"Unsupported proxy format: {line}")
+        logger.warning("Unsupported proxy format: %s", line)
         return None
 
 
@@ -143,8 +153,8 @@ class SmartProxyPool:
         self.proxies = proxy_list
         self.per_proxy_delay = per_proxy_delay
 
-        self.bad_proxies: set[str] = set()
-        self.blocked_proxies: set[str] = set()
+        self.bad_proxies: set = set()
+        self.blocked_proxies: set = set()
         self.proxy_total_requests: Dict[str, int] = {}
         self.proxy_successful_requests: Dict[str, int] = {}
         self.proxy_success_rate: Dict[str, float] = {}
@@ -158,17 +168,15 @@ class SmartProxyPool:
             per_proxy_delay=per_proxy_delay,
         )
 
-        logger.info(f"Loaded {len(proxy_list)} proxies, per-proxy delay: {per_proxy_delay}s")
+        logger.info("Loaded %d proxies, per-proxy delay: %ss", len(proxy_list), per_proxy_delay)
 
     def _update_proxy_stats(self, proxy: str, success: bool):
         if proxy not in self.proxy_total_requests:
             self.proxy_total_requests[proxy] = 0
             self.proxy_successful_requests[proxy] = 0
-
         self.proxy_total_requests[proxy] += 1
         if success:
             self.proxy_successful_requests[proxy] += 1
-
         total = self.proxy_total_requests[proxy]
         successful = self.proxy_successful_requests[proxy]
         self.proxy_success_rate[proxy] = successful / total if total > 0 else 0.0
@@ -176,13 +184,11 @@ class SmartProxyPool:
     def _is_healthy(self, proxy: str) -> bool:
         if proxy in self.bad_proxies or proxy in self.blocked_proxies:
             return False
-
         if self.proxy_total_requests.get(proxy, 0) >= 5:
             if self.proxy_success_rate.get(proxy, 1.0) < self.min_success_rate:
-                logger.warning(f"Proxy {proxy} low success rate")
+                logger.warning("Proxy %s low success rate — marking bad", proxy)
                 self.bad_proxies.add(proxy)
                 return False
-
         return True
 
     def get_healthy_proxies(self) -> List[str]:
@@ -193,33 +199,22 @@ class SmartProxyPool:
         if not healthy:
             logger.error("No healthy proxies available")
             return None
-
         self.total_requests += 1
-
-        healthy.sort(
-            key=lambda p: self.proxy_success_rate.get(p, 1.0),
-            reverse=True,
-        )
-
+        healthy.sort(key=lambda p: self.proxy_success_rate.get(p, 1.0), reverse=True)
         for proxy in healthy:
             if self.rate_limiter.try_acquire(proxy):
-                logger.debug(f"Acquired proxy: {proxy}")
+                logger.debug("Acquired proxy: %s", proxy)
                 return proxy
-
         logger.info("All proxies on cooldown, waiting...")
-        proxy = self.rate_limiter.wait_and_acquire(healthy, timeout=timeout)
-        if proxy:
-            logger.debug(f"Acquired proxy after wait: {proxy}")
-        return proxy
+        return self.rate_limiter.wait_and_acquire(healthy, timeout=timeout)
 
     def report_request_result(self, proxy: str, success: bool, blocked: bool = False):
         if blocked:
             self.blocked_proxies.add(proxy)
-            logger.error(f"Proxy blocked: {proxy}")
+            logger.error("Proxy blocked: %s", proxy)
         elif not success:
             self.bad_proxies.add(proxy)
-            logger.warning(f"Proxy marked bad: {proxy}")
-
+            logger.warning("Proxy marked bad: %s", proxy)
         self._update_proxy_stats(proxy, success and not blocked)
 
     def reset_proxy(self, proxy: str):
@@ -247,7 +242,8 @@ class SmartProxyPool:
 class Crawler:
     def __init__(
             self,
-            proxy_file: Optional[str] = None,
+            proxy_pool=None,          # accepts GeoProxyPool / SmartProxyPool singleton
+            proxy_file: Optional[str] = None,   # legacy: load from file if no pool given
             max_retries: int = 3,
             timeout: float = 15.0,
             delay: float = 1.0,
@@ -255,8 +251,8 @@ class Crawler:
             use_http2: bool = True,
             ban_indicators: Optional[List[str]] = None,
             min_content_length: int = 500,
+            proxy_country: Optional[str] = None,
     ):
-        self.proxy_file = proxy_file
         self.max_retries = max_retries
         self.timeout = timeout
         self.delay = delay
@@ -264,20 +260,24 @@ class Crawler:
         self.use_http2 = use_http2
         self.ban_indicators = ban_indicators or GENERIC_BAN_INDICATORS
         self.min_content_length = min_content_length
+        self.proxy_country = proxy_country
 
-        proxies: list[str] = []
-        if proxy_file:
+        if proxy_pool is not None:
+            # Use provided singleton pool (preferred)
+            self.proxy_pool = proxy_pool
+        elif proxy_file:
+            # Legacy: build pool from file (stats lost between tasks)
             try:
                 with open(proxy_file, "r") as f:
-                    proxies = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
-                logger.info(f"Loaded {len(proxies)} proxies from {proxy_file}")
+                    proxies = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+                from app.services.geo_proxy_pool import GeoProxyPool
+                self.proxy_pool = GeoProxyPool(proxy_list=proxies, per_proxy_delay=delay)
+                logger.info("Loaded %d proxies from %s (legacy mode)", len(proxies), proxy_file)
             except FileNotFoundError:
-                logger.error(f"Proxy file not found: {proxy_file}")
-
-        self.proxy_pool = SmartProxyPool(
-            proxy_list=proxies,
-            per_proxy_delay=delay,
-        ) if proxies else None
+                logger.error("Proxy file not found: %s", proxy_file)
+                self.proxy_pool = None
+        else:
+            self.proxy_pool = None
 
         self._request_count = 0
         self._successful_requests = 0
@@ -293,7 +293,7 @@ class Crawler:
         return any(indicator in content_lower for indicator in self.ban_indicators)
 
     def _build_client(self, proxy_url: Optional[str] = None) -> httpx.Client:
-        kwargs = {
+        kwargs: Dict[str, Any] = {
             "http2": self.use_http2,
             "timeout": httpx.Timeout(connect=10, read=self.timeout, write=10, pool=5),
             "follow_redirects": True,
@@ -319,14 +319,11 @@ class Crawler:
                     raise BlockedError(f"Blocked response from {url}")
                 self._successful_requests += 1
                 return res.content, res.status_code, content_type, headers_trunc
-
             elif res.status_code == 404:
-                logger.warning(f"404 Not Found: {url}")
+                logger.warning("404 Not Found: %s", url)
                 return None
-
             elif res.status_code in (403, 429, 503):
                 raise BlockedError(f"HTTP {res.status_code} from {url}")
-
             else:
                 raise httpx.HTTPStatusError(
                     f"HTTP {res.status_code}",
@@ -346,41 +343,44 @@ class Crawler:
     def _crawl_direct(self, url: str) -> Optional[CrawlRaw]:
         for attempt in range(1, self.max_retries + 1):
             try:
-                logger.info(f"Crawling {url} (direct, attempt {attempt})")
+                logger.info("Crawling %s (direct, attempt %d)", url, attempt)
                 return self._do_request(url)
             except BlockedError as e:
-                logger.warning(f"Blocked: {e}")
+                logger.warning("Blocked: %s", e)
                 self._blocked_requests += 1
                 time.sleep(self.delay * attempt * 3)
             except Exception as e:
-                logger.error(f"Error: {str(e)[:100]}")
+                logger.error("Error: %s", str(e)[:100])
                 self._failed_requests += 1
                 time.sleep(self.delay * attempt)
         return None
 
+    def _pick_proxy(self) -> Optional[str]:
+        """Pick proxy — geo-aware if pool supports it and country is set."""
+        from app.services.geo_proxy_pool import GeoProxyPool
+        if isinstance(self.proxy_pool, GeoProxyPool) and self.proxy_country:
+            return self.proxy_pool.pick_proxy_for_country(self.proxy_country)
+        return self.proxy_pool.pick_proxy_line()
+
     def _crawl_with_proxies(self, url: str) -> Optional[CrawlRaw]:
         for attempt in range(1, self.max_retries + 1):
-            proxy_line = self.proxy_pool.pick_proxy_line()
+            proxy_line = self._pick_proxy()
             if not proxy_line:
                 logger.error("No proxies available")
                 break
-
             try:
-                logger.info(f"Crawling {url} via proxy (attempt {attempt})")
+                logger.info("Crawling %s via proxy country=%s (attempt %d)", url, self.proxy_country, attempt)
                 result = self._do_request(url, proxy_line)
                 self.proxy_pool.report_request_result(proxy_line, True)
                 return result
-
             except BlockedError as e:
-                logger.warning(f"Blocked via {proxy_line}: {e}")
+                logger.warning("Blocked via %s: %s", proxy_line, e)
                 self.proxy_pool.report_request_result(proxy_line, False, blocked=True)
                 self._blocked_requests += 1
-
             except Exception as e:
-                logger.error(f"Error with {proxy_line}: {str(e)[:100]}")
+                logger.error("Error with %s: %s", proxy_line, str(e)[:100])
                 self.proxy_pool.report_request_result(proxy_line, False)
                 self._failed_requests += 1
-
         return None
 
     def crawl(self, url: str) -> Optional[str]:
@@ -394,7 +394,7 @@ class Crawler:
             "successful_requests": self._successful_requests,
             "blocked_requests": self._blocked_requests,
             "failed_requests": self._failed_requests,
-            "success_rate": self._successful_requests / total,
+            "success_rate": round(self._successful_requests / total, 3),
             "proxy_stats": self.proxy_pool.get_stats() if self.proxy_pool else {},
         }
 
@@ -409,7 +409,6 @@ async def crawl_browser(url: str, timeout: int = 15, wait_for: Optional[str] = N
     except ImportError:
         logger.error("Playwright not installed. Run: pip install playwright && playwright install chromium")
         return None
-
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -419,16 +418,12 @@ async def crawl_browser(url: str, timeout: int = 15, wait_for: Optional[str] = N
             )
             page = await context.new_page()
             response = await page.goto(url, timeout=timeout * 1000, wait_until="networkidle")
-
             if wait_for:
                 await page.wait_for_selector(wait_for, timeout=5000)
-
             html = await page.content()
             status_code = response.status if response else 200
-            content_type = "text/html"
-
             await browser.close()
-            return html.encode("utf-8"), status_code, content_type, {}
+            return html.encode("utf-8"), status_code, "text/html", {}
     except Exception as exc:
         logger.error("Browser crawl failed for %s: %s", url, exc)
         return None

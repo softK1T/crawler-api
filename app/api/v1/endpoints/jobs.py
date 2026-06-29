@@ -25,6 +25,7 @@ async def create_crawl_job(
         project_id=request.project_id,
         extract=request.extract,
         mode=request.mode,
+        proxy_country=request.proxy_country,
     )
     return JobResponse(job_id=job_id)
 

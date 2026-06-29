@@ -21,6 +21,7 @@ class JobService:
         project_id: Optional[str] = None,
         extract: Optional[Dict[str, str]] = None,
         mode: str = "static",
+        proxy_country: Optional[str] = None,
     ) -> str:
         task = crawl_page.apply_async(
             args=[url],
@@ -32,6 +33,7 @@ class JobService:
                 "project_id": project_id,
                 "extract": extract,
                 "mode": mode,
+                "proxy_country": proxy_country,
             },
             countdown=countdown,
         )
