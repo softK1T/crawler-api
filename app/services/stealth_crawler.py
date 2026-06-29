@@ -24,7 +24,6 @@ IMPERSONATE_TARGETS = [
 class StealthCrawler:
     """
     Tier-2 crawler using curl_cffi Chrome TLS impersonation.
-    Bypasses JA3/TLS fingerprinting and Cloudflare basic/medium.
     """
 
     def __init__(
@@ -66,7 +65,7 @@ class StealthCrawler:
         try:
             from curl_cffi import requests as cffi_requests
         except ImportError:
-            logger.error("curl_cffi not installed. Run: pip install curl-cffi")
+            logger.error("curl_cffi not installed.")
             return None
 
         for attempt in range(1, self.max_retries + 1):
@@ -120,21 +119,35 @@ async def crawl_camoufox(
     proxy_url: Optional[str] = None,
     wait_for: Optional[str] = None,
     locale: str = "en-US",
+    session_key: Optional[str] = None,
 ) -> Optional[CrawlRaw]:
     """
     Tier-3 crawler using Camoufox anti-detect Firefox.
-    Uses headless='virtual' (Xvfb) — recommended by camoufox docs to avoid
-    headless detection and viewport protocol errors with playwright.
+    If session_key is provided, loads cookies from Redis and injects them.
     """
     try:
         from camoufox.async_api import AsyncCamoufox
     except ImportError:
-        logger.error("Camoufox not installed. Run: pip install 'camoufox[geoip]' && python -m camoufox fetch")
+        logger.error("Camoufox not installed.")
         return None
+
+    # Load session cookies if requested
+    cookies_to_inject: Optional[List[Dict]] = None
+    if session_key:
+        from app.services.session_manager import load_session
+        stored = load_session(session_key)
+        if stored:
+            cookies_to_inject = [
+                {"name": k, "value": v, "domain": ".shopee.sg", "path": "/"}
+                for k, v in stored.items()
+            ]
+            logger.info("[camoufox] Injecting %d session cookies for '%s'", len(cookies_to_inject), session_key)
+        else:
+            logger.warning("[camoufox] Session '%s' not found in Redis — crawling without auth", session_key)
 
     try:
         launch_kwargs: Dict[str, Any] = {
-            "headless": "virtual",  # Xvfb virtual display — avoids isMobile protocol error
+            "headless": "virtual",
             "geoip": True,
         }
         if proxy_url:
@@ -143,7 +156,12 @@ async def crawl_camoufox(
             launch_kwargs["locale"] = locale
 
         async with AsyncCamoufox(**launch_kwargs) as browser:
+            context = browser  # AsyncCamoufox context IS the browser context
             page = await browser.new_page()
+
+            # Inject cookies before navigation
+            if cookies_to_inject:
+                await page.context.add_cookies(cookies_to_inject)
 
             response = await page.goto(
                 url,
@@ -176,9 +194,6 @@ async def crawl_playwright_stealth(
     proxy_url: Optional[str] = None,
     wait_for: Optional[str] = None,
 ) -> Optional[CrawlRaw]:
-    """
-    Upgraded 'browser' mode using Playwright Chromium + stealth patches.
-    """
     try:
         from playwright.async_api import async_playwright
     except ImportError:
@@ -191,7 +206,6 @@ async def crawl_playwright_stealth(
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-web-security",
             ]
             launch_kwargs: Dict[str, Any] = {"headless": True, "args": launch_args}
             if proxy_url:
