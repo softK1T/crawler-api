@@ -1,29 +1,28 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.core.config import settings
 
 celery_app = Celery(
-    "crawler-api",
+    "crawler",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
+    include=["app.worker.tasks.crawl", "app.worker.tasks.sync"],
 )
 
-celery_app.conf.task_routes = {
-    "crawl_page": {"queue": "crawler"}
-}
-
-celery_app.autodiscover_tasks(["app.worker.tasks"])
-
-# Guard: soft limit must be strictly less than hard limit
-_hard_limit = settings.batch_timeout_secs
-_soft_limit = max(1, _hard_limit - 10)
-
 celery_app.conf.update(
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+    timezone="UTC",
     enable_utc=True,
-    task_track_started=True,
-    task_time_limit=_hard_limit,
-    task_soft_time_limit=_soft_limit,
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    result_expires=settings.result_ttl_secs,
+    beat_schedule={
+        "sync-webshare-proxies": {
+            "task": "sync_webshare_proxies",
+            "schedule": settings.webshare_sync_interval_secs,  # default: every 6h
+            "options": {"expires": 300},
+        },
+    },
 )

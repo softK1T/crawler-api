@@ -13,28 +13,26 @@ def get_proxy_pool() -> Optional[GeoProxyPool]:
     """
     Return the global GeoProxyPool singleton.
     Initialised lazily on first call.
-    Safe to call from both FastAPI (main process) and Celery workers
-    because each process maintains its own singleton.
-    Stats accumulate per-worker-process which is correct behaviour
-    for gevent-based Celery (one OS process, many green threads).
+    Uses effective_proxy_file which prefers Webshare-synced file if API key is set.
     """
     global _pool
     if _pool is not None:
         return _pool
 
-    if not settings.proxy_file:
-        logger.info("PROXY_FILE not set — proxy pool disabled")
+    proxy_file = settings.effective_proxy_file
+    if not proxy_file:
+        logger.info("No proxy file configured — proxy pool disabled")
         return None
 
     try:
-        with open(settings.proxy_file, "r") as f:
+        with open(proxy_file, "r") as f:
             lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
     except FileNotFoundError:
-        logger.error("Proxy file not found: %s", settings.proxy_file)
+        logger.error("Proxy file not found: %s", proxy_file)
         return None
 
     if not lines:
-        logger.warning("Proxy file is empty: %s", settings.proxy_file)
+        logger.warning("Proxy file is empty: %s", proxy_file)
         return None
 
     _pool = GeoProxyPool(
@@ -45,6 +43,7 @@ def get_proxy_pool() -> Optional[GeoProxyPool]:
 
 
 def reset_proxy_pool() -> None:
-    """Force re-initialisation on next call (useful for testing / hot reload)."""
+    """Force re-initialisation on next call (useful after Webshare sync or testing)."""
     global _pool
     _pool = None
+    logger.info("Proxy pool reset — will reload on next request")

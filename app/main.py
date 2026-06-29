@@ -1,83 +1,100 @@
 import logging
-import uuid
 from contextlib import asynccontextmanager
 
-import redis as redis_sync
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.db import create_tables
+from app.middleware.correlation_id import CorrelationIdMiddleware
 
 logger = logging.getLogger(__name__)
 
-CORRELATION_ID_HEADER = "X-Correlation-ID"
 
-
-class CorrelationIDMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        correlation_id = request.headers.get(CORRELATION_ID_HEADER) or str(uuid.uuid4())
-        request.state.correlation_id = correlation_id
-        response = await call_next(request)
-        response.headers[CORRELATION_ID_HEADER] = correlation_id
-        return response
+async def _startup_proxy_sync():
+    """On startup: if WEBSHARE_API_KEY is set, sync proxies from Webshare API."""
+    if not settings.webshare_api_key:
+        logger.info("WEBSHARE_API_KEY not set — skipping auto proxy sync")
+        return
+    try:
+        from app.services.webshare_sync import sync_webshare_to_file
+        from app.services.proxy_singleton import reset_proxy_pool, get_proxy_pool
+        logger.info("Auto-syncing proxies from Webshare...")
+        count = sync_webshare_to_file(
+            api_key=settings.webshare_api_key,
+            output_path=settings.webshare_proxy_file,
+        )
+        reset_proxy_pool()
+        pool = get_proxy_pool()
+        if pool:
+            stats = pool.get_stats()
+            logger.info(
+                "Proxy pool ready: %d total, %d healthy (geo: %s)",
+                stats["total_proxies"],
+                stats["healthy"],
+                list(pool.get_geo_stats().keys()),
+            )
+        else:
+            logger.warning("Proxy pool failed to initialise after sync")
+    except Exception as exc:
+        logger.error("Startup proxy sync failed: %s", exc)
+        # Non-fatal — app continues without proxies
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Crawler API starting up")
-    await create_tables()
-    logger.info("Database tables ensured")
+    await _startup_proxy_sync()
     yield
-    logger.info("Crawler API shutting down")
 
 
 app = FastAPI(
-    title="CrawlKit API",
-    version="2.0.0",
-    description="Self-hosted web crawling platform with multi-tenant support, persistent storage, and event streaming",
+    title="Crawler API",
+    version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
 )
 
-app.add_middleware(CorrelationIDMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(CorrelationIdMiddleware)
+
 app.include_router(api_router)
 
 
-@app.get("/", include_in_schema=False)
-async def root():
-    return {"message": "CrawlKit API v2.0.0", "docs": "/docs"}
+@app.get("/health")
+async def health():
+    import redis
+    import asyncpg
+    from urllib.parse import urlparse
 
+    status = {"api": "ok", "redis": "unknown", "postgres": "unknown"}
 
-@app.get("/health", tags=["system"])
-async def health_check():
-    checks: dict = {}
-
+    # Redis check
     try:
-        r = redis_sync.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
+        r = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
         r.ping()
-        checks["redis"] = "ok"
-    except Exception as exc:
-        logger.error("Redis health check failed: %s", exc)
-        checks["redis"] = "error"
+        status["redis"] = "ok"
+    except Exception as e:
+        status["redis"] = f"error: {e}"
 
+    # PostgreSQL check
     try:
-        from app.core.db import engine
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        checks["postgres"] = "ok"
-    except Exception as exc:
-        logger.error("PostgreSQL health check failed: %s", exc)
-        checks["postgres"] = "error"
+        parsed = urlparse(settings.database_url.replace("+asyncpg", ""))
+        conn = await asyncpg.connect(
+            host=parsed.hostname,
+            port=parsed.port or 5432,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/"),
+            timeout=3,
+        )
+        await conn.close()
+        status["postgres"] = "ok"
+    except Exception as e:
+        status["postgres"] = f"error: {e}"
 
-    all_ok = all(v == "ok" for v in checks.values())
-    status_str = "healthy" if all_ok else "degraded"
-    http_status = 200 if all_ok else 503
-
-    return JSONResponse(
-        status_code=http_status,
-        content={"status": status_str, "checks": checks},
-    )
+    return status
