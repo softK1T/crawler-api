@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.db import create_tables
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +17,6 @@ CORRELATION_ID_HEADER = "X-Correlation-ID"
 
 
 class CorrelationIDMiddleware(BaseHTTPMiddleware):
-    """
-    Reads X-Correlation-ID from request headers (or generates one).
-    Injects it into every response so clients can trace distributed calls.
-    """
     async def dispatch(self, request: Request, call_next):
         correlation_id = request.headers.get(CORRELATION_ID_HEADER) or str(uuid.uuid4())
         request.state.correlation_id = correlation_id
@@ -31,14 +28,16 @@ class CorrelationIDMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Crawler API starting up")
+    await create_tables()
+    logger.info("Database tables ensured")
     yield
     logger.info("Crawler API shutting down")
 
 
 app = FastAPI(
-    title="Crawler API",
-    version="1.0.0",
-    description="High-performance web crawling microservice",
+    title="CrawlKit API",
+    version="2.0.0",
+    description="Self-hosted web crawling platform with multi-tenant support, persistent storage, and event streaming",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -50,15 +49,11 @@ app.include_router(api_router)
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return {"message": "Crawler API v1.0.0"}
+    return {"message": "CrawlKit API v2.0.0", "docs": "/docs"}
 
 
 @app.get("/health", tags=["system"])
 async def health_check():
-    """
-    Real dependency health check.
-    Returns 200 if healthy, 503 if any dependency is degraded.
-    """
     checks: dict = {}
 
     try:
@@ -68,6 +63,15 @@ async def health_check():
     except Exception as exc:
         logger.error("Redis health check failed: %s", exc)
         checks["redis"] = "error"
+
+    try:
+        from app.core.db import engine
+        async with engine.connect() as conn:
+            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        checks["postgres"] = "ok"
+    except Exception as exc:
+        logger.error("PostgreSQL health check failed: %s", exc)
+        checks["postgres"] = "error"
 
     all_ok = all(v == "ok" for v in checks.values())
     status_str = "healthy" if all_ok else "degraded"

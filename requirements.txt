@@ -7,3 +7,12 @@ celery>=5.3.4
 redis>=5.0.1
 gevent>=24.2.1
 starlette>=0.27.0
+# Database
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
+# HTML parsing & extraction
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+html2text>=2024.2.26
+# Browser crawling (optional, install separately)
+# playwright>=1.45.0

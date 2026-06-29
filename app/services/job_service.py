@@ -11,14 +11,30 @@ logger = logging.getLogger(__name__)
 
 class JobService:
     @staticmethod
-    def create_job(url: str, headers: Optional[Dict[str, str]] = None,
-                   timeout: int = 15, delay: float = 1.0,
-                   use_proxy: bool = True, countdown: float = 0) -> str:
+    def create_job(
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = 15,
+        delay: float = 1.0,
+        use_proxy: bool = True,
+        countdown: float = 0,
+        project_id: Optional[str] = None,
+        extract: Optional[Dict[str, str]] = None,
+        mode: str = "static",
+    ) -> str:
         task = crawl_page.apply_async(
-            args=[url, headers, timeout, delay, use_proxy],
+            args=[url],
+            kwargs={
+                "headers": headers,
+                "timeout": timeout,
+                "delay": delay,
+                "use_proxy": use_proxy,
+                "project_id": project_id,
+                "extract": extract,
+                "mode": mode,
+            },
             countdown=countdown,
         )
-        # Persist created_at so /status can return a real timestamp
         storage.save_job_created_at(task.id, datetime.now(timezone.utc).isoformat())
         return task.id
 

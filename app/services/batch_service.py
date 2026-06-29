@@ -1,6 +1,6 @@
 import uuid
 import time
-from typing import List, Optional
+from typing import List, Optional, Dict
 from app.services.job_service import JobService
 from app.services.storage import storage
 from app.schemas.responses import BatchResponse, BatchStatusResponse, JobStatusResponse
@@ -8,13 +8,20 @@ from app.schemas.responses import BatchResponse, BatchStatusResponse, JobStatusR
 
 class BatchService:
     @staticmethod
-    def create_batch(urls: List[str], headers: Optional[dict] = None,
-                     timeout: int = 15, delay: float = 1.0,
-                     use_proxy: bool = True) -> BatchResponse:
+    def create_batch(
+        urls: List[str],
+        headers: Optional[dict] = None,
+        timeout: int = 15,
+        delay: float = 1.0,
+        use_proxy: bool = True,
+        project_id: Optional[str] = None,
+        extract: Optional[Dict[str, str]] = None,
+        mode: str = "static",
+    ) -> BatchResponse:
         batch_id = str(uuid.uuid4())
         job_ids = []
 
-        for i, url in enumerate(urls):
+        for url in urls:
             job_id = JobService.create_job(
                 url=url,
                 headers=headers,
@@ -22,6 +29,9 @@ class BatchService:
                 delay=delay,
                 use_proxy=use_proxy,
                 countdown=0,
+                project_id=project_id,
+                extract=extract,
+                mode=mode,
             )
             job_ids.append(job_id)
 

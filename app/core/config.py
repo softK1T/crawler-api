@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # SSRF protection toggle (disable only in fully trusted internal envs)
     ssrf_enabled: bool = True
 
+    # Database
+    database_url: str = "postgresql+asyncpg://crawler:crawler@localhost:5432/crawlerdb"
+
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
 

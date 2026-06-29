@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 import redis
+from bs4 import BeautifulSoup
 
 from app.core.config import settings
 
@@ -58,6 +59,36 @@ def build_headers(url: str, extra_headers: Optional[Dict[str, str]] = None) -> D
     if extra_headers:
         headers.update(extra_headers)
     return headers
+
+
+def html_to_markdown(html: str) -> str:
+    """Convert HTML to clean Markdown using BeautifulSoup."""
+    try:
+        import html2text
+        h = html2text.HTML2Text()
+        h.ignore_links = False
+        h.ignore_images = True
+        h.body_width = 0
+        return h.handle(html)
+    except ImportError:
+        # Fallback: strip tags
+        soup = BeautifulSoup(html, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+
+
+def extract_with_selectors(html: str, selectors: Dict[str, str]) -> Dict[str, Any]:
+    """Extract data from HTML using CSS selectors map."""
+    soup = BeautifulSoup(html, "html.parser")
+    result = {}
+    for field, selector in selectors.items():
+        elements = soup.select(selector)
+        if not elements:
+            result[field] = None
+        elif len(elements) == 1:
+            result[field] = elements[0].get_text(strip=True)
+        else:
+            result[field] = [el.get_text(strip=True) for el in elements]
+    return result
 
 
 def auth_line_to_proxy_url(line: str) -> Optional[str]:
@@ -272,7 +303,6 @@ class Crawler:
         return httpx.Client(**kwargs)
 
     def _do_request(self, url: str, proxy_line: Optional[str] = None) -> Optional[CrawlRaw]:
-        """Returns (body_bytes, status_code, content_type, response_headers) or raises."""
         proxy_url = auth_line_to_proxy_url(proxy_line) if proxy_line else None
         request_headers = build_headers(url, self.extra_headers)
 
@@ -280,9 +310,7 @@ class Crawler:
             res = client.get(url, headers=request_headers)
             self._request_count += 1
 
-            # Extract real metadata from response
             content_type = res.headers.get("content-type", "")
-            # Truncate headers to avoid storing huge blobs in Redis
             headers_trunc = dict(list(res.headers.items())[:20])
 
             if 200 <= res.status_code < 300:
@@ -307,13 +335,11 @@ class Crawler:
                 )
 
     def crawl_raw(self, url: str) -> Optional[CrawlRaw]:
-        """Returns (body_bytes, status_code, content_type, headers_trunc) or None."""
         if self.proxy_pool:
             return self._crawl_with_proxies(url)
         return self._crawl_direct(url)
 
     def crawl_bytes(self, url: str) -> Optional[bytes]:
-        """Backward-compatible: returns just body bytes."""
         result = self.crawl_raw(url)
         return result[0] if result else None
 
@@ -371,6 +397,41 @@ class Crawler:
             "success_rate": self._successful_requests / total,
             "proxy_stats": self.proxy_pool.get_stats() if self.proxy_pool else {},
         }
+
+
+async def crawl_browser(url: str, timeout: int = 15, wait_for: Optional[str] = None) -> Optional[CrawlRaw]:
+    """
+    Browser-based crawl using Playwright (handles JS-rendered pages).
+    Requires: pip install playwright && playwright install chromium
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        logger.error("Playwright not installed. Run: pip install playwright && playwright install chromium")
+        return None
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=random.choice(HEADERS_POOL),
+                locale="en-US",
+            )
+            page = await context.new_page()
+            response = await page.goto(url, timeout=timeout * 1000, wait_until="networkidle")
+
+            if wait_for:
+                await page.wait_for_selector(wait_for, timeout=5000)
+
+            html = await page.content()
+            status_code = response.status if response else 200
+            content_type = "text/html"
+
+            await browser.close()
+            return html.encode("utf-8"), status_code, content_type, {}
+    except Exception as exc:
+        logger.error("Browser crawl failed for %s: %s", url, exc)
+        return None
 
 
 class BlockedError(Exception):
