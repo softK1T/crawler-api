@@ -5,20 +5,27 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from app.core.security import verify_api_key
-from app.services.session_manager import load_session, delete_session, SHOPEE_SESSION_KEY
+from app.services.session_manager import load_session, delete_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
+    url: str                        # any URL on the target site
     username: str
     password: str
     proxy_url: Optional[str] = None
 
 
+class ManualSessionRequest(BaseModel):
+    url: str                        # used to resolve session_key via adapter
+    cookies: dict                   # raw cookies dict from browser DevTools
+
+
 class LoginJobResponse(BaseModel):
     job_id: str
+    session_key: str
     message: str
 
 
@@ -28,45 +35,90 @@ class SessionStatusResponse(BaseModel):
     cookie_count: Optional[int] = None
 
 
-@router.post("/shopee/login", response_model=LoginJobResponse, status_code=202)
-async def shopee_login(
+def _resolve_adapter(url: str):
+    try:
+        from app.services.adapters import get_adapter
+        return get_adapter(url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ------------------------------------------------------------------
+# Login (async via Celery)
+# ------------------------------------------------------------------
+
+@router.post("/login", response_model=LoginJobResponse, status_code=202)
+async def login(
     request: LoginRequest,
     _api_key: str = Depends(verify_api_key),
 ):
     """
-    Trigger async Shopee login via camoufox.
-    Returns job_id — poll /jobs/{job_id}/status to check completion.
+    Universal login endpoint. Resolves the correct adapter by URL domain.
+    Supported: shopee.sg, shopee.com.my, shopee.co.id, ...
+    Returns job_id — poll GET /api/v1/jobs/{job_id}/status.
     """
-    from app.worker.tasks.auth import task_shopee_login
-    task = task_shopee_login.delay(
+    adapter = _resolve_adapter(request.url)
+    from app.worker.tasks.auth import task_site_login
+    task = task_site_login.delay(
+        url=request.url,
         username=request.username,
         password=request.password,
         proxy_url=request.proxy_url,
     )
     return LoginJobResponse(
         job_id=task.id,
-        message="Login job enqueued. Poll /api/v1/jobs/{job_id}/status for result.",
+        session_key=adapter.session_key,
+        message=f"Login job enqueued for {adapter.session_key}. Poll /api/v1/jobs/{{job_id}}/status.",
     )
 
 
-@router.get("/shopee/session", response_model=SessionStatusResponse)
-async def get_shopee_session(
+# ------------------------------------------------------------------
+# Manual session injection (when auto-login hits CAPTCHA)
+# ------------------------------------------------------------------
+
+@router.post("/session", response_model=SessionStatusResponse, status_code=201)
+async def set_manual_session(
+    request: ManualSessionRequest,
     _api_key: str = Depends(verify_api_key),
 ):
-    """Check if a valid Shopee session exists in Redis."""
-    cookies = load_session(SHOPEE_SESSION_KEY)
-    if cookies:
-        return SessionStatusResponse(
-            session_key=SHOPEE_SESSION_KEY,
-            active=True,
-            cookie_count=len(cookies),
-        )
-    return SessionStatusResponse(session_key=SHOPEE_SESSION_KEY, active=False)
+    """
+    Manually inject cookies from browser DevTools.
+    Use when auto-login is blocked by CAPTCHA.
+    """
+    adapter = _resolve_adapter(request.url)
+    from app.services.session_manager import save_session
+    save_session(adapter.session_key, request.cookies)
+    return SessionStatusResponse(
+        session_key=adapter.session_key,
+        active=True,
+        cookie_count=len(request.cookies),
+    )
 
 
-@router.delete("/shopee/session", status_code=204)
-async def delete_shopee_session(
+# ------------------------------------------------------------------
+# Session status
+# ------------------------------------------------------------------
+
+@router.get("/session", response_model=SessionStatusResponse)
+async def get_session(
+    url: str,
     _api_key: str = Depends(verify_api_key),
 ):
-    """Invalidate the current Shopee session."""
-    delete_session(SHOPEE_SESSION_KEY)
+    """Check if a valid session exists for the given site URL."""
+    adapter = _resolve_adapter(url)
+    cookies = load_session(adapter.session_key)
+    return SessionStatusResponse(
+        session_key=adapter.session_key,
+        active=bool(cookies),
+        cookie_count=len(cookies) if cookies else None,
+    )
+
+
+@router.delete("/session", status_code=204)
+async def clear_session(
+    url: str,
+    _api_key: str = Depends(verify_api_key),
+):
+    """Invalidate the session for the given site URL."""
+    adapter = _resolve_adapter(url)
+    delete_session(adapter.session_key)
