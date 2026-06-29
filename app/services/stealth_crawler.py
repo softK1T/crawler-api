@@ -1,12 +1,11 @@
 import logging
 import random
 import time
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, List
 
 from app.services.crawler import (
     HEADERS_POOL,
     GENERIC_BAN_INDICATORS,
-    build_headers,
     html_to_markdown,
     extract_with_selectors,
     auth_line_to_proxy_url,
@@ -16,8 +15,6 @@ from app.services.crawler import (
 
 logger = logging.getLogger(__name__)
 
-# Latest Chrome impersonate targets from curl_cffi
-# Use 'chrome' alias to always use the latest available version
 IMPERSONATE_TARGETS = [
     "chrome",
     "chrome146",
@@ -29,16 +26,7 @@ IMPERSONATE_TARGETS = [
 class StealthCrawler:
     """
     Tier-2 crawler using curl_cffi to impersonate real Chrome TLS fingerprints.
-    Bypasses:
-      - JA3 / JA3N TLS fingerprinting
-      - HTTP/2 ALPN fingerprinting
-      - Cloudflare Bot Management (basic/medium protection levels)
-      - Akamai Bot Manager (basic level)
-
-    Does NOT bypass:
-      - Cloudflare JS challenge (use camoufox for that)
-      - CAPTCHA (use camoufox)
-      - Device fingerprinting / Canvas / WebGL
+    Bypasses JA3/TLS fingerprinting and Cloudflare basic/medium.
     """
 
     def __init__(
@@ -74,8 +62,7 @@ class StealthCrawler:
     def is_blocked(self, content: str) -> bool:
         if not content or len(content) < self.min_content_length:
             return True
-        content_lower = content.lower()
-        return any(ind in content_lower for ind in self.ban_indicators)
+        return any(ind in content.lower() for ind in self.ban_indicators)
 
     def crawl_raw(self, url: str) -> Optional[CrawlRaw]:
         try:
@@ -93,7 +80,6 @@ class StealthCrawler:
                     "[stealth] Crawling %s (attempt %d, impersonate=%s, proxy=%s)",
                     url, attempt, impersonate, proxy_url or "direct"
                 )
-
                 kwargs: Dict[str, Any] = {
                     "impersonate": impersonate,
                     "timeout": self.timeout,
@@ -106,7 +92,6 @@ class StealthCrawler:
                     kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
 
                 resp = cffi_requests.get(url, **kwargs)
-
                 content_type = resp.headers.get("content-type", "")
                 resp_headers = dict(list(resp.headers.items())[:20])
 
@@ -116,14 +101,11 @@ class StealthCrawler:
                 if 200 <= resp.status_code < 300:
                     html = resp.text
                     if self.is_blocked(html):
-                        raise BlockedError("Blocked response content (CAPTCHA or challenge page)")
+                        raise BlockedError("Blocked response content")
                     logger.info("[stealth] Success %s (HTTP %d)", url, resp.status_code)
-                    if self.proxy_pool and proxy_url:
-                        proxy_line = proxy_url  # approximate
-                        self.proxy_pool.report_request_result(proxy_line, True)
                     return resp.content, resp.status_code, content_type, resp_headers
-                else:
-                    logger.warning("[stealth] HTTP %d for %s", resp.status_code, url)
+
+                logger.warning("[stealth] HTTP %d for %s", resp.status_code, url)
 
             except BlockedError as e:
                 logger.warning("[stealth] Blocked attempt %d: %s", attempt, e)
@@ -143,30 +125,20 @@ async def crawl_camoufox(
     locale: str = "en-US",
 ) -> Optional[CrawlRaw]:
     """
-    Tier-3 crawler using Camoufox anti-detect Firefox browser.
-    Bypasses:
-      - Cloudflare JS challenge (Turnstile, IUAM)
-      - Device fingerprinting (Canvas, WebGL, AudioContext, fonts)
-      - navigator.webdriver detection
-      - Headless browser detection
-      - Shopee, Ticketmaster, major e-commerce anti-bot
-
-    Requires:
-      pip install camoufox[geoip]
-      python -m camoufox fetch
+    Tier-3 crawler using Camoufox anti-detect Firefox.
+    Bypasses Cloudflare JS challenge, device fingerprinting, Shopee-level anti-bot.
+    NOTE: Camoufox handles viewport randomization internally — do NOT call set_viewport_size.
     """
     try:
         from camoufox.async_api import AsyncCamoufox
     except ImportError:
-        logger.error(
-            "Camoufox not installed. Run: pip install 'camoufox[geoip]' && python -m camoufox fetch"
-        )
+        logger.error("Camoufox not installed. Run: pip install 'camoufox[geoip]' && python -m camoufox fetch")
         return None
 
     try:
         launch_kwargs: Dict[str, Any] = {
             "headless": True,
-            "geoip": True,  # auto-spoof timezone/locale from proxy IP
+            "geoip": True,
         }
         if proxy_url:
             launch_kwargs["proxy"] = {"server": proxy_url}
@@ -175,12 +147,8 @@ async def crawl_camoufox(
 
         async with AsyncCamoufox(**launch_kwargs) as browser:
             page = await browser.new_page()
-
-            # Random human-like viewport
-            await page.set_viewport_size({
-                "width": random.choice([1366, 1440, 1920, 2560]),
-                "height": random.choice([768, 900, 1080]),
-            })
+            # NOTE: Do NOT call page.set_viewport_size() — Camoufox manages
+            # viewport internally and does not support the isMobile property.
 
             response = await page.goto(
                 url,
@@ -188,22 +156,19 @@ async def crawl_camoufox(
                 wait_until="networkidle",
             )
 
-            # Wait for specific element if requested
             if wait_for:
                 try:
                     await page.wait_for_selector(wait_for, timeout=10000)
                 except Exception:
                     logger.warning("[camoufox] wait_for selector '%s' not found", wait_for)
 
-            # Simulate brief human reading pause
             await page.wait_for_timeout(random.randint(800, 2000))
 
             html = await page.content()
             status_code = response.status if response else 200
-            content_type = "text/html"
 
             logger.info("[camoufox] Success %s (HTTP %d)", url, status_code)
-            return html.encode("utf-8"), status_code, content_type, {}
+            return html.encode("utf-8"), status_code, "text/html", {}
 
     except Exception as exc:
         logger.error("[camoufox] Failed for %s: %s", url, exc)
@@ -218,13 +183,11 @@ async def crawl_playwright_stealth(
 ) -> Optional[CrawlRaw]:
     """
     Upgraded 'browser' mode using Playwright + stealth patches.
-    Better than vanilla Playwright but weaker than Camoufox.
-    Use as fallback when Camoufox is not installed.
     """
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        logger.error("Playwright not installed. Run: pip install playwright && playwright install chromium")
+        logger.error("Playwright not installed.")
         return None
 
     try:
@@ -234,7 +197,6 @@ async def crawl_playwright_stealth(
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
             ]
             launch_kwargs: Dict[str, Any] = {"headless": True, "args": launch_args}
             if proxy_url:
@@ -246,23 +208,12 @@ async def crawl_playwright_stealth(
                 viewport={"width": random.choice([1366, 1440, 1920]), "height": random.choice([768, 900, 1080])},
                 locale="en-US",
                 timezone_id="America/New_York",
-                java_script_enabled=True,
-                ignore_https_errors=False,
             )
-
-            # Core stealth patches
             await context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
                 window.chrome = { runtime: {} };
-                Object.defineProperty(navigator, 'permissions', {
-                    query: (parameters) => (
-                        parameters.name === 'notifications'
-                            ? Promise.resolve({ state: Notification.permission })
-                            : Promise.resolve({ state: 'granted' })
-                    )
-                });
             """)
 
             page = await context.new_page()
