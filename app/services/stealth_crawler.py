@@ -6,8 +6,6 @@ from typing import Optional, Dict, Any, List
 from app.services.crawler import (
     HEADERS_POOL,
     GENERIC_BAN_INDICATORS,
-    html_to_markdown,
-    extract_with_selectors,
     auth_line_to_proxy_url,
     CrawlRaw,
     BlockedError,
@@ -25,7 +23,7 @@ IMPERSONATE_TARGETS = [
 
 class StealthCrawler:
     """
-    Tier-2 crawler using curl_cffi to impersonate real Chrome TLS fingerprints.
+    Tier-2 crawler using curl_cffi Chrome TLS impersonation.
     Bypasses JA3/TLS fingerprinting and Cloudflare basic/medium.
     """
 
@@ -74,7 +72,6 @@ class StealthCrawler:
         for attempt in range(1, self.max_retries + 1):
             impersonate = random.choice(IMPERSONATE_TARGETS)
             proxy_url = self._pick_proxy_url()
-
             try:
                 logger.info(
                     "[stealth] Crawling %s (attempt %d, impersonate=%s, proxy=%s)",
@@ -126,8 +123,8 @@ async def crawl_camoufox(
 ) -> Optional[CrawlRaw]:
     """
     Tier-3 crawler using Camoufox anti-detect Firefox.
-    Bypasses Cloudflare JS challenge, device fingerprinting, Shopee-level anti-bot.
-    NOTE: Camoufox handles viewport randomization internally — do NOT call set_viewport_size.
+    Uses headless='virtual' (Xvfb) — recommended by camoufox docs to avoid
+    headless detection and viewport protocol errors with playwright.
     """
     try:
         from camoufox.async_api import AsyncCamoufox
@@ -137,7 +134,7 @@ async def crawl_camoufox(
 
     try:
         launch_kwargs: Dict[str, Any] = {
-            "headless": True,
+            "headless": "virtual",  # Xvfb virtual display — avoids isMobile protocol error
             "geoip": True,
         }
         if proxy_url:
@@ -147,8 +144,6 @@ async def crawl_camoufox(
 
         async with AsyncCamoufox(**launch_kwargs) as browser:
             page = await browser.new_page()
-            # NOTE: Do NOT call page.set_viewport_size() — Camoufox manages
-            # viewport internally and does not support the isMobile property.
 
             response = await page.goto(
                 url,
@@ -182,7 +177,7 @@ async def crawl_playwright_stealth(
     wait_for: Optional[str] = None,
 ) -> Optional[CrawlRaw]:
     """
-    Upgraded 'browser' mode using Playwright + stealth patches.
+    Upgraded 'browser' mode using Playwright Chromium + stealth patches.
     """
     try:
         from playwright.async_api import async_playwright
