@@ -5,7 +5,11 @@ celery_app = Celery(
     "crawler",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.worker.tasks.crawl", "app.worker.tasks.sync"],
+    include=[
+        "app.worker.tasks.crawl",
+        "app.worker.tasks.sync",
+        "app.worker.tasks.auth",
+    ],
 )
 
 celery_app.conf.update(
