@@ -11,13 +11,14 @@ class BatchService:
     def create_batch(
         urls: List[str],
         headers: Optional[dict] = None,
-        timeout: int = 15,
-        delay: float = 1.0,
+        timeout: int = 30,
+        delay: float = 2.0,
         use_proxy: bool = True,
         project_id: Optional[str] = None,
         extract: Optional[Dict[str, str]] = None,
         mode: str = "static",
         proxy_country: Optional[str] = None,
+        wait_for: Optional[str] = None,
     ) -> BatchResponse:
         batch_id = str(uuid.uuid4())
         job_ids = []
@@ -34,6 +35,7 @@ class BatchService:
                 extract=extract,
                 mode=mode,
                 proxy_country=proxy_country,
+                wait_for=wait_for,
             )
             job_ids.append(job_id)
 

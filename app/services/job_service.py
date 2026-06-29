@@ -14,14 +14,15 @@ class JobService:
     def create_job(
         url: str,
         headers: Optional[Dict[str, str]] = None,
-        timeout: int = 15,
-        delay: float = 1.0,
+        timeout: int = 30,
+        delay: float = 2.0,
         use_proxy: bool = True,
         countdown: float = 0,
         project_id: Optional[str] = None,
         extract: Optional[Dict[str, str]] = None,
         mode: str = "static",
         proxy_country: Optional[str] = None,
+        wait_for: Optional[str] = None,
     ) -> str:
         task = crawl_page.apply_async(
             args=[url],
@@ -34,6 +35,7 @@ class JobService:
                 "extract": extract,
                 "mode": mode,
                 "proxy_country": proxy_country,
+                "wait_for": wait_for,
             },
             countdown=countdown,
         )
