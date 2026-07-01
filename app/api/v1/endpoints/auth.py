@@ -54,7 +54,7 @@ async def login(
 ):
     """
     Universal login endpoint. Resolves the correct adapter by URL domain.
-    Supported: shopee.sg, shopee.com.my, shopee.co.id, ...
+    Register site adapters in app/services/adapters/__init__.py.
     Returns job_id — poll GET /api/v1/jobs/{job_id}/status.
     """
     adapter = _resolve_adapter(request.url)

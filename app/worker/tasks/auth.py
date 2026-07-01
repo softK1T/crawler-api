@@ -16,6 +16,7 @@ def task_site_login(
 ):
     """
     Universal login task. Resolves adapter by URL domain.
+    Register site adapters in app/services/adapters/__init__.py.
     """
     import asyncio
     from app.services.adapters import get_adapter

@@ -8,7 +8,6 @@ celery_app = Celery(
     include=[
         "app.worker.tasks.crawl",
         "app.worker.tasks.sync",
-        "app.worker.tasks.auth",
     ],
 )
 
