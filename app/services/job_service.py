@@ -38,6 +38,7 @@ class JobService:
         proxy_pool_id: UUID | None,
         callback_url: str | None,
         options: dict,
+        trace_id: str | None = None,
     ) -> str:
         """Enqueue a fetch_task via arq and set initial status in Redis."""
         import arq
@@ -67,9 +68,23 @@ class JobService:
             proxy_pool_id=str(proxy_pool_id) if proxy_pool_id else None,
             callback_url=callback_url,
             options=options,
+            trace_id=trace_id,
         )
         await arq_redis.aclose()
 
+        # Observe queue depth.
+        from app.core.observability import observe_queue_depth
+
+        await observe_queue_depth(self._redis)
+
+        logger.info(
+            "job_enqueued",
+            extra={
+                "job_id": job_id,
+                "application_id": str(api_key.application_id),
+                "trace_id": trace_id,
+            },
+        )
         return job_id
 
     async def get_status(self, job_id: str) -> None:
@@ -115,12 +130,12 @@ class JobService:
 
     async def handle_idempotency(self, idempotency_key: str, application_id: UUID) -> str | None:
         """Check if an idempotency key was already used.  Returns job_id or None."""
-        existing = await self._redis.get(
-            f"idempotency:{application_id}:{idempotency_key[:128]}"
-        )
+        existing = await self._redis.get(f"idempotency:{application_id}:{idempotency_key[:128]}")
         return existing if existing else None
 
-    async def store_idempotency(self, idempotency_key: str, job_id: str, application_id: UUID) -> None:
+    async def store_idempotency(
+        self, idempotency_key: str, job_id: str, application_id: UUID
+    ) -> None:
         """Store the idempotency key → job_id mapping."""
         await self._redis.set(
             f"idempotency:{application_id}:{idempotency_key[:128]}",

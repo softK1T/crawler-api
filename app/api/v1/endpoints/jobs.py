@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+import time
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import SCOPE_FETCH, require_scope, resolve_api_key
 from app.core.config import settings
 from app.core.db import get_db
+from app.core.logging_config import bind_context
+from app.core.observability import RATE_LIMIT_HITS_TOTAL, REQUEST_LATENCY_MS
 from app.models.api_key import ApiKey
 from app.schemas.job import JobCreate, JobResponse, JobStatus
 from app.schemas.responses import CrawlResult, JobStatusResponse
@@ -31,6 +34,21 @@ async def create_fetch(
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a fetch job via arq. Supports Idempotency-Key and sync mode."""
+    started = time.perf_counter()
+
+    # Resolve trace_id from correlation ID or OTel span.
+    trace_id = req.headers.get("X-Correlation-ID")
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        if span and span.get_span_context().is_valid:
+            trace_id = format(span.get_span_context().trace_id, "032x")
+    except Exception:
+        pass
+
+    bind_context(trace_id=trace_id, application_id=str(api_key.application_id))
+
     # 1. Domain normalization.
     from urllib.parse import urlparse
 
@@ -61,13 +79,16 @@ async def create_fetch(
             },
             headers={"Retry-After": str(math.ceil(result["retry_after_s"]))},
         )
+        RATE_LIMIT_HITS_TOTAL.labels(layer=result["layer"]).inc()
 
     # 3. Idempotency.
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
     job_svc = JobService(redis_client)
 
     if body.idempotency_key:
-        existing_job_id = await job_svc.handle_idempotency(body.idempotency_key, api_key.application_id)
+        existing_job_id = await job_svc.handle_idempotency(
+            body.idempotency_key, api_key.application_id
+        )
         if existing_job_id:
             cached = await job_svc.get_result(existing_job_id)
             response = JSONResponse(
@@ -95,6 +116,7 @@ async def create_fetch(
         proxy_pool_id=proxy_pool_id,
         callback_url=body.callback_url,
         options=body.options,
+        trace_id=trace_id,
     )
 
     if body.idempotency_key:
@@ -123,6 +145,11 @@ async def create_fetch(
         )
 
     # 6. Async mode — 202 Accepted.
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    REQUEST_LATENCY_MS.labels(
+        component="api", endpoint="/v1/fetch", method="POST", status_code="202"
+    ).observe(elapsed_ms)
+
     return JSONResponse(
         status_code=202,
         content=JobResponse(
