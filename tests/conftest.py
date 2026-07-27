@@ -1,0 +1,144 @@
+"""Shared fixtures: testcontainers for Postgres/Redis, FastAPI app, factories."""
+
+import os
+from collections.abc import AsyncGenerator, Iterator
+from uuid import uuid4
+
+import pytest
+
+# Ensure test settings override production before any app imports.
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/testdb")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("API_KEYS_RAW", "")
+os.environ.setdefault("S3_ACCESS_KEY", "test")
+
+
+@pytest.fixture(scope="session")
+def _postgres_dsn() -> Iterator[str]:
+    """Session-scoped Postgres testcontainer."""
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:16-alpine") as pg:
+        raw = pg.get_connection_url()
+        yield raw.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+
+
+@pytest.fixture(scope="session")
+def _redis_url() -> Iterator[str]:
+    """Session-scoped Redis testcontainer."""
+    from testcontainers.redis import RedisContainer
+
+    with RedisContainer("redis:7-alpine") as rc:
+        host = rc.get_container_host_ip()
+        port = rc.get_exposed_port(6379)
+        yield f"redis://{host}:{port}/0"
+
+
+@pytest.fixture
+async def db_session(_postgres_dsn: str) -> AsyncGenerator:
+    """Per-test async DB session bound to Postgres testcontainer."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(_postgres_dsn, echo=False)
+    async with engine.begin() as conn:
+        from app.core.db import Base  # type: ignore[attr-defined]
+
+        # ruff: noqa: F406
+        from app.models import *  # noqa: F403
+
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as session:
+        yield session
+
+    await engine.dispose()
+
+
+@pytest.fixture
+async def redis_client(_redis_url: str) -> AsyncGenerator:
+    """Per-test Redis client (flushed)."""
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url(_redis_url, decode_responses=False)
+    await client.flushall()
+    yield client
+    await client.flushall()
+    await client.aclose()
+
+
+@pytest.fixture
+async def app(_postgres_dsn: str, _redis_url: str) -> AsyncGenerator:
+    """FastAPI app wired to test containers."""
+    from app.core.config import settings
+
+    # Override settings for tests.
+    settings.database_url = _postgres_dsn  # type: ignore[assignment]
+    settings.redis_url = _redis_url
+    settings.api_keys_raw = "crw_live_testkey1234567890abcdefghij"
+    settings.callback_hmac_secret = "test-secret"
+    settings.enable_metrics = False
+    settings.enable_tracing = False
+    settings.s3_access_key = ""
+
+    from app.main import app
+
+    yield app
+
+
+# ── Factory fixtures ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def tenant_factory(db_session):
+    """Create a Tenant row."""
+    from app.models.tenant import Tenant
+
+    async def _make(name: str | None = None) -> Tenant:
+        row = Tenant(name=name or f"test-tenant-{uuid4().hex[:8]}")
+        db_session.add(row)
+        await db_session.commit()
+        await db_session.refresh(row)
+        return row
+
+    return _make
+
+
+@pytest.fixture
+async def application_factory(db_session, tenant_factory):
+    """Create an Application row."""
+    from app.models.application import Application
+
+    async def _make(tenant=None, name: str | None = None) -> Application:
+        t = tenant or await tenant_factory()
+        row = Application(tenant_id=t.id, name=name or f"test-app-{uuid4().hex[:8]}")
+        db_session.add(row)
+        await db_session.commit()
+        await db_session.refresh(row)
+        return row
+
+    return _make
+
+
+@pytest.fixture
+async def api_key_factory(db_session, application_factory):
+    """Create an ApiKey row, returns (raw_key, ApiKey)."""
+    from app.core.security import generate_api_key
+    from app.models.api_key import ApiKey
+
+    async def _make(application=None, scopes: list[str] | None = None) -> tuple[str, ApiKey]:
+        raw, hashed = generate_api_key()
+        app = application or await application_factory()
+        row = ApiKey(
+            application_id=app.id,
+            prefix=raw[:8],
+            hashed_key=hashed,
+            scopes=scopes or ["fetch"],
+            mode="live",
+        )
+        db_session.add(row)
+        await db_session.commit()
+        await db_session.refresh(row)
+        return raw, row
+
+    return _make
