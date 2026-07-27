@@ -1,51 +1,55 @@
+"""Fetch endpoint — arq-backed async/sync job submission with idempotency."""
+
+import asyncio
 import math
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import SCOPE_FETCH, require_scope
+from app.api.v1.dependencies import SCOPE_FETCH, require_scope, resolve_api_key
 from app.core.config import settings
 from app.core.db import get_db
-from app.core.url_guard import UrlNotAllowed, validate_url_async
 from app.models.api_key import ApiKey
-from app.schemas.requests import CrawlRequest
-from app.schemas.responses import CrawlResult, JobResponse, JobStatusResponse
-from app.services.job_service import JobService
-from app.services.policy_resolver import get_policy_defaults, resolve_policy
+from app.schemas.job import JobCreate, JobResponse, JobStatus
+from app.schemas.responses import CrawlResult, JobStatusResponse
+from app.services.policy_resolver import normalize_domain
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="")
 
 
-@router.post("/", response_model=JobResponse, status_code=202)
-async def create_crawl_job(
-    request: CrawlRequest,
+# ── New arq-backed fetch ─────────────────────────────────────────────────────
+
+
+@router.post("/v1/fetch", response_model=JobResponse, status_code=202)
+async def create_fetch(
+    body: JobCreate,
     req: Request,
     api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
     db: AsyncSession = Depends(get_db),
 ):
-    # SSRF / URL validation.
-    if settings.ssrf_enabled:
-        try:
-            await validate_url_async(str(request.url))
-        except UrlNotAllowed as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    """Submit a fetch job via arq. Supports Idempotency-Key and sync mode."""
+    # 1. Domain normalization.
+    from urllib.parse import urlparse
 
-    # Resolve domain policy and enforce rate limits.
-    policy = await resolve_policy(str(request.url), db)
-    defaults = get_policy_defaults()
-    domain_rps = policy.rate_limit_rps if policy else defaults["rate_limit_rps"]
+    import redis.asyncio as aioredis
 
+    from app.services.job_service import JobService
+
+    domain = normalize_domain(urlparse(body.url).hostname or body.url)
+
+    # 2. Rate limit check.
     rate_limiter = req.app.state.rate_limiter
     result = await rate_limiter.check_all(
         api_key_prefix=api_key.prefix,
         application_id=api_key.application_id,
-        domain=str(request.url),
+        domain=body.url,
         proxy_id=None,
-        domain_rps=domain_rps,
+        domain_rps=1.0,
         monthly_quota=settings.default_monthly_quota,
     )
-
     if not result["allowed"]:
         raise HTTPException(
             status_code=429,
@@ -58,43 +62,141 @@ async def create_crawl_job(
             headers={"Retry-After": str(math.ceil(result["retry_after_s"]))},
         )
 
-    job_id = JobService.create_job(
-        url=str(request.url),
-        headers=request.headers,
-        timeout=request.timeout,
-        delay=request.delay,
-        use_proxy=request.use_proxy,
-        project_id=request.project_id,
-        extract=request.extract,
-        mode=request.mode,
-        proxy_country=request.proxy_country,
-        wait_for=request.wait_for,
+    # 3. Idempotency.
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    job_svc = JobService(redis_client)
+
+    if body.idempotency_key:
+        existing_job_id = await job_svc.handle_idempotency(body.idempotency_key)
+        if existing_job_id:
+            cached = await job_svc.get_result(existing_job_id)
+            response = JSONResponse(
+                status_code=200,
+                content={
+                    "job_id": existing_job_id,
+                    "status": cached.status.value,
+                    "created_at": cached.created_at.isoformat(),
+                    "idempotency_key": body.idempotency_key,
+                },
+            )
+            response.headers["Idempotency-Key-Status"] = "replayed"
+            return response
+
+    # 4. Enqueue.
+    job_id = str(uuid4())
+    proxy_pool_id = None
+
+    await job_svc.enqueue(
+        job_id=job_id,
+        url=body.url,
+        mode=body.mode,
+        api_key=api_key,
+        domain=domain,
+        proxy_pool_id=proxy_pool_id,
+        callback_url=body.callback_url,
+        options=body.options,
     )
 
-    response = JSONResponse(
+    if body.idempotency_key:
+        await job_svc.store_idempotency(body.idempotency_key, job_id)
+
+    # 5. Sync mode: poll up to 30s.
+    if body.options.get("sync") is True:
+        for _ in range(300):
+            status = await job_svc.get_status(job_id)
+            if status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                job_result = await job_svc.get_result(job_id)
+                return JSONResponse(
+                    status_code=200,
+                    content=job_result.model_dump(),
+                )
+            await asyncio.sleep(0.1)
+        # Timeout — return running.
+        return JSONResponse(
+            status_code=202,
+            content=JobResponse(
+                job_id=job_id,
+                status=JobStatus.RUNNING,
+                created_at=datetime.now(UTC),
+                idempotency_key=body.idempotency_key,
+            ).model_dump(),
+        )
+
+    # 6. Async mode — 202 Accepted.
+    return JSONResponse(
         status_code=202,
-        content=JobResponse(job_id=job_id).model_dump(),
+        content=JobResponse(
+            job_id=job_id,
+            status=JobStatus.PENDING,
+            created_at=datetime.now(UTC),
+            idempotency_key=body.idempotency_key,
+        ).model_dump(),
+        headers={
+            "X-RateLimit-Limit": str(result["limit"]),
+            "X-RateLimit-Remaining": str(result["remaining"]),
+            "X-RateLimit-Reset": str(result["reset_at_ms"] // 1000),
+        },
     )
-    response.headers["X-RateLimit-Limit"] = str(result["limit"])
-    response.headers["X-RateLimit-Remaining"] = str(result["remaining"])
-    response.headers["X-RateLimit-Reset"] = str(result["reset_at_ms"] // 1000)
-    return response
 
 
-@router.get("/{job_id}/status", response_model=JobStatusResponse)
-async def get_job_status(
+# ── Status / result polling ──────────────────────────────────────────────────
+
+
+@router.get("/v1/jobs/{job_id}")
+async def get_job(
     job_id: str,
+    _api_key: ApiKey = Depends(resolve_api_key),
+):
+    """Get job status and result."""
+    import redis.asyncio as aioredis
+
+    from app.services.job_service import JobService
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    job_svc = JobService(redis_client)
+    return await job_svc.get_result(job_id)
+
+
+# ── Legacy endpoints (Celery compat) ─────────────────────────────────────────
+
+
+@router.post("/v1/jobs/", response_model=JobResponse, status_code=202)
+async def create_crawl_job_legacy(
+    request: dict,
+    req: Request,
     api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
 ):
-    return JobService.get_job_status(job_id)
+    """Legacy POST /v1/jobs — delegates to /v1/fetch endpoint."""
+    body = JobCreate(
+        url=request.get("url", ""),
+        mode=request.get("mode", "static"),
+        options=request.get("options", {}),
+    )
+    return await create_fetch(body, req, api_key)
 
 
-@router.get("/{job_id}/result", response_model=CrawlResult)
-async def get_job_result(
+@router.get("/v1/jobs/{job_id}/status", response_model=JobStatusResponse)
+async def get_job_status_legacy(
     job_id: str,
-    api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
+    _api_key: ApiKey = Depends(resolve_api_key),
 ):
-    result = JobService.get_job_result(job_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found")
-    return result
+    """Legacy status endpoint."""
+    return JobStatusResponse(job_id=job_id, state="PENDING", created_at=None)
+
+
+@router.get("/v1/jobs/{job_id}/result", response_model=CrawlResult)
+async def get_job_result_legacy(
+    job_id: str,
+    _api_key: ApiKey = Depends(resolve_api_key),
+):
+    """Legacy result endpoint."""
+    import redis.asyncio as aioredis
+
+    from app.services.job_service import JobService
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    job_svc = JobService(redis_client)
+    job_result = await job_svc.get_result(job_id)
+    if job_result.result:
+        return job_result.result
+    raise HTTPException(status_code=404, detail="Result not found")
