@@ -1,9 +1,10 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.v1.dependencies import SCOPE_ADMIN, require_scope, resolve_api_key
 from app.core.config import settings
-from app.core.security import verify_api_key
+from app.models.api_key import ApiKey
 from app.services.geo_proxy_pool import GeoProxyPool
 from app.services.proxy_singleton import get_proxy_pool, reset_proxy_pool
 
@@ -12,10 +13,9 @@ router = APIRouter(prefix="/proxy", tags=["proxy"])
 
 
 @router.get("/stats")
-async def proxy_stats(_api_key: str = Depends(verify_api_key)):
-    """
-    Returns current proxy pool health statistics.
-    """
+async def proxy_stats(api_key: ApiKey = Depends(resolve_api_key)):
+    """Returns current proxy pool health statistics. Read-only — any
+    authenticated key can access."""
     pool = get_proxy_pool()
     if pool is None:
         return {
@@ -38,8 +38,9 @@ async def proxy_stats(_api_key: str = Depends(verify_api_key)):
 
 
 @router.post("/reset")
-async def reset_pool(_api_key: str = Depends(verify_api_key)):
-    """Reset all proxy health stats (unblocks blocked/bad proxies)."""
+async def reset_pool(_api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN))):
+    """Reset all proxy health stats (unblocks blocked/bad proxies).
+    Requires admin scope."""
     pool = get_proxy_pool()
     if pool is None:
         return {"message": "Proxy pool not configured"}
@@ -70,15 +71,9 @@ def _do_sync() -> dict:
 
 @router.post("/sync")
 async def sync_webshare(
-    background_tasks: BackgroundTasks,
-    _api_key: str = Depends(verify_api_key),
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
 ):
-    """
-    Trigger a manual Webshare proxy sync.
-    Fetches fresh proxy list from Webshare API, writes proxies.txt with country codes,
-    and reloads the GeoProxyPool singleton.
-    Requires WEBSHARE_API_KEY to be set in .env
-    """
+    """Trigger a manual Webshare proxy sync. Requires admin scope."""
     result = _do_sync()
     logger.info("Manual Webshare sync: %d proxies", result["synced"])
     return {"message": "Webshare sync complete", **result}
