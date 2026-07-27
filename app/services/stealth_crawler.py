@@ -1,14 +1,15 @@
 import logging
 import random
 import time
-from typing import Optional, Dict, Any, List
+from typing import Any
+from urllib.parse import urlparse
 
 from app.services.crawler import (
-    HEADERS_POOL,
     GENERIC_BAN_INDICATORS,
-    auth_line_to_proxy_url,
-    CrawlRaw,
+    HEADERS_POOL,
     BlockedError,
+    CrawlRaw,
+    auth_line_to_proxy_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,8 @@ IMPERSONATE_TARGETS = [
     "chrome131",
     "chrome124",
 ]
+
+MAX_STEALTH_REDIRECTS = 10
 
 
 class StealthCrawler:
@@ -32,9 +35,9 @@ class StealthCrawler:
         max_retries: int = 3,
         timeout: float = 20.0,
         delay: float = 2.0,
-        headers: Optional[Dict[str, str]] = None,
-        proxy_country: Optional[str] = None,
-        ban_indicators: Optional[List[str]] = None,
+        headers: dict[str, str] | None = None,
+        proxy_country: str | None = None,
+        ban_indicators: list[str] | None = None,
         min_content_length: int = 500,
     ):
         self.proxy_pool = proxy_pool
@@ -46,10 +49,11 @@ class StealthCrawler:
         self.ban_indicators = ban_indicators or GENERIC_BAN_INDICATORS
         self.min_content_length = min_content_length
 
-    def _pick_proxy_url(self) -> Optional[str]:
+    def _pick_proxy_url(self) -> str | None:
         if not self.proxy_pool:
             return None
         from app.services.geo_proxy_pool import GeoProxyPool
+
         if isinstance(self.proxy_pool, GeoProxyPool) and self.proxy_country:
             proxy_line = self.proxy_pool.pick_proxy_for_country(self.proxy_country)
         else:
@@ -61,12 +65,14 @@ class StealthCrawler:
             return True
         return any(ind in content.lower() for ind in self.ban_indicators)
 
-    def crawl_raw(self, url: str) -> Optional[CrawlRaw]:
+    def crawl_raw(self, url: str) -> CrawlRaw | None:
         try:
             from curl_cffi import requests as cffi_requests
         except ImportError:
             logger.error("curl_cffi not installed.")
             return None
+
+        from app.core.url_guard import URLGuardError, validate_url_sync
 
         for attempt in range(1, self.max_retries + 1):
             impersonate = random.choice(IMPERSONATE_TARGETS)
@@ -74,34 +80,71 @@ class StealthCrawler:
             try:
                 logger.info(
                     "[stealth] Crawling %s (attempt %d, impersonate=%s, proxy=%s)",
-                    url, attempt, impersonate, proxy_url or "direct"
+                    url,
+                    attempt,
+                    impersonate,
+                    proxy_url or "direct",
                 )
-                kwargs: Dict[str, Any] = {
-                    "impersonate": impersonate,
-                    "timeout": self.timeout,
-                    "allow_redirects": True,
-                    "verify": True,
-                }
-                if self.extra_headers:
-                    kwargs["headers"] = self.extra_headers
-                if proxy_url:
-                    kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
 
-                resp = cffi_requests.get(url, **kwargs)
-                content_type = resp.headers.get("content-type", "")
-                resp_headers = dict(list(resp.headers.items())[:20])
+                current_url = url
+                for _hop in range(MAX_STEALTH_REDIRECTS + 1):
+                    # Per-hop SSRF / URL policy validation before every request.
+                    try:
+                        validate_url_sync(current_url)
+                    except URLGuardError as exc:
+                        logger.warning("[stealth] URL blocked: %s — %s", current_url, exc)
+                        raise BlockedError(f"URL blocked by policy: {current_url}") from exc
 
-                if resp.status_code in (403, 429, 503):
-                    raise BlockedError(f"HTTP {resp.status_code} — likely bot detection")
+                    kwargs: dict[str, Any] = {
+                        "impersonate": impersonate,
+                        "timeout": self.timeout,
+                        "allow_redirects": False,
+                        "verify": True,
+                    }
+                    if self.extra_headers:
+                        kwargs["headers"] = self.extra_headers
+                    if proxy_url:
+                        kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
 
-                if 200 <= resp.status_code < 300:
-                    html = resp.text
-                    if self.is_blocked(html):
-                        raise BlockedError("Blocked response content")
-                    logger.info("[stealth] Success %s (HTTP %d)", url, resp.status_code)
-                    return resp.content, resp.status_code, content_type, resp_headers
+                    resp = cffi_requests.get(current_url, **kwargs)
 
-                logger.warning("[stealth] HTTP %d for %s", resp.status_code, url)
+                    # Follow redirects manually with per-hop validation.
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("location")
+                        if not location:
+                            raise BlockedError(
+                                f"Redirect ({resp.status_code}) with no Location header from {current_url}"
+                            )
+                        # Resolve relative redirects against the current URL.
+                        from urllib.parse import urljoin
+
+                        current_url = urljoin(current_url, location)
+                        logger.debug("[stealth] Redirect (%d) → %s", resp.status_code, current_url)
+                        continue
+
+                    content_type = resp.headers.get("content-type", "")
+                    resp_headers = dict(list(resp.headers.items())[:20])
+
+                    if resp.status_code in (403, 429, 503):
+                        raise BlockedError(f"HTTP {resp.status_code} — likely bot detection")
+
+                    if 200 <= resp.status_code < 300:
+                        html = resp.text
+                        if self.is_blocked(html):
+                            raise BlockedError("Blocked response content")
+                        logger.info("[stealth] Success %s (HTTP %d)", url, resp.status_code)
+                        return resp.content, resp.status_code, content_type, resp_headers
+
+                    logger.warning("[stealth] HTTP %d for %s", resp.status_code, current_url)
+
+                # Exhausted redirect budget.
+                logger.warning(
+                    "[stealth] Exceeded %d redirects starting from %s (last: %s)",
+                    MAX_STEALTH_REDIRECTS,
+                    url,
+                    current_url,
+                )
+                raise BlockedError(f"Exceeded {MAX_STEALTH_REDIRECTS} redirects from {url}")
 
             except BlockedError as e:
                 logger.warning("[stealth] Blocked attempt %d: %s", attempt, e)
@@ -116,11 +159,11 @@ class StealthCrawler:
 async def crawl_camoufox(
     url: str,
     timeout: int = 30,
-    proxy_url: Optional[str] = None,
-    wait_for: Optional[str] = None,
+    proxy_url: str | None = None,
+    wait_for: str | None = None,
     locale: str = "en-US",
-    session_key: Optional[str] = None,
-) -> Optional[CrawlRaw]:
+    session_key: str | None = None,
+) -> CrawlRaw | None:
     """
     Tier-3 crawler using Camoufox anti-detect Firefox.
     If session_key is provided, loads cookies from Redis and injects them.
@@ -132,21 +175,30 @@ async def crawl_camoufox(
         return None
 
     # Load session cookies if requested
-    cookies_to_inject: Optional[List[Dict]] = None
+    cookies_to_inject: list[dict] | None = None
     if session_key:
         from app.services.session_manager import load_session
+
         stored = load_session(session_key)
         if stored:
+            # Extract domain from the request URL for cookie scope.
+            cookie_domain = f".{urlparse(url).netloc.split(':')[0]}"
             cookies_to_inject = [
-                {"name": k, "value": v, "domain": ".shopee.sg", "path": "/"}
+                {"name": k, "value": v, "domain": cookie_domain, "path": "/"}
                 for k, v in stored.items()
             ]
-            logger.info("[camoufox] Injecting %d session cookies for '%s'", len(cookies_to_inject), session_key)
+            logger.info(
+                "[camoufox] Injecting %d session cookies for '%s'",
+                len(cookies_to_inject),
+                session_key,
+            )
         else:
-            logger.warning("[camoufox] Session '%s' not found in Redis — crawling without auth", session_key)
+            logger.warning(
+                "[camoufox] Session '%s' not found in Redis — crawling without auth", session_key
+            )
 
     try:
-        launch_kwargs: Dict[str, Any] = {
+        launch_kwargs: dict[str, Any] = {
             "headless": "virtual",
             "geoip": True,
         }
@@ -156,7 +208,6 @@ async def crawl_camoufox(
             launch_kwargs["locale"] = locale
 
         async with AsyncCamoufox(**launch_kwargs) as browser:
-            context = browser  # AsyncCamoufox context IS the browser context
             page = await browser.new_page()
 
             # Inject cookies before navigation
@@ -191,9 +242,9 @@ async def crawl_camoufox(
 async def crawl_playwright_stealth(
     url: str,
     timeout: int = 20,
-    proxy_url: Optional[str] = None,
-    wait_for: Optional[str] = None,
-) -> Optional[CrawlRaw]:
+    proxy_url: str | None = None,
+    wait_for: str | None = None,
+) -> CrawlRaw | None:
     try:
         from playwright.async_api import async_playwright
     except ImportError:
@@ -207,14 +258,17 @@ async def crawl_playwright_stealth(
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
             ]
-            launch_kwargs: Dict[str, Any] = {"headless": True, "args": launch_args}
+            launch_kwargs: dict[str, Any] = {"headless": True, "args": launch_args}
             if proxy_url:
                 launch_kwargs["proxy"] = {"server": proxy_url}
 
             browser = await p.chromium.launch(**launch_kwargs)
             context = await browser.new_context(
                 user_agent=random.choice(HEADERS_POOL),
-                viewport={"width": random.choice([1366, 1440, 1920]), "height": random.choice([768, 900, 1080])},
+                viewport={
+                    "width": random.choice([1366, 1440, 1920]),
+                    "height": random.choice([768, 900, 1080]),
+                },
                 locale="en-US",
                 timezone_id="America/New_York",
             )
