@@ -56,7 +56,7 @@ async def test_admin_scope_required_for_tenant_creation():
         application_id = uuid.uuid4()
 
     with pytest.raises(ScopeError):
-        await checker(api_key=FakeApiKey())
+        checker(api_key=FakeApiKey())  # type: ignore[call-arg]
 
 
 @pytest.mark.integration

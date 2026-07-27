@@ -18,7 +18,6 @@ async def test_idempotency_key_replay_returns_200():
     """Idempotency-Key replay → 200 with Idempotency-Key-Status: replayed."""
     from uuid import uuid4
 
-
     # Simulate the check without real Redis.
     app_id = uuid4()
     job_id = str(uuid4())

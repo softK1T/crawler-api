@@ -44,7 +44,7 @@ async def test_patch_noop_returns_unchanged(db_session):
     await db_session.refresh(row)
 
     # Simulate no-op PATCH: empty updates dict.
-    updates = {}
+    updates: dict[str, object] = {}
     if updates:
         for k, v in updates.items():
             setattr(row, k, v)

@@ -43,9 +43,8 @@ async def test_metrics_names_exposed(app):
     BLOCK_RATE_TOTAL.labels(domain="test", engine="httpx", reason="captcha").inc()
     QUEUE_DEPTH.labels(queue_name="arq:crawler").set(5)
 
-    from app.core.observability import get_metrics_response
+    from prometheus_client import generate_latest
 
-    resp = get_metrics_response()
-    body = resp.body.decode() if hasattr(resp, "body") else resp.content.decode()  # type: ignore[union-attr]
+    body = generate_latest().decode()
     assert "crawler_block_rate_total" in body
     assert "crawler_queue_depth" in body

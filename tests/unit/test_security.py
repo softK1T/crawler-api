@@ -88,5 +88,6 @@ class TestResolveApiKey:
             return row
 
         checker = require_scope(SCOPE_KEYS)
+        # require_scope returns a sync callable, not an async one.
         with pytest.raises(ScopeError):
-            await checker(api_key=row)
+            checker(api_key=row)  # type: ignore[call-arg]

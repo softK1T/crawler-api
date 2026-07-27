@@ -41,10 +41,19 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
 
     engine = create_async_engine(_postgres_dsn, echo=False)
     async with engine.begin() as conn:
-        from app.core.db import Base  # type: ignore[attr-defined]
-
-        # ruff: noqa: F406
-        from app.models import *  # noqa: F403
+        # Import all models so create_all discovers them.
+        import app.models.api_key
+        import app.models.application
+        import app.models.domain_policy
+        import app.models.legacy_crawl_result
+        import app.models.legacy_project
+        import app.models.proxy
+        import app.models.proxy_pool
+        import app.models.request_log
+        import app.models.tenant
+        import app.models.usage_counter
+        import app.models.warc_index  # noqa: F401
+        from app.core.db import Base
 
         await conn.run_sync(Base.metadata.create_all)
 
