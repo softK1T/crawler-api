@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -15,7 +16,6 @@ from app.middleware.correlation_id import CorrelationIdMiddleware
 
 # Configured at import time so startup logs are already structured.
 configure_logging(settings.log_level)
-setup_tracing(settings)
 
 logger = logging.getLogger(__name__)
 
@@ -53,43 +53,52 @@ async def _startup_proxy_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_tracing(settings)
     await _startup_proxy_sync()
-    # Initialize Redis-backed services.
-    import redis.asyncio as aioredis
 
-    from app.core.db import AsyncSessionLocal
-    from app.services.proxy_manager import ProxyManager
-    from app.services.rate_limiter import RateLimiter
-
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    app.state.rate_limiter = RateLimiter(redis_client)
-    app.state.redis = redis_client
-    app.state.proxy_manager = ProxyManager(
-        db_session_factory=AsyncSessionLocal,
-        redis_client=redis_client,
-    )
-
-    # Initialize WARC storage.
-    from app.services.warc.storage import create_warc_storage
-
-    warc_storage = await create_warc_storage(settings)
-    app.state.warc_storage = warc_storage
-    app.state.s3_client = warc_storage._s3  # Expose S3 client for ArchiveReader.
-
-    # Initialize ArchiveReader.
-    from app.services.archive_reader import ArchiveReader
-
-    app.state.archive_reader = ArchiveReader(app.state.s3_client, settings.s3_bucket)
-    logger.info("Rate limiter, proxy manager, WARC storage, and archive reader initialized")
+    # Initialize services in background — don't block server startup.
+    asyncio.create_task(_init_services(app))
 
     yield
 
-    # Graceful shutdown: flush final WARC buffer to S3.
+    # Graceful shutdown.
     try:
-        await warc_storage.shutdown_flush()
-        logger.info("WARC storage flushed on shutdown")
+        warc_storage = getattr(app.state, "warc_storage", None)
+        if warc_storage:
+            await warc_storage.shutdown_flush()
     except Exception:
-        logger.warning("WARC shutdown flush failed", exc_info=True)
+        pass
+
+
+async def _init_services(app: FastAPI) -> None:
+    """Initialize Redis, proxy manager, WARC storage in background."""
+    try:
+        import redis.asyncio as aioredis
+
+        from app.core.db import AsyncSessionLocal
+        from app.services.proxy_manager import ProxyManager
+        from app.services.rate_limiter import RateLimiter
+
+        redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+        app.state.rate_limiter = RateLimiter(redis_client)
+        app.state.redis = redis_client
+        app.state.proxy_manager = ProxyManager(
+            db_session_factory=AsyncSessionLocal,
+            redis_client=redis_client,
+        )
+
+        from app.services.warc.storage import create_warc_storage
+
+        warc_storage = await create_warc_storage(settings)
+        app.state.warc_storage = warc_storage
+        app.state.s3_client = warc_storage._s3
+
+        from app.services.archive_reader import ArchiveReader
+
+        app.state.archive_reader = ArchiveReader(app.state.s3_client, settings.s3_bucket)
+        logger.info("All services initialized")
+    except Exception:
+        logger.warning("Service initialization incomplete", exc_info=True)
 
 
 app = FastAPI(
