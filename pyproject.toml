@@ -90,6 +90,7 @@ module = [
     "app.services.job_service",
     "app.services.proxy_health",
     "app.services.proxy_manager",
+    "app.services.archive_reader",
 ]
 warn_return_any = false
 

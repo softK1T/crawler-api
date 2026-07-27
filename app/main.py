@@ -72,7 +72,13 @@ async def lifespan(app: FastAPI):
 
     warc_storage = await create_warc_storage(settings)
     app.state.warc_storage = warc_storage
-    logger.info("Rate limiter, proxy manager, and WARC storage initialized")
+    app.state.s3_client = warc_storage._s3  # Expose S3 client for ArchiveReader.
+
+    # Initialize ArchiveReader.
+    from app.services.archive_reader import ArchiveReader
+
+    app.state.archive_reader = ArchiveReader(app.state.s3_client, settings.s3_bucket)
+    logger.info("Rate limiter, proxy manager, WARC storage, and archive reader initialized")
 
     yield
 
