@@ -42,3 +42,5 @@ opentelemetry-sdk>=1.26.0
 opentelemetry-exporter-otlp>=1.26.0
 opentelemetry-instrumentation-fastapi>=0.47b0
 opentelemetry-instrumentation-httpx>=0.47b0
+# Async SQLAlchemy greenlet dependency (required on Python 3.12+)
+greenlet>=3.0.0
