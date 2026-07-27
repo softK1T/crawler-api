@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.crawl_result import CrawlResult as CrawlResultModel
+from app.models.legacy_crawl_result import CrawlResult as CrawlResultModel
 
 logger = logging.getLogger(__name__)
 

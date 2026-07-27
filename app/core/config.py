@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     # SSRF protection toggle (disable only in fully trusted internal envs)
     ssrf_enabled: bool = True
 
-    # REQUIRED — no credential default. Set via DATABASE_URL env var.
+    # REQUIRED — no default. Set via DATABASE_URL env var.
     # Example: postgresql+asyncpg://user:pass@localhost:5432/crawlerdb
-    database_url: PostgresDsn | None = None
+    database_url: PostgresDsn
 
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
