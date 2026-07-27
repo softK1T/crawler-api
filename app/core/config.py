@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # How often to re-sync in seconds (default: 6 hours)
     webshare_sync_interval_secs: int = 21600
 
+    # WARC / S3 archival settings
+    s3_endpoint_url: str | None = None  # None = AWS S3; set for MinIO
+    s3_bucket: str = "crawler-warc"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_region: str = "us-east-1"
+    warc_max_size_bytes: int = 1_000_000_000  # 1 GB rotation threshold
+    warc_max_age_s: int = 3600  # 1 hour rotation threshold
+    warc_prefix: str = "warc"
+
     @property
     def api_keys(self) -> list[str]:
         """Return parsed list of non-empty API keys."""

@@ -75,6 +75,8 @@ module = [
     "gevent.*",
     "starlette.*",
     "tldextract.*",
+    "warcio.*",
+    "aioboto3.*",
 ]
 ignore_missing_imports = true
 
@@ -101,6 +103,13 @@ module = [
     "app.api.v1.endpoints.batches",
 ]
 disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = [
+    "app.services.warc.*",
+]
+warn_return_any = false
+disable_error_code = ["return-value", "func-returns-value"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
