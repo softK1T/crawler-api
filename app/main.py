@@ -66,8 +66,22 @@ async def lifespan(app: FastAPI):
         db_session_factory=AsyncSessionLocal,
         redis_client=redis_client,
     )
-    logger.info("Rate limiter and proxy manager initialized")
+
+    # Initialize WARC storage.
+    from app.services.warc.storage import create_warc_storage
+
+    warc_storage = await create_warc_storage(settings)
+    app.state.warc_storage = warc_storage
+    logger.info("Rate limiter, proxy manager, and WARC storage initialized")
+
     yield
+
+    # Graceful shutdown: flush final WARC buffer to S3.
+    try:
+        await warc_storage.shutdown_flush()
+        logger.info("WARC storage flushed on shutdown")
+    except Exception:
+        logger.warning("WARC shutdown flush failed", exc_info=True)
 
 
 app = FastAPI(
