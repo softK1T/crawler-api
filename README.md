@@ -1,129 +1,101 @@
-# Crawler-API
+# Crawler API
 
-High-performance web crawling microservice with proxy support and asynchronous task processing.
-
-## Tech Stack
-
-- **FastAPI** — REST API framework
-- **Celery** — asynchronous task processing
-- **Redis** — task broker and result caching
-- **httpx** — HTTP client with HTTP/2 support
-- **Docker** — containerization
-
-## Features
-
-- Single and batch URL crawling
-- Smart proxy pool management (rotation, blocking detection, statistics)
-- Asynchronous processing via Celery
-- Error handling and retry mechanism
-- HTTP/2 support
-- Health checks and metrics
-
-## Project Structure
-
-```
-app/
-├── api/              # API endpoints
-│   └── v1/
-│       ├── endpoints/
-│       └── router.py
-├── core/             # Configuration
-├── schemas/          # Pydantic models
-├── services/         # Business logic
-│   ├── crawler.py    # Main crawler
-│   ├── batch_service.py
-│   └── storage.py
-└── worker/           # Celery workers
-    ├── celery_app.py
-    └── tasks/
-```
-
-## Quick Start
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/softK1T/crawler-api.git
-cd crawler-api
-```
-
-### 2. Create proxy file
-
-```bash
-# Format: host:port or host:port:user:pass
-echo "proxy1.example.com:8080" > proxies.txt
-echo "proxy2.example.com:8080:user:pass" >> proxies.txt
-```
-
-### 3. Run with Docker
-
-```bash
-docker-compose up -d
-```
-
-API available at `http://localhost:8000`
-
-## Usage
-
-### Single request
-
-```bash
-POST /api/v1/jobs/
-{
-  "url": "https://example.com",
-  "headers": {"User-Agent": "MyBot/1.0"}
-}
-```
-
-### Batch request
-
-```bash
-POST /api/v1/batches/
-{
-  "urls": ["https://example.com/1", "https://example.com/2"],
-  "timeout": 30
-}
-```
-
-### Check batch status
-
-```bash
-GET /api/v1/batches/{batch_id}/status
-```
-
-### Get results
-
-```bash
-GET /api/v1/batches/{batch_id}/results
-```
-
-## Configuration
-
-Copy `.env.example` to `.env` and configure variables:
-
-```bash
-API_HOST=0.0.0.0
-API_PORT=8000
-PROXY_FILE=./proxies.txt
-MAX_RETRIES=10
-REQUEST_TIMEOUT_SECS=15
-MAX_BATCH_SIZE=100
-```
-
-## API Documentation
-
-Swagger UI available at: `http://localhost:8000/docs`
+Multi-tenant web scraping platform with per-domain policies, proxy pool management, rate limiting, WARC archival, and async job processing.
 
 ## Architecture
 
-1. **FastAPI** receives HTTP requests
-2. **Celery** processes tasks asynchronously
-3. **SmartProxyPool** manages proxies (rotation, blocking detection, statistics)
-4. **Redis** stores results and task state
-5. **Crawler** executes HTTP requests through proxies
+```mermaid
+graph LR
+    Client --> API
+    API --> RedisQueue[Redis Queue]
+    RedisQueue --> Worker
+    Worker --> Fetchers
+    Fetchers --> ProxyManager[Proxy Manager]
+    Worker --> WarcStorage[WARC Storage]
+    Worker --> Postgres[(PostgreSQL)]
+    API --> Redis[(Redis)]
+    API --> S3[(MinIO / S3)]
+```
 
-## Requirements
+- **API** (FastAPI): REST endpoints for job submission, archive retrieval, usage stats, admin.
+- **Worker** (arq): Async fetch tasks with policy resolution, proxy selection, WARC archival, callbacks.
+- **PostgreSQL**: Tenants, applications, API keys, domain policies, proxy pools, usage counters, WARC index, partitioned request logs.
+- **Redis**: Rate limiter (Lua sliding-window), job queue, circuit breaker state, sticky sessions.
+- **MinIO/S3**: WARC file storage with byte-range reads for random-access retrieval.
+- **Prometheus**: 8 metrics exposed at `/metrics` for latency, block rate, queue depth, proxy health, WARC bytes, costs.
 
-- Docker & Docker Compose
-- Python 3.11+ (for local development)
-- Working proxies for bypass blocking
+## Getting Started
+
+Prerequisites: Docker, docker-compose, Python 3.12.
+
+```bash
+cp .env.example .env
+# Fill required fields: DATABASE_URL, REDIS_URL, API_KEYS_RAW
+docker compose up -d
+./scripts/verify.sh   # Stage 13: runs full verification
+curl http://localhost:8000/healthz
+```
+
+## API Examples
+
+```bash
+# Submit async fetch
+curl -X POST http://localhost:8000/v1/fetch \
+  -H "X-API-Key: crw_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com","mode":"static"}'
+
+# Poll result
+curl http://localhost:8000/v1/jobs/{job_id} -H "X-API-Key: crw_live_..."
+
+# Archive search
+curl "http://localhost:8000/v1/archive?url=https://example.com&from=2026-01-01" \
+  -H "X-API-Key: crw_live_..."
+
+# Usage stats
+curl http://localhost:8000/v1/usage -H "X-API-Key: crw_live_..."
+
+# Admin: create domain policy
+curl -X POST http://localhost:8000/v1/admin/domain-policies \
+  -H "X-API-Key: crw_live_..." \
+  -d '{"domain":"example.com","engine":"playwright","rate_limit_rps":2.0}'
+```
+
+## Metrics
+
+| Metric | Description |
+|---|---|
+| crawler_block_rate_total | Blocked fetches by domain/engine/reason |
+| crawler_request_latency_ms | Request/worker latency histogram |
+| crawler_queue_depth | Async job queue depth |
+| crawler_proxy_health_score | Current proxy health per proxy |
+| crawler_warc_bytes_total | WARC bytes written (response/revisit) |
+| crawler_dedup_ratio | Revisit ratio over total records |
+| crawler_proxy_cost_eur_total | Estimated proxy traffic cost |
+| crawler_rate_limit_hits_total | Rate limit denials by layer |
+
+## Scaling & Failure Modes
+
+**What breaks at 100x:**
+- Single Redis bottleneck for rate limiting + queue + circuit breaker.
+- DB writes per request (proxy health, usage counters) — batch writes needed.
+- WARC 1 GB in-memory buffer — frequent rotation and S3 uploads.
+- Browser-per-fetch (Playwright) — 100 concurrent browsers exhaust 8 GB RAM.
+
+**Mitigations at 10x:** Redis Cluster or separate Redis instances. Batch proxy health writes. Increase WARC rotation threshold.
+
+**Mitigations at 100x:** PostgreSQL read replicas. Browser pool with pre-warmed instances. Distributed queue (move arq to multi-worker with Redis Cluster).
+
+## Legal & Ethics
+
+- Respect `robots.txt` when `respect_robots=True` in domain policy.
+- Comply with target site Terms of Service.
+- Avoid scraping personal data without consent or legitimate interest.
+- Honor takedown and removal requests.
+- WARC archives and logs may contain sensitive third-party content; handle accordingly.
+
+## AI Usage
+
+- AI-assisted code generation (Claude Code) for architecture design, ADRs, and implementation.
+- No automated in-production decision-making beyond rate limiting and proxy selection.
+- All ADRs and architectural decisions must be reviewed by a human operator before production deployment.
