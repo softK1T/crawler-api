@@ -113,15 +113,17 @@ class JobService:
             ),
         )
 
-    async def handle_idempotency(self, idempotency_key: str) -> str | None:
+    async def handle_idempotency(self, idempotency_key: str, application_id: UUID) -> str | None:
         """Check if an idempotency key was already used.  Returns job_id or None."""
-        existing = await self._redis.get(f"idempotency:{idempotency_key[:128]}")
+        existing = await self._redis.get(
+            f"idempotency:{application_id}:{idempotency_key[:128]}"
+        )
         return existing if existing else None
 
-    async def store_idempotency(self, idempotency_key: str, job_id: str) -> None:
+    async def store_idempotency(self, idempotency_key: str, job_id: str, application_id: UUID) -> None:
         """Store the idempotency key → job_id mapping."""
         await self._redis.set(
-            f"idempotency:{idempotency_key[:128]}",
+            f"idempotency:{application_id}:{idempotency_key[:128]}",
             job_id,
             ex=self._settings.job_result_ttl_s,
         )

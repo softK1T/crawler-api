@@ -67,7 +67,7 @@ async def create_fetch(
     job_svc = JobService(redis_client)
 
     if body.idempotency_key:
-        existing_job_id = await job_svc.handle_idempotency(body.idempotency_key)
+        existing_job_id = await job_svc.handle_idempotency(body.idempotency_key, api_key.application_id)
         if existing_job_id:
             cached = await job_svc.get_result(existing_job_id)
             response = JSONResponse(
@@ -98,7 +98,7 @@ async def create_fetch(
     )
 
     if body.idempotency_key:
-        await job_svc.store_idempotency(body.idempotency_key, job_id)
+        await job_svc.store_idempotency(body.idempotency_key, job_id, api_key.application_id)
 
     # 5. Sync mode: poll up to 30s.
     if body.options.get("sync") is True:
