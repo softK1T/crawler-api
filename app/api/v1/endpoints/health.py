@@ -1,48 +1,63 @@
-"""Health-check endpoint — fully async (no blocking I/O)."""
+"""Health-check endpoints — liveness, readiness."""
 
 import logging
-from urllib.parse import urlparse
 
-from fastapi import APIRouter
-
-from app.core.config import settings
+from fastapi import APIRouter, Request
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health")
-async def health():
-    import asyncpg
-    import redis.asyncio as aioredis
+@router.get("/healthz")
+async def healthz():
+    """Liveness — always returns 200. No dependency checks."""
+    return {"status": "ok"}
 
-    status = {"api": "ok", "redis": "unknown", "postgres": "unknown"}
 
-    # Redis check (async)
+@router.get("/readyz")
+async def readyz(request: Request):
+    """Readiness — checks DB, Redis, and S3 client availability."""
+    checks = {"db": "unknown", "redis": "unknown", "s3": "unknown"}
+    healthy = True
+
+    # DB check.
     try:
-        r = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
-        await r.ping()
-        await r.aclose()
-        status["redis"] = "ok"
-    except Exception as e:
-        status["redis"] = f"error: {e}"
+        from app.core.db import AsyncSessionLocal
 
-    # PostgreSQL check (async)
+        async with AsyncSessionLocal() as session:
+            from sqlalchemy import text
+
+            await session.execute(text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception:
+        checks["db"] = "fail"
+        healthy = False
+
+    # Redis check.
     try:
-        db_str = str(settings.database_url).replace("+asyncpg", "")
-        parsed = urlparse(db_str)
-        conn = await asyncpg.connect(
-            host=parsed.hostname,
-            port=parsed.port or 5432,
-            user=parsed.username,
-            password=parsed.password,
-            database=parsed.path.lstrip("/"),
-            timeout=3,
-        )
-        await conn.close()
-        status["postgres"] = "ok"
-    except Exception as e:
-        status["postgres"] = f"error: {e}"
+        redis_client = getattr(request.app.state, "redis", None)
+        if redis_client:
+            await redis_client.ping()
+            checks["redis"] = "ok"
+        else:
+            checks["redis"] = "fail"
+            healthy = False
+    except Exception:
+        checks["redis"] = "fail"
+        healthy = False
 
-    return status
+    # S3 check (client initialized, no network call).
+    try:
+        warc_storage = getattr(request.app.state, "warc_storage", None)
+        if warc_storage and getattr(warc_storage, "_s3", None):
+            checks["s3"] = "ok"
+        else:
+            checks["s3"] = "fail"
+            healthy = False
+    except Exception:
+        checks["s3"] = "fail"
+        healthy = False
+
+    status_code = 200 if healthy else 503
+    return {"status": "ready" if healthy else "not_ready", "checks": checks}, status_code

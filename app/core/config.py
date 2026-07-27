@@ -81,6 +81,14 @@ class Settings(BaseSettings):
     callback_timeout_s: float = 10.0
     callback_max_retries: int = 3
 
+    # Observability
+    enable_metrics: bool = True
+    enable_tracing: bool = True
+    otlp_endpoint: str = ""
+    service_name: str = "crawler-api"
+    service_version: str = "0.1.0"
+    metrics_path: str = "/metrics"
+
     @property
     def api_keys(self) -> list[str]:
         """Return parsed list of non-empty API keys."""

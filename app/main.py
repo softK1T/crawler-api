@@ -10,10 +10,12 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import CrawlerAPIError
 from app.core.logging_config import configure_logging
+from app.core.observability import setup_tracing
 from app.middleware.correlation_id import CorrelationIdMiddleware
 
 # Configured at import time so startup logs are already structured.
 configure_logging(settings.log_level)
+setup_tracing(settings)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +109,15 @@ app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(health_router)
 app.include_router(api_router)
+
+
+# ── Prometheus metrics endpoint ──────────────────────────────────────────────
+from app.core.observability import get_metrics_response  # noqa: E402
+
+
+@app.get(settings.metrics_path)
+async def metrics():
+    return get_metrics_response()
 
 
 @app.exception_handler(CrawlerAPIError)

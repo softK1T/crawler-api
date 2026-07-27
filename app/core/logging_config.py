@@ -1,28 +1,20 @@
-"""JSON logging with credential redaction.
+"""Structured JSON logging with credential redaction and bound context.
 
-Proxy lines carry the shape host:port:user:password and were passed straight to
-``logger.debug``/``logger.warning`` in the crawler and pool code. Redacting at
-the handler level covers every current and future call site, which patching
-individual log statements does not.
-
-No new dependency: stdlib ``json`` plus a ``logging.Filter`` is enough, so
-python-json-logger / structlog are not pulled in.
+Uses structlog with JSONRenderer for consistent single-line JSON output.
+Standard library logging is captured and rendered as JSON too.
 """
 
 import json
 import logging
 import re
-from datetime import UTC, datetime
 from typing import Any
 
-# host:port:user:pass[:COUNTRY] — keep host:port, drop the credentials.
-_PROXY_LINE = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3}|[\w.-]+):(\d{2,5}):[^:\s]+:[^:\s]+")
-# scheme://user:pass@host
-_PROXY_URL = re.compile(r"(https?|socks5)://[^:/@\s]+:[^:/@\s]+@")
-# API keys: crw_live_<prefix>_<secret> (format introduced in STEP 6)
-_API_KEY = re.compile(r"\b(crw_(?:live|test)_[A-Za-z0-9]{8})_[A-Za-z0-9_-]+")
+import structlog
 
-_RESERVED = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__dict__)
+# ── Credential redaction ─────────────────────────────────────────────────────
+_PROXY_LINE = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3}|[\w.-]+):(\d{2,5}):[^:\s]+:[^:\s]+")
+_PROXY_URL = re.compile(r"(https?|socks5)://[^:/@\s]+:[^:/@\s]+@")
+_API_KEY = re.compile(r"\b(crw_(?:live|test)_[A-Za-z0-9]{8})_[A-Za-z0-9_-]+")
 
 
 def redact(text: str) -> str:
@@ -31,51 +23,71 @@ def redact(text: str) -> str:
     return _API_KEY.sub(r"\1_***", text)
 
 
-class RedactionFilter(logging.Filter):
-    """Redacts the formatted message and any string values in `extra`."""
+# ── Structlog configuration ──────────────────────────────────────────────────
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.processors.JSONRenderer(serializer=json.dumps),
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.stdlib.BoundLogger,
+    cache_logger_on_first_use=True,
+)
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            record.msg = redact(record.getMessage())
-            record.args = ()
-        except Exception:
-            pass
-        for key, value in list(record.__dict__.items()):
-            if key not in _RESERVED and isinstance(value, str):
-                record.__dict__[key] = redact(value)
-        return True
+_shared_context: dict[str, str] = {}
 
 
-class JsonFormatter(logging.Formatter):
-    """One JSON object per line, suitable for Loki/CloudWatch ingestion."""
+def bind_context(
+    *,
+    trace_id: str | None = None,
+    job_id: str | None = None,
+    application_id: str | None = None,
+) -> None:
+    """Set thread-local context values for structured logging."""
+    ctx: dict[str, str] = {}
+    if trace_id:
+        ctx["trace_id"] = trace_id
+    if job_id:
+        ctx["job_id"] = job_id
+    if application_id:
+        ctx["application_id"] = application_id
+    _shared_context.update(ctx)
+    structlog.contextvars.bind_contextvars(**ctx)
 
-    def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "msg": record.getMessage(),
-        }
+
+def get_logger(name: str = "crawler-api"):
+    return structlog.get_logger(name)
+
+
+# ── Stdlib bridge ────────────────────────────────────────────────────────────
+
+
+class _StructlogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = redact(record.getMessage())
+        logger = structlog.get_logger(record.name)
+        kw: dict[str, Any] = {**_shared_context}
         if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
-        for key, value in record.__dict__.items():
-            if key not in _RESERVED and not key.startswith("_"):
-                payload[key] = value
-        return json.dumps(payload, ensure_ascii=False, default=str)
+            kw["exc_info"] = record.exc_info
+        logger.log(record.levelno, msg, **kw)
 
 
 def configure_logging(level: str = "INFO") -> None:
-    """Idempotent root-logger setup. Safe to call from API and worker entrypoints."""
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
-    handler.addFilter(RedactionFilter())
-
+    """Idempotent root-logger setup for structlog and stdlib bridge."""
+    handler = _StructlogHandler()
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
 
-    # uvicorn installs its own colourised handlers; drop them so output stays JSON.
     for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
         uv = logging.getLogger(name)
         uv.handlers.clear()

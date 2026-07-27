@@ -34,3 +34,11 @@ warcio>=1.7.4
 aioboto3>=13.0
 # Async job queue (replaces Celery for new code paths)
 arq>=0.25.0
+# Observability
+prometheus-client>=0.20.0
+structlog>=24.0.0
+opentelemetry-api>=1.26.0
+opentelemetry-sdk>=1.26.0
+opentelemetry-exporter-otlp>=1.26.0
+opentelemetry-instrumentation-fastapi>=0.47b0
+opentelemetry-instrumentation-httpx>=0.47b0
