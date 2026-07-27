@@ -1,79 +1,122 @@
-import logging
+"""Proxy management endpoints — backed by ProxyManager service."""
 
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import SCOPE_ADMIN, require_scope, resolve_api_key
-from app.core.config import settings
+from app.core.db import get_db
 from app.models.api_key import ApiKey
-from app.services.geo_proxy_pool import GeoProxyPool
-from app.services.proxy_singleton import get_proxy_pool, reset_proxy_pool
+from app.models.proxy import Proxy
+from app.models.proxy_pool import ProxyPool
+from app.schemas.proxy import (
+    PoolStatsResponse,
+    ProxyHealthUpdate,
+    ProxyPoolResponse,
+    ProxyResponse,
+)
+from app.services.policy_resolver import normalize_domain
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/proxy", tags=["proxy"])
 
 
-@router.get("/stats")
-async def proxy_stats(api_key: ApiKey = Depends(resolve_api_key)):
-    """Returns current proxy pool health statistics. Read-only — any
-    authenticated key can access."""
-    pool = get_proxy_pool()
+@router.get("/pools", response_model=list[ProxyPoolResponse])
+async def list_pools(
+    _api_key: ApiKey = Depends(resolve_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all active proxy pools."""
+    result = await db.execute(select(ProxyPool).where(ProxyPool.is_active.is_(True)))
+    return result.scalars().all()
+
+
+@router.get("/pools/{pool_id}/stats", response_model=PoolStatsResponse)
+async def get_pool_stats(
+    pool_id: UUID,
+    request: Request,
+    _api_key: ApiKey = Depends(resolve_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return aggregated health statistics for a pool."""
+    pool = await db.get(ProxyPool, pool_id)
     if pool is None:
-        return {
-            "enabled": False,
-            "message": "Proxy pool not configured. Set WEBSHARE_API_KEY or PROXY_FILE.",
-        }
+        raise HTTPException(status_code=404, detail="Proxy pool not found")
 
-    base = pool.get_stats()
-    geo = pool.get_geo_stats() if isinstance(pool, GeoProxyPool) else {}
-
-    return {
-        "enabled": True,
-        "total_proxies": base["total_proxies"],
-        "healthy": base["healthy"],
-        "blocked": base["blocked"],
-        "bad": base["bad"],
-        "total_requests": base["total_requests"],
-        "geo_breakdown": geo,
-    }
+    proxy_manager = request.app.state.proxy_manager
+    return await proxy_manager.get_pool_stats(pool_id, db)
 
 
-@router.post("/reset")
-async def reset_pool(_api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN))):
-    """Reset all proxy health stats (unblocks blocked/bad proxies).
-    Requires admin scope."""
-    pool = get_proxy_pool()
-    if pool is None:
-        return {"message": "Proxy pool not configured"}
-    pool.reset_all()
-    return {"message": "Proxy pool reset successfully", "total_proxies": len(pool.proxies)}
+@router.get("/proxies", response_model=list[ProxyResponse])
+async def list_proxies(
+    request: Request,
+    pool_id: UUID | None = Query(None),
+    country: str | None = Query(None),
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """List proxies filtered by pool and country. Admin only —
+    proxy URLs contain credentials and must never appear in responses."""
+    stmt = select(Proxy)
+    if pool_id is not None:
+        stmt = stmt.where(Proxy.pool_id == pool_id)
+    if country is not None:
+        stmt = stmt.where(Proxy.country == country.upper()[:2])
+    stmt = stmt.order_by(Proxy.health_score.desc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
-def _do_sync() -> dict:
-    """Internal sync logic — called from both endpoint and startup."""
-    if not settings.webshare_api_key:
-        raise HTTPException(
-            status_code=400, detail="WEBSHARE_API_KEY is not set. Add it to your .env file."
-        )
-    from app.services.webshare_sync import sync_webshare_to_file
-
-    count = sync_webshare_to_file(
-        api_key=settings.webshare_api_key,
-        output_path=settings.webshare_proxy_file,
+@router.post("/health")
+async def report_proxy_health(
+    body: ProxyHealthUpdate,
+    request: Request,
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record a proxy request outcome. Admin scope — prevents external
+    callers from manipulating proxy health scores."""
+    proxy_manager = request.app.state.proxy_manager
+    await proxy_manager.report_result(
+        proxy_id=body.proxy_id,
+        domain=body.domain,
+        success=body.success,
+        reason=body.reason,
+        db=db,
     )
-    reset_proxy_pool()
-    pool = get_proxy_pool()  # reinitialise immediately
-    return {
-        "synced": count,
-        "file": settings.webshare_proxy_file,
-        "pool_healthy": pool.get_stats()["healthy"] if pool else 0,
-    }
+    await db.commit()
+    return {"status": "recorded"}
 
 
-@router.post("/sync")
-async def sync_webshare(
+@router.post("/reset/{proxy_id}")
+async def reset_proxy(
+    proxy_id: UUID,
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset a proxy's health score to 1.0 and clear cooldown."""
+    proxy = await db.get(Proxy, proxy_id)
+    if proxy is None:
+        raise HTTPException(status_code=404, detail="Proxy not found")
+
+    proxy.health_score = 1.0
+    proxy.consecutive_failures = 0
+    proxy.cooldown_until = None
+    await db.commit()
+    return {"status": "reset", "proxy_id": str(proxy_id)}
+
+
+@router.delete("/circuit-breaker/{domain}")
+async def reset_circuit_breaker(
+    domain: str,
+    request: Request,
     _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
 ):
-    """Trigger a manual Webshare proxy sync. Requires admin scope."""
-    result = _do_sync()
-    logger.info("Manual Webshare sync: %d proxies", result["synced"])
-    return {"message": "Webshare sync complete", **result}
+    """Reset the circuit breaker for a domain. Admin only."""
+    proxy_manager = request.app.state.proxy_manager
+    domain_norm = normalize_domain(domain)
+    await proxy_manager._reset_circuit_breaker(domain_norm)
+    return {"status": "reset", "domain": domain_norm}
