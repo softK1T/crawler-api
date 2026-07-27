@@ -52,6 +52,14 @@ async def _startup_proxy_sync():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _startup_proxy_sync()
+    # Initialize the 4-layer rate limiter and store on app state.
+    import redis.asyncio as aioredis
+
+    from app.services.rate_limiter import RateLimiter
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    app.state.rate_limiter = RateLimiter(redis_client)
+    logger.info("Rate limiter initialized")
     yield
 
 
