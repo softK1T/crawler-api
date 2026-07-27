@@ -36,6 +36,9 @@ ignore = [
 "app/services/geo_proxy_pool.py" = ["S110"]  # intentional try-except-pass in country detection
 "app/services/stealth_crawler.py" = ["S311", "ASYNC109", "S110"]  # random for impersonation/viewport; timeout param pre-existing
 "app/services/proxy_manager.py" = ["S311", "S110"]  # random for weighted selection (non-crypto); intentional try-except-pass on sticky delete
+"app/services/fetchers/base.py" = ["S311"]  # random.uniform for jittered delay (non-crypto)
+"app/services/fetchers/headers.py" = ["S311"]  # random.choice for UA rotation (non-crypto)
+"app/services/fetchers/playwright_fetcher.py" = ["S110"]  # intentional try-except-pass on browser cleanup
 
 [tool.ruff.format]
 quote-style = "double"
