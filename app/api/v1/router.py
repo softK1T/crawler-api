@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import jobs, batches, projects, proxy, auth
+
+from app.api.v1.endpoints import auth, batches, jobs, projects, proxy
 
 api_router = APIRouter()
 api_router.include_router(jobs.router)

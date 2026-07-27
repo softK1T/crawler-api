@@ -1,16 +1,15 @@
-from typing import Optional, Dict
 from pydantic import BaseModel, HttpUrl
 
 
 class CrawlRequest(BaseModel):
     url: HttpUrl
-    headers: Optional[Dict[str, str]] = None
+    headers: dict[str, str] | None = None
     timeout: int = 30
     delay: float = 2.0
     use_proxy: bool = True
-    project_id: Optional[str] = None
-    extract: Optional[Dict[str, str]] = None
+    project_id: str | None = None
+    extract: dict[str, str] | None = None
     mode: str = "static"
-    proxy_country: Optional[str] = None
-    wait_for: Optional[str] = None
-    session_key: Optional[str] = None  # e.g. "shopee_sg" — injects stored cookies
+    proxy_country: str | None = None
+    wait_for: str | None = None
+    session_key: str | None = None  # e.g. "shopee_sg" — injects stored cookies

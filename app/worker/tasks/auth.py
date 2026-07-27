@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 from app.worker.celery_app import celery_app
 
@@ -12,23 +11,26 @@ def task_site_login(
     url: str,
     username: str,
     password: str,
-    proxy_url: Optional[str] = None,
+    proxy_url: str | None = None,
 ):
     """
     Universal login task. Resolves adapter by URL domain.
     Register site adapters in app/services/adapters/__init__.py.
     """
     import asyncio
+
     from app.services.adapters import get_adapter
 
     adapter = get_adapter(url)
     logger.info("[task] site_login: adapter=%s url=%s", adapter.session_key, url)
 
-    cookies = asyncio.run(adapter.login(
-        username=username,
-        password=password,
-        proxy_url=proxy_url,
-    ))
+    cookies = asyncio.run(
+        adapter.login(
+            username=username,
+            password=password,
+            proxy_url=proxy_url,
+        )
+    )
 
     if not cookies:
         raise RuntimeError(

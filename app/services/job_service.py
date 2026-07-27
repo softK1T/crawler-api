@@ -1,10 +1,9 @@
 import logging
-from datetime import datetime, timezone
-from typing import Optional, Dict
+from datetime import UTC, datetime
 
-from app.worker.tasks.crawl import crawl_page
+from app.schemas.responses import CrawlResult, JobStatusResponse
 from app.services.storage import storage
-from app.schemas.responses import JobStatusResponse, CrawlResult
+from app.worker.tasks.crawl import crawl_page
 
 logger = logging.getLogger(__name__)
 
@@ -13,16 +12,16 @@ class JobService:
     @staticmethod
     def create_job(
         url: str,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         timeout: int = 30,
         delay: float = 2.0,
         use_proxy: bool = True,
         countdown: float = 0,
-        project_id: Optional[str] = None,
-        extract: Optional[Dict[str, str]] = None,
+        project_id: str | None = None,
+        extract: dict[str, str] | None = None,
         mode: str = "static",
-        proxy_country: Optional[str] = None,
-        wait_for: Optional[str] = None,
+        proxy_country: str | None = None,
+        wait_for: str | None = None,
     ) -> str:
         task = crawl_page.apply_async(
             args=[url],
@@ -39,7 +38,7 @@ class JobService:
             },
             countdown=countdown,
         )
-        storage.save_job_created_at(task.id, datetime.now(timezone.utc).isoformat())
+        storage.save_job_created_at(task.id, datetime.now(UTC).isoformat())
         return task.id
 
     @staticmethod
@@ -53,7 +52,7 @@ class JobService:
         )
 
     @staticmethod
-    def get_job_result(job_id: str) -> Optional[CrawlResult]:
+    def get_job_result(job_id: str) -> CrawlResult | None:
         data = storage.get_job_result(job_id)
         if not data:
             return None

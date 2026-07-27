@@ -1,9 +1,11 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from app.core.security import verify_api_key
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+
 from app.core.config import settings
-from app.services.proxy_singleton import get_proxy_pool, reset_proxy_pool
+from app.core.security import verify_api_key
 from app.services.geo_proxy_pool import GeoProxyPool
+from app.services.proxy_singleton import get_proxy_pool, reset_proxy_pool
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/proxy", tags=["proxy"])
@@ -49,10 +51,10 @@ def _do_sync() -> dict:
     """Internal sync logic — called from both endpoint and startup."""
     if not settings.webshare_api_key:
         raise HTTPException(
-            status_code=400,
-            detail="WEBSHARE_API_KEY is not set. Add it to your .env file."
+            status_code=400, detail="WEBSHARE_API_KEY is not set. Add it to your .env file."
         )
     from app.services.webshare_sync import sync_webshare_to_file
+
     count = sync_webshare_to_file(
         api_key=settings.webshare_api_key,
         output_path=settings.webshare_proxy_file,

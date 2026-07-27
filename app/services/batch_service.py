@@ -1,24 +1,24 @@
-import uuid
 import time
-from typing import List, Optional, Dict
+import uuid
+
+from app.schemas.responses import BatchResponse, BatchStatusResponse
 from app.services.job_service import JobService
 from app.services.storage import storage
-from app.schemas.responses import BatchResponse, BatchStatusResponse, JobStatusResponse
 
 
 class BatchService:
     @staticmethod
     def create_batch(
-        urls: List[str],
-        headers: Optional[dict] = None,
+        urls: list[str],
+        headers: dict | None = None,
         timeout: int = 30,
         delay: float = 2.0,
         use_proxy: bool = True,
-        project_id: Optional[str] = None,
-        extract: Optional[Dict[str, str]] = None,
+        project_id: str | None = None,
+        extract: dict[str, str] | None = None,
         mode: str = "static",
-        proxy_country: Optional[str] = None,
-        wait_for: Optional[str] = None,
+        proxy_country: str | None = None,
+        wait_for: str | None = None,
     ) -> BatchResponse:
         batch_id = str(uuid.uuid4())
         job_ids = []
@@ -54,7 +54,7 @@ class BatchService:
         )
 
     @staticmethod
-    def get_batch_status(batch_id: str) -> Optional[BatchStatusResponse]:
+    def get_batch_status(batch_id: str) -> BatchStatusResponse | None:
         batch_info = storage.get_batch_info(batch_id)
         if not batch_info:
             return None
@@ -81,7 +81,7 @@ class BatchService:
         )
 
     @staticmethod
-    def get_batch_results(batch_id: str) -> Optional[dict]:
+    def get_batch_results(batch_id: str) -> dict | None:
         batch_info = storage.get_batch_info(batch_id)
         if not batch_info:
             return None

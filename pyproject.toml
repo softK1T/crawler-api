@@ -1,0 +1,109 @@
+[project]
+name = "crawler-api"
+version = "0.1.0"
+description = "Crawler-as-a-service platform for internal scraping projects"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".venv", "alembic/versions", ".idea"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "S",    # flake8-bandit — security lint matters for a crawler
+    "DTZ",  # flake8-datetimez — naive datetimes cause silent TZ bugs
+    "ASYNC",# flake8-async — blocking calls in async code
+    "RUF",
+]
+ignore = [
+    "E501",  # line length handled by the formatter
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]  # asserts and dummy credentials are expected
+"__init__.py" = ["F401"]
+"app/services/crawler.py" = ["S311", "B007", "ASYNC109"]  # random for UA selection, pre-existing
+"app/core/logging_config.py" = ["S110"]  # intentional try-except-pass in redaction filter
+"app/services/geo_proxy_pool.py" = ["S110"]  # intentional try-except-pass in country detection
+"app/services/stealth_crawler.py" = ["S311", "ASYNC109", "S110"]  # random for impersonation/viewport; timeout param pre-existing
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+# Incremental hardening: full `strict` would fail on the current untyped code.
+# Each roadmap step tightens this section further.
+check_untyped_defs = true
+disallow_untyped_defs = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "bs4.*",
+    "camoufox.*",
+    "curl_cffi.*",
+    "html2text.*",
+    "testcontainers.*",
+    "celery.*",
+    "sqlalchemy.*",
+    "asyncpg.*",
+    "argon2.*",
+    "playwright.*",
+    "redis.*",
+    "httpx.*",
+    "lxml.*",
+    "gevent.*",
+    "starlette.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "app.services.crawler",
+    "app.services.session_manager",
+    "app.services.job_service",
+]
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = [
+    "app.services.storage",
+    "app.services.webshare_sync",
+    "app.worker.tasks.crawl",
+]
+disable_error_code = ["return-value", "arg-type", "assignment"]
+
+[[tool.mypy.overrides]]
+module = [
+    "app.api.v1.endpoints.batches",
+]
+disable_error_code = ["attr-defined"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+markers = [
+    "integration: requires Docker (testcontainers)",
+]
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/main.py"]

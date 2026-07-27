@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Optional, Dict, Any
+from typing import Any
 
 import redis
 from sqlalchemy import select
@@ -26,11 +26,11 @@ class StorageService:
 
     # ── Redis helpers (fast cache layer) ────────────────────────────────────
 
-    def save_job_result(self, job_id: str, result_data: Dict[str, Any]) -> None:
+    def save_job_result(self, job_id: str, result_data: dict[str, Any]) -> None:
         key = f"job:{job_id}"
         self._redis.setex(name=key, time=settings.result_ttl_secs, value=json.dumps(result_data))
 
-    def get_job_result(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job_result(self, job_id: str) -> dict[str, Any] | None:
         key = f"job:{job_id}"
         raw = self._redis.get(key)
         return json.loads(raw) if raw else None
@@ -39,15 +39,15 @@ class StorageService:
         key = f"job_meta:{job_id}"
         self._redis.setex(name=key, time=settings.result_ttl_secs, value=iso_timestamp)
 
-    def get_job_created_at(self, job_id: str) -> Optional[str]:
+    def get_job_created_at(self, job_id: str) -> str | None:
         key = f"job_meta:{job_id}"
         return self._redis.get(key)
 
-    def save_batch_info(self, batch_id: str, batch_info: Dict[str, Any]) -> None:
+    def save_batch_info(self, batch_id: str, batch_info: dict[str, Any]) -> None:
         key = f"batch:{batch_id}"
         self._redis.setex(name=key, time=settings.result_ttl_secs, value=json.dumps(batch_info))
 
-    def get_batch_info(self, batch_id: str) -> Optional[Dict[str, Any]]:
+    def get_batch_info(self, batch_id: str) -> dict[str, Any] | None:
         key = f"batch:{batch_id}"
         raw = self._redis.get(key)
         return json.loads(raw) if raw else None
@@ -55,7 +55,7 @@ class StorageService:
     # ── PostgreSQL helpers (async, permanent) ────────────────────────────────
 
     @staticmethod
-    async def save_result_to_db(db: AsyncSession, result_data: Dict[str, Any]) -> None:
+    async def save_result_to_db(db: AsyncSession, result_data: dict[str, Any]) -> None:
         """Persist crawl result to PostgreSQL."""
         try:
             record = CrawlResultModel(
@@ -82,7 +82,7 @@ class StorageService:
             raise
 
     @staticmethod
-    async def get_result_from_db(db: AsyncSession, job_id: str) -> Optional[Dict[str, Any]]:
+    async def get_result_from_db(db: AsyncSession, job_id: str) -> dict[str, Any] | None:
         """Fetch crawl result from PostgreSQL by job_id."""
         stmt = select(CrawlResultModel).where(CrawlResultModel.job_id == job_id)
         result = await db.execute(stmt)

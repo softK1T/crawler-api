@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict
+from typing import Any
 
 import redis
 
@@ -22,7 +22,7 @@ def _get_redis() -> redis.Redis:
     return _redis_client
 
 
-def publish_event(stream: str, event_type: str, payload: Dict[str, Any]) -> None:
+def publish_event(stream: str, event_type: str, payload: dict[str, Any]) -> None:
     """
     Publish an event to a Redis Stream.
     Stream naming convention: events:<domain>

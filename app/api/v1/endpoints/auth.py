@@ -1,26 +1,25 @@
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.security import verify_api_key
-from app.services.session_manager import load_session, delete_session
+from app.services.session_manager import delete_session, load_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
-    url: str                        # any URL on the target site
+    url: str  # any URL on the target site
     username: str
     password: str
-    proxy_url: Optional[str] = None
+    proxy_url: str | None = None
 
 
 class ManualSessionRequest(BaseModel):
-    url: str                        # used to resolve session_key via adapter
-    cookies: dict                   # raw cookies dict from browser DevTools
+    url: str  # used to resolve session_key via adapter
+    cookies: dict  # raw cookies dict from browser DevTools
 
 
 class LoginJobResponse(BaseModel):
@@ -32,20 +31,22 @@ class LoginJobResponse(BaseModel):
 class SessionStatusResponse(BaseModel):
     session_key: str
     active: bool
-    cookie_count: Optional[int] = None
+    cookie_count: int | None = None
 
 
 def _resolve_adapter(url: str):
     try:
         from app.services.adapters import get_adapter
+
         return get_adapter(url)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # ------------------------------------------------------------------
 # Login (async via Celery)
 # ------------------------------------------------------------------
+
 
 @router.post("/login", response_model=LoginJobResponse, status_code=202)
 async def login(
@@ -59,6 +60,7 @@ async def login(
     """
     adapter = _resolve_adapter(request.url)
     from app.worker.tasks.auth import task_site_login
+
     task = task_site_login.delay(
         url=request.url,
         username=request.username,
@@ -76,6 +78,7 @@ async def login(
 # Manual session injection (when auto-login hits CAPTCHA)
 # ------------------------------------------------------------------
 
+
 @router.post("/session", response_model=SessionStatusResponse, status_code=201)
 async def set_manual_session(
     request: ManualSessionRequest,
@@ -87,6 +90,7 @@ async def set_manual_session(
     """
     adapter = _resolve_adapter(request.url)
     from app.services.session_manager import save_session
+
     save_session(adapter.session_key, request.cookies)
     return SessionStatusResponse(
         session_key=adapter.session_key,
@@ -98,6 +102,7 @@ async def set_manual_session(
 # ------------------------------------------------------------------
 # Session status
 # ------------------------------------------------------------------
+
 
 @router.get("/session", response_model=SessionStatusResponse)
 async def get_session(

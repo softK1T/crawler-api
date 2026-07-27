@@ -4,9 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.logging_config import configure_logging
 from app.middleware.correlation_id import CorrelationIdMiddleware
+
+# Configured at import time so startup logs are already structured.
+configure_logging(settings.log_level)
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +22,11 @@ async def _startup_proxy_sync():
         logger.info("WEBSHARE_API_KEY not set — skipping auto proxy sync")
         return
     try:
+        from app.services.proxy_singleton import get_proxy_pool, reset_proxy_pool
         from app.services.webshare_sync import sync_webshare_to_file
-        from app.services.proxy_singleton import reset_proxy_pool, get_proxy_pool
+
         logger.info("Auto-syncing proxies from Webshare...")
-        count = sync_webshare_to_file(
+        _count = sync_webshare_to_file(
             api_key=settings.webshare_api_key,
             output_path=settings.webshare_proxy_file,
         )
@@ -55,46 +61,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(CorrelationIdMiddleware)
 
+app.include_router(health_router)
 app.include_router(api_router)
-
-
-@app.get("/health")
-async def health():
-    import redis
-    import asyncpg
-    from urllib.parse import urlparse
-
-    status = {"api": "ok", "redis": "unknown", "postgres": "unknown"}
-
-    # Redis check
-    try:
-        r = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
-        r.ping()
-        status["redis"] = "ok"
-    except Exception as e:
-        status["redis"] = f"error: {e}"
-
-    # PostgreSQL check
-    try:
-        parsed = urlparse(settings.database_url.replace("+asyncpg", ""))
-        conn = await asyncpg.connect(
-            host=parsed.hostname,
-            port=parsed.port or 5432,
-            user=parsed.username,
-            password=parsed.password,
-            database=parsed.path.lstrip("/"),
-            timeout=3,
-        )
-        await conn.close()
-        status["postgres"] = "ok"
-    except Exception as e:
-        status["postgres"] = f"error: {e}"
-
-    return status

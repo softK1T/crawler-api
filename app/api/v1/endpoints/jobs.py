@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends
-from app.schemas.requests import CrawlRequest
-from app.schemas.responses import JobResponse, JobStatusResponse, CrawlResult
-from app.services.job_service import JobService
-from app.core.ssrf_guard import validate_url_against_ssrf
-from app.core.security import verify_api_key
+from fastapi import APIRouter, Depends, HTTPException
+
 from app.core.config import settings
+from app.core.security import verify_api_key
+from app.core.url_guard import UrlNotAllowed, validate_url_async
+from app.schemas.requests import CrawlRequest
+from app.schemas.responses import CrawlResult, JobResponse, JobStatusResponse
+from app.services.job_service import JobService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -15,7 +16,10 @@ async def create_crawl_job(
     _api_key: str = Depends(verify_api_key),
 ):
     if settings.ssrf_enabled:
-        validate_url_against_ssrf(str(request.url))
+        try:
+            await validate_url_async(str(request.url))
+        except UrlNotAllowed as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     job_id = JobService.create_job(
         url=str(request.url),
         headers=request.headers,

@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import List, Optional
 
 import httpx
 
@@ -9,12 +8,12 @@ logger = logging.getLogger(__name__)
 WEBSHARE_LIST_URL = "https://proxy.webshare.io/api/v2/proxy/list/"
 
 
-def fetch_webshare_proxies(api_key: str, page_size: int = 100) -> List[str]:
+def fetch_webshare_proxies(api_key: str, page_size: int = 100) -> list[str]:
     """
     Fetch all proxies from Webshare API v2.
     Returns list of strings in format: host:port:user:pass:COUNTRY
     """
-    lines: List[str] = []
+    lines: list[str] = []
     page = 1
     headers = {"Authorization": f"Token {api_key}"}
 

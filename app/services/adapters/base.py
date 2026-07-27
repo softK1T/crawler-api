@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Dict
 
 
 class SiteAdapter(ABC):
@@ -24,8 +23,8 @@ class SiteAdapter(ABC):
         self,
         username: str,
         password: str,
-        proxy_url: Optional[str] = None,
-    ) -> Optional[Dict[str, str]]:
+        proxy_url: str | None = None,
+    ) -> dict[str, str] | None:
         """
         Perform browser login, return cookies dict on success.
         Must also call save_session(self.session_key, cookies).
@@ -41,9 +40,10 @@ class SiteAdapter(ABC):
     # Shared helpers (do not override unless needed)
     # ------------------------------------------------------------------
 
-    def get_cookies(self) -> Optional[Dict[str, str]]:
+    def get_cookies(self) -> dict[str, str] | None:
         """Load cookies from Redis. None if session expired/missing."""
         from app.services.session_manager import load_session
+
         return load_session(self.session_key)
 
     def has_active_session(self) -> bool:
@@ -51,9 +51,10 @@ class SiteAdapter(ABC):
 
     def clear_session(self) -> None:
         from app.services.session_manager import delete_session
+
         delete_session(self.session_key)
 
-    def cookie_header(self) -> Optional[str]:
+    def cookie_header(self) -> str | None:
         """Return Cookie header string for use in static/stealth crawlers."""
         cookies = self.get_cookies()
         if not cookies:

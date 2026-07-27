@@ -1,6 +1,7 @@
 import logging
-from app.worker.celery_app import celery_app
+
 from app.core.config import settings
+from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +18,8 @@ def sync_webshare_proxies():
         return {"skipped": True, "reason": "WEBSHARE_API_KEY not configured"}
 
     try:
+        from app.services.proxy_singleton import get_proxy_pool, reset_proxy_pool
         from app.services.webshare_sync import sync_webshare_to_file
-        from app.services.proxy_singleton import reset_proxy_pool, get_proxy_pool
 
         count = sync_webshare_to_file(
             api_key=settings.webshare_api_key,

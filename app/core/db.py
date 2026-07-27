@@ -1,5 +1,6 @@
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+
 from app.core.config import settings
 
 engine = create_async_engine(
@@ -28,5 +29,6 @@ async def get_db() -> AsyncSession:
 
 async def create_tables():
     async with engine.begin() as conn:
-        from app.models import project, crawl_result  # noqa: F401
+        from app.models import crawl_result, project  # noqa: F401
+
         await conn.run_sync(Base.metadata.create_all)
