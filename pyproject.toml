@@ -35,6 +35,7 @@ ignore = [
 "app/core/logging_config.py" = ["S110"]  # intentional try-except-pass in redaction filter
 "app/services/geo_proxy_pool.py" = ["S110"]  # intentional try-except-pass in country detection
 "app/services/stealth_crawler.py" = ["S311", "ASYNC109", "S110"]  # random for impersonation/viewport; timeout param pre-existing
+"app/services/proxy_manager.py" = ["S311", "S110"]  # random for weighted selection (non-crypto); intentional try-except-pass on sticky delete
 
 [tool.ruff.format]
 quote-style = "double"
@@ -79,6 +80,8 @@ module = [
     "app.services.crawler",
     "app.services.session_manager",
     "app.services.job_service",
+    "app.services.proxy_health",
+    "app.services.proxy_manager",
 ]
 warn_return_any = false
 

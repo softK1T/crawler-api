@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     key_rate_limit_rpm: int = 60  # per-key requests per minute
     default_monthly_quota: int = 100_000  # per-application monthly quota
 
+    # Circuit breaker settings
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_timeout_s: int = 300
+    proxy_sticky_ttl_s: int = 1800
+
     # Webshare auto-sync
     # Get your API key at: https://proxy.webshare.io/userapi/keys
     webshare_api_key: str | None = None
