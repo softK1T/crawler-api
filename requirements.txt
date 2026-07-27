@@ -26,3 +26,5 @@ camoufox[geoip]>=0.4.0
 httpx>=0.27.0
 # API key hashing (argon2id)
 argon2-cffi>=23.1.0
+# Domain extraction for policy resolution
+tldextract>=5.1.0

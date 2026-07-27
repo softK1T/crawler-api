@@ -70,6 +70,7 @@ module = [
     "lxml.*",
     "gevent.*",
     "starlette.*",
+    "tldextract.*",
 ]
 ignore_missing_imports = true
 

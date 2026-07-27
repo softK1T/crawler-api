@@ -1,11 +1,15 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
+
+if TYPE_CHECKING:
+    from app.models.api_key import ApiKey
 
 
 class Application(Base):
@@ -25,6 +29,11 @@ class Application(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    # Back-populates ApiKey.application; lazy="raise" prevents N+1 queries.
+    api_keys: Mapped[list["ApiKey"]] = relationship(
+        "ApiKey", back_populates="application", lazy="raise"
     )
 
     def __repr__(self) -> str:

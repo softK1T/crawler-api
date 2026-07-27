@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     max_batch_size: int = 1000
     batch_timeout_secs: int = 900
 
+    # Rate limiter defaults
+    key_rate_limit_rpm: int = 60  # per-key requests per minute
+    default_monthly_quota: int = 100_000  # per-application monthly quota
+
     # Webshare auto-sync
     # Get your API key at: https://proxy.webshare.io/userapi/keys
     webshare_api_key: str | None = None
