@@ -32,3 +32,5 @@ tldextract>=5.1.0
 warcio>=1.7.4
 # Async S3 client (AWS / MinIO)
 aioboto3>=13.0
+# Async job queue (replaces Celery for new code paths)
+arq>=0.25.0

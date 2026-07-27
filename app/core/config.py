@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     warc_max_age_s: int = 3600  # 1 hour rotation threshold
     warc_prefix: str = "warc"
 
+    # arq worker settings
+    arq_redis_url: str = ""  # defaults to redis_url if empty
+    job_result_ttl_s: int = 86400  # 24h TTL for job results in Redis
+
+    # Callback settings
+    callback_hmac_secret: str = ""  # REQUIRED in prod; empty = callbacks disabled
+    callback_timeout_s: float = 10.0
+    callback_max_retries: int = 3
+
     @property
     def api_keys(self) -> list[str]:
         """Return parsed list of non-empty API keys."""
