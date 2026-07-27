@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.errors import CrawlerAPIError
 from app.core.logging_config import configure_logging
 from app.middleware.correlation_id import CorrelationIdMiddleware
 
@@ -70,3 +72,11 @@ app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(health_router)
 app.include_router(api_router)
+
+
+@app.exception_handler(CrawlerAPIError)
+async def _crawler_api_error_handler(request, exc: CrawlerAPIError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.error_code, "detail": exc.detail},
+    )

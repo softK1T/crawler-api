@@ -113,3 +113,27 @@ def get_api_key(api_key: str | None = Security(API_KEY_HEADER)) -> str:
 
 # Backward-compatible alias — existing endpoint imports continue to work.
 verify_api_key = get_api_key
+
+
+async def update_last_used(key_id: str, db) -> None:
+    """Fire-and-forget UPDATE of ``last_used_at`` on the ApiKey row.
+
+    Must be called via :func:`asyncio.create_task` — never awaited directly,
+    because it is non-critical and must not block the response.
+
+    All exceptions are caught and logged; this function must never raise.
+    """
+    import logging
+    from uuid import UUID
+
+    from sqlalchemy import text
+
+    logger = logging.getLogger(__name__)
+    try:
+        await db.execute(
+            text("UPDATE api_keys SET last_used_at = now() WHERE id = :kid"),
+            {"kid": UUID(key_id)},
+        )
+        await db.commit()
+    except Exception:
+        logger.warning("update_last_used failed for key_id=%s", key_id, exc_info=True)
