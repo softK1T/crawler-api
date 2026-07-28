@@ -57,3 +57,4 @@ temp/
 celerybeat-schedule
 celerybeat.pid
 proxies.txt
+.claude/worktrees/
