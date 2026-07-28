@@ -13,7 +13,7 @@ from app.models.api_key import ApiKey
 from app.models.usage_counter import UsageCounter
 from app.schemas.usage import UsagePeriodResponse, UsageSummaryResponse
 
-router = APIRouter(prefix="/usage", tags=["usage"])
+router = APIRouter(prefix="/v1/usage", tags=["usage"])
 
 
 @router.get("/", response_model=UsageSummaryResponse)

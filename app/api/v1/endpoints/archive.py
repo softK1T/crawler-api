@@ -17,7 +17,7 @@ from app.schemas.archive import ArchiveContentResponse, ArchiveEntryResponse
 from app.services.archive_reader import ArchiveReadError
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/archive", tags=["archive"])
+router = APIRouter(prefix="/v1/archive", tags=["archive"])
 
 
 @router.get("/{request_id}", response_model=ArchiveContentResponse)

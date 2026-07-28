@@ -13,6 +13,17 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_dt(value: str | None) -> datetime | None:
+    """Parse an ISO datetime string, tolerating None/empty."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
 # ── Stage-8 compat shim — celery dependency scheduled for removal ────────────
 # When the legacy Celery worker (app/worker/tasks/crawl.py) is retired,
 # delete these imports and drop ``celery`` from project dependencies.
@@ -120,11 +131,9 @@ class JobService:
             status=JobStatus(status_data["status"]),
             result=result,
             error=error,
-            created_at=datetime.fromisoformat(
-                status_data.get("created_at", status_data["updated_at"])
-            ),
+            created_at=_parse_dt(status_data.get("created_at") or status_data.get("enqueue_time")),
             completed_at=(
-                datetime.fromisoformat(status_data["updated_at"])
+                _parse_dt(status_data.get("updated_at") or status_data.get("completed_at"))
                 if status_data["status"] in ("completed", "failed")
                 else None
             ),

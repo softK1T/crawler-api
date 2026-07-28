@@ -130,7 +130,7 @@ async def create_fetch(
                 job_result = await job_svc.get_result(job_id)
                 return JSONResponse(
                     status_code=200,
-                    content=job_result.model_dump(),
+                    content=job_result.model_dump(mode="json"),
                 )
             await asyncio.sleep(0.1)
         # Timeout — return running.
@@ -141,7 +141,7 @@ async def create_fetch(
                 status=JobStatus.RUNNING,
                 created_at=datetime.now(UTC),
                 idempotency_key=body.idempotency_key,
-            ).model_dump(),
+            ).model_dump(mode="json"),
         )
 
     # 6. Async mode — 202 Accepted.
@@ -157,7 +157,7 @@ async def create_fetch(
             status=JobStatus.PENDING,
             created_at=datetime.now(UTC),
             idempotency_key=body.idempotency_key,
-        ).model_dump(),
+        ).model_dump(mode="json"),
         headers={
             "X-RateLimit-Limit": str(result["limit"]),
             "X-RateLimit-Remaining": str(result["remaining"]),
