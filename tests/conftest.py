@@ -58,10 +58,19 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
         await conn.run_sync(Base.metadata.create_all)
 
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with session_factory() as session:
+    session: AsyncSession = session_factory()
+    try:
         yield session
+    finally:
+        import asyncio
 
-    await engine.dispose()
+        # Let fire-and-forget tasks (update_last_used) settle before closing.
+        await asyncio.sleep(0.05)
+        try:
+            await session.close()
+        except Exception:  # noqa: S110
+            pass
+        await engine.dispose()
 
 
 @pytest.fixture

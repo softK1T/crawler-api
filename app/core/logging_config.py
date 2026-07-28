@@ -1,12 +1,15 @@
 """Structured JSON logging with credential redaction and bound context.
 
 Uses structlog with JSONRenderer for consistent single-line JSON output.
-Standard library logging is captured and rendered as JSON too.
+Standard library logging is captured and rendered as JSON via a bridge that
+writes directly to stderr — NOT back through stdlib logging — to avoid the
+infinite recursion described in ADR-013.
 """
 
 import json
 import logging
 import re
+import sys
 from typing import Any
 
 import structlog
@@ -71,13 +74,36 @@ def get_logger(name: str = "crawler-api"):
 
 
 class _StructlogHandler(logging.Handler):
+    """Bridge: format stdlib log records as JSON and write directly to stderr.
+
+    Writes JSON directly to stderr rather than routing through structlog's
+    LoggerFactory, which would feed back into the stdlib logging system and
+    cause infinite recursion (ADR-013).
+    """
+
     def emit(self, record: logging.LogRecord) -> None:
-        msg = redact(record.getMessage())
-        logger = structlog.get_logger(record.name)
-        kw: dict[str, Any] = {**_shared_context}
-        if record.exc_info:
-            kw["exc_info"] = record.exc_info
-        logger.log(record.levelno, msg, **kw)
+        try:
+            from datetime import UTC, datetime
+
+            msg = redact(record.getMessage())
+            payload: dict[str, Any] = {
+                "event": msg,
+                "logger": record.name,
+                "level": record.levelname.lower(),
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            if record.exc_info:
+                import traceback
+
+                payload["exc_info"] = traceback.format_exception(*record.exc_info)
+            # Merge any bound context.
+            if _shared_context:
+                payload.update(_shared_context)
+            json_str = json.dumps(payload, default=str)
+            sys.stderr.write(json_str + "\n")
+            sys.stderr.flush()
+        except Exception:
+            self.handleError(record)
 
 
 def configure_logging(level: str = "INFO") -> None:

@@ -1,7 +1,7 @@
 import secrets
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerificationError, VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 
@@ -39,10 +39,7 @@ def verify_api_key_hash(raw_key: str, stored_hash: str) -> bool:
         return False
     try:
         return _PH.verify(stored_hash, raw_key)
-    except VerifyMismatchError:
-        return False
-    except VerificationError:
-        # Malformed hash or wrong parameters — treat as invalid.
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
         return False
 
 

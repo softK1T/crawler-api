@@ -38,14 +38,12 @@ def test_generate_api_key_format():
 
 class TestResolveApiKey:
     async def test_rejects_key_shorter_than_8_chars(self):
-        from fastapi import HTTPException
-
         from app.api.v1.dependencies import resolve_api_key
+        from app.core.errors import AuthenticationError
 
         db = AsyncMock()
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(AuthenticationError):
             await resolve_api_key(x_api_key="short", db=db)
-        assert exc.value.status_code == 401
 
     async def test_revoked_key_raises(self, db_session, api_key_factory):
         from app.api.v1.dependencies import resolve_api_key

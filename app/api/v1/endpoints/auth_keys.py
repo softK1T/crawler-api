@@ -71,8 +71,9 @@ async def create_api_key(
         prefix = raw_key[:8]
 
         # Check for prefix collision.
-        existing = await db.execute(select(ApiKey).where(ApiKey.prefix == prefix))
-        if existing.scalar_one_or_none() is not None:
+        stmt = select(ApiKey.id).where(ApiKey.prefix == prefix).limit(1)
+        existing = await db.execute(stmt)
+        if existing.first() is not None:
             if _attempt == 1:
                 raise ConflictError(detail="Key prefix collision — retry")
             continue

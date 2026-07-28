@@ -18,9 +18,10 @@ from logging.config import fileConfig
 # Ensure the project root is on sys.path so that `from app.*` imports work.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from alembic import context
 
 # Alembic Config object
 config = context.config
@@ -30,8 +31,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Import models so Alembic can detect schema changes.
-from app.models import *  # noqa: E402, F401, F403
 from app.core.db import Base  # noqa: E402
+from app.models import *  # noqa: E402, F403
 
 target_metadata = Base.metadata
 

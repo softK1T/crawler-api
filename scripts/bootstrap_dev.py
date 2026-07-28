@@ -4,6 +4,7 @@
 Usage: python scripts/bootstrap_dev.py
 Prints the raw API key to stdout — capture it and set API_KEYS_RAW or use as X-API-Key.
 """
+
 import asyncio
 import os
 import sys

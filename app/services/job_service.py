@@ -13,7 +13,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Legacy Celery imports (keep for backward compat) ─────────────────────────
+# ── Stage-8 compat shim — celery dependency scheduled for removal ────────────
+# When the legacy Celery worker (app/worker/tasks/crawl.py) is retired,
+# delete these imports and drop ``celery`` from project dependencies.
 # ruff: noqa: E402
 from app.schemas.responses import CrawlResult, JobStatusResponse  # noqa: F401
 from app.services.storage import storage  # noqa: F401
@@ -131,7 +133,9 @@ class JobService:
     async def handle_idempotency(self, idempotency_key: str, application_id: UUID) -> str | None:
         """Check if an idempotency key was already used.  Returns job_id or None."""
         existing = await self._redis.get(f"idempotency:{application_id}:{idempotency_key[:128]}")
-        return existing if existing else None
+        if existing is None:
+            return None
+        return existing.decode() if isinstance(existing, bytes) else existing
 
     async def store_idempotency(
         self, idempotency_key: str, job_id: str, application_id: UUID

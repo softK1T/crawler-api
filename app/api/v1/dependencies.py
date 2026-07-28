@@ -49,12 +49,20 @@ async def resolve_api_key(
 
     prefix = x_api_key[:8]
 
-    stmt = select(ApiKey).where(ApiKey.prefix == prefix, ApiKey.is_active.is_(True)).limit(1)
+    stmt = select(ApiKey).where(ApiKey.prefix == prefix, ApiKey.is_active.is_(True))
     result = await db.execute(stmt)
-    row = result.scalar_one_or_none()
+    rows = result.scalars().all()
 
-    if row is None:
+    matched: ApiKey | None = None
+    for row in rows:
+        if verify_api_key_hash(x_api_key, row.hashed_key):
+            matched = row
+            break
+
+    if matched is None:
         raise AuthenticationError
+
+    row = matched
 
     if row.revoked_at is not None:
         raise KeyRevokedError
@@ -62,10 +70,7 @@ async def resolve_api_key(
     if row.expires_at is not None and row.expires_at < datetime.now(UTC):
         raise KeyExpiredError
 
-    if not verify_api_key_hash(x_api_key, row.hashed_key):
-        raise AuthenticationError
-
-    # Fire-and-forget — never block the response on this.
+    # Hash already verified in the loop above — we only reach here if it passed.
     _task = asyncio.create_task(_update_last_used_safe(row.id, db))  # noqa: RUF006
 
     return row

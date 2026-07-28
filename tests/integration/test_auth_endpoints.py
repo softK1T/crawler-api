@@ -91,6 +91,6 @@ async def test_prefix_collision_retry_once_then_409(db_session, application_fact
     # Second attempt with same prefix → conflict.
     from sqlalchemy import select
 
-    stmt = select(ApiKey).where(ApiKey.prefix == prefix)
+    stmt = select(ApiKey).where(ApiKey.prefix == prefix).limit(1)
     result = await db_session.execute(stmt)
-    assert result.scalar_one_or_none() is not None
+    assert result.first() is not None

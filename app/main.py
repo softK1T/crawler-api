@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     await _startup_proxy_sync()
 
     # Initialize services in background — don't block server startup.
-    asyncio.create_task(_init_services(app))
+    _init_task = asyncio.create_task(_init_services(app))  # noqa: RUF006 — kept for cancellation
 
     yield
 
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
         warc_storage = getattr(app.state, "warc_storage", None)
         if warc_storage:
             await warc_storage.shutdown_flush()
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
 

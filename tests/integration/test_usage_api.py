@@ -20,16 +20,15 @@ async def test_usage_empty_returns_zero_totals(db_session):
 
 
 @pytest.mark.integration
-async def test_usage_with_seeded_rows(db_session):
+async def test_usage_with_seeded_rows(db_session, application_factory):
     """Pre-seeded usage rows aggregate correctly."""
     from datetime import date
-    from uuid import uuid4
 
     from app.models.usage_counter import UsageCounter
 
-    app_id = uuid4()
+    application = await application_factory()
     row = UsageCounter(
-        application_id=app_id,
+        application_id=application.id,
         period_month=date(2026, 7, 1),
         request_count=100,
         bytes_received=1_000_000,
@@ -40,7 +39,7 @@ async def test_usage_with_seeded_rows(db_session):
 
     from sqlalchemy import select
 
-    stmt = select(UsageCounter).where(UsageCounter.application_id == app_id)
+    stmt = select(UsageCounter).where(UsageCounter.application_id == application.id)
     result = await db_session.execute(stmt)
     periods = result.scalars().all()
     assert len(periods) == 1

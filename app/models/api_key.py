@@ -28,7 +28,7 @@ class ApiKey(Base):
         ForeignKey("applications.id", ondelete="CASCADE"),
         nullable=False,
     )
-    prefix: Mapped[str] = mapped_column(String(8), unique=True, nullable=False)
+    prefix: Mapped[str] = mapped_column(String(8), unique=False, nullable=False)
     hashed_key: Mapped[str] = mapped_column(Text, nullable=False)
     scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     mode: Mapped[str] = mapped_column(String(8), nullable=False)  # "live" or "test"

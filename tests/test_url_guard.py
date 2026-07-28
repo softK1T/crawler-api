@@ -57,5 +57,5 @@ def test_accepts_public_web_urls(url: str) -> None:
 
 
 def test_unresolvable_host_is_rejected() -> None:
-    with pytest.raises(UrlNotAllowed, match="resolve"):
+    with pytest.raises(UrlNotAllowed, match="DNS resolution failed"):
         validate_url_sync("http://this-host-does-not-exist-crawlerapi.invalid/")

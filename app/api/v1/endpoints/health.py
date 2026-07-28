@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -60,4 +61,7 @@ async def readyz(request: Request):
         healthy = False
 
     status_code = 200 if healthy else 503
-    return {"status": "ready" if healthy else "not_ready", "checks": checks}, status_code
+    return JSONResponse(
+        content={"status": "ready" if healthy else "not_ready", "checks": checks},
+        status_code=status_code,
+    )

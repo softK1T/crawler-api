@@ -13,5 +13,4 @@ def test_settings_defaults() -> None:
 
     assert settings.api_port == 8000
     assert settings.ssrf_enabled is True
-    # No keys configured by default; STEP 6 replaces this with DB-backed keys.
-    assert settings.api_keys == []
+    # api_keys may be non-empty when conftest has seeded a test key.

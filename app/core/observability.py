@@ -94,6 +94,9 @@ def setup_tracing(settings) -> None:
         {SERVICE_NAME: settings.service_name, SERVICE_VERSION: settings.service_version}
     )
 
+    from opentelemetry.sdk.trace.export import SpanExporter
+
+    exporter: SpanExporter
     if settings.otlp_endpoint:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
