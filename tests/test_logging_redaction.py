@@ -44,7 +44,7 @@ def test_log_redaction_covers_generated_key_format() -> None:
             level=logging.INFO,
             pathname=__file__,
             lineno=0,
-            msg=f"key=%s issued",
+            msg="key=%s issued",
             args=(raw_key,),
             exc_info=None,
         )
@@ -63,12 +63,8 @@ def test_log_redaction_covers_generated_key_format() -> None:
 
         # Assertions — order matters: check non-empty first.
         assert output.strip(), f"Log output is empty for mode={mode}"
-        assert raw_key not in output, (
-            f"Raw key leaked into log output for mode={mode}"
-        )
-        assert "***" in output, (
-            f"Redaction marker absent — log may be suppressed, mode={mode}"
-        )
+        assert raw_key not in output, f"Raw key leaked into log output for mode={mode}"
+        assert "***" in output, f"Redaction marker absent — log may be suppressed, mode={mode}"
         # The prefix (non-sensitive, returned in API responses) may appear.
         assert prefix in output, (
             f"Prefix {prefix!r} should be preserved in log output for mode={mode}"

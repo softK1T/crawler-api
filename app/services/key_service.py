@@ -130,8 +130,7 @@ async def rotate_api_key(
     await db.refresh(old_key)
 
     logger.info(
-        "Key rotated: issuer_key_id=%s rotated_key_id=%s new_key_prefix=%s "
-        "old_key_expires_at=%s",
+        "Key rotated: issuer_key_id=%s rotated_key_id=%s new_key_prefix=%s old_key_expires_at=%s",
         issuer_key_id,
         key_id,
         prefix,

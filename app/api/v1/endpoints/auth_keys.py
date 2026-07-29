@@ -86,9 +86,7 @@ async def create_api_key(
         raise AuthorizationError(detail="Cannot issue keys for another application")
 
     # 5. Application must exist and be active.
-    app_result = await db.execute(
-        select(Application).where(Application.id == body.application_id)
-    )
+    app_result = await db.execute(select(Application).where(Application.id == body.application_id))
     application = app_result.scalar_one_or_none()
     if application is None:
         raise NotFoundError(detail="Application not found")
@@ -148,9 +146,7 @@ async def revoke_api_key(
     """
     # Prevent self-revocation.
     if key_id == api_key.id:
-        raise AuthorizationError(
-            detail="Cannot revoke the key used to authenticate this request"
-        )
+        raise AuthorizationError(detail="Cannot revoke the key used to authenticate this request")
 
     # Load the target key.
     result = await db.execute(select(ApiKey).where(ApiKey.id == key_id))
