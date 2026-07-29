@@ -73,7 +73,7 @@ log "POST /v1/fetch..."
 RESP=$(curl -s -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${TEST_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://httpbin.org/html","mode":"static"}')
+    -d '{"url":"http://httpbin.org/html","mode":"httpx"}')
 
 JOB_ID=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
 if [ -z "$JOB_ID" ]; then

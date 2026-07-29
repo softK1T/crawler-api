@@ -43,10 +43,16 @@ async def fetch_task(
 
             policy = await resolve_policy(url, db)
 
-            # 3. Select fetcher.
+            # 3. Select fetcher — map API mode to engine name.
             from app.services.fetchers import get_fetcher
 
-            engine = policy.engine if policy else mode
+            _MODE_TO_ENGINE = {
+                "static": "httpx",
+                "stealth": "curl_cffi",
+                "browser": "playwright",
+                "camoufox": "playwright",
+            }
+            engine = policy.engine if policy and policy.engine else _MODE_TO_ENGINE.get(mode, "httpx")
             fetcher = get_fetcher(engine)
 
             # 4. Execute fetch with retry.
@@ -149,7 +155,16 @@ async def fetch_task(
 
 async def _set_status(redis_client, job_id: str, status: str, ttl: int, result_data=None) -> None:
     now = datetime.now(UTC).isoformat()
-    payload = {"status": status, "updated_at": now}
+    # Preserve created_at from the original status payload.
+    raw = await redis_client.get(f"job:{job_id}:status")
+    created_at = now
+    if raw:
+        try:
+            existing = json.loads(raw)
+            created_at = existing.get("created_at", now)
+        except json.JSONDecodeError:
+            pass
+    payload = {"status": status, "updated_at": now, "created_at": created_at}
     if result_data is not None:
         payload["result"] = result_data
     await redis_client.set(f"job:{job_id}:status", json.dumps(payload), ex=ttl)
@@ -157,7 +172,15 @@ async def _set_status(redis_client, job_id: str, status: str, ttl: int, result_d
 
 async def _set_error(redis_client, job_id: str, error: str, ttl: int) -> None:
     now = datetime.now(UTC).isoformat()
-    payload = {"status": "failed", "updated_at": now}
+    raw = await redis_client.get(f"job:{job_id}:status")
+    created_at = now
+    if raw:
+        try:
+            existing = json.loads(raw)
+            created_at = existing.get("created_at", now)
+        except json.JSONDecodeError:
+            pass
+    payload = {"status": "failed", "updated_at": now, "created_at": created_at}
     await redis_client.set(f"job:{job_id}:status", json.dumps(payload), ex=ttl)
     await redis_client.set(f"job:{job_id}:error", error, ex=ttl)
 
@@ -248,8 +271,8 @@ async def startup(ctx: dict) -> None:
     from app.services.warc.storage import create_warc_storage
 
     ctx["settings"] = settings
-    redis_url = settings.arq_redis_url or settings.redis_url
-    ctx["redis"] = aioredis.from_url(redis_url, decode_responses=False)
+    # Status keys must be on the same Redis DB the API reads from.
+    ctx["redis"] = aioredis.from_url(settings.redis_url, decode_responses=False)
     ctx["db_factory"] = AsyncSessionLocal
     ctx["proxy_manager"] = ProxyManager(
         db_session_factory=AsyncSessionLocal,

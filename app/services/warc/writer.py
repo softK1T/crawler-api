@@ -50,6 +50,7 @@ class WarcWriter:
         self._max_size_bytes = max_size_bytes
         self._max_age_s = max_age_s
         self._records: list[WarcRecord] = []
+        self._builder = __import__("warcio.recordbuilder", fromlist=["RecordBuilder"]).RecordBuilder()
 
     # ── properties ────────────────────────────────────────────────────────────
 
@@ -73,32 +74,32 @@ class WarcWriter:
         date: datetime | None = None,
     ) -> WarcRecord:
         """Write a full WARC response record.  Returns offset/length metadata."""
-        import warcio.statusandheaders
+        from warcio.statusandheaders import StatusAndHeaders
 
         now = date or datetime.now(UTC)
         record_id = f"<urn:uuid:{secrets.token_hex(16)}>"
         sha256_digest = hashlib.sha256(body).hexdigest()
 
         status_line = f"{status_code} OK"
-        http_status = warcio.statusandheaders.StatusAndHeaders(
+        http_status = StatusAndHeaders(
             status_line, list(http_headers.items()), protocol="HTTP/1.1"
         )
 
-        offset = self._buf.tell()
-        self._writer.write_record(
-            warcio.WARCRecord(
-                type="response",
-                uri=url,
-                date=now.isoformat(),
-                payload=io.BytesIO(body),
-                http_headers=http_status,
-                warc_headers_dict={
-                    "WARC-Record-ID": record_id,
-                    "Content-Type": content_type,
-                    "WARC-Block-Digest": f"sha256:{sha256_digest}",
-                },
-            )
+        warc_record = self._builder.create_warc_record(
+            url,
+            "response",
+            payload=io.BytesIO(body),
+            http_headers=http_status,
+            warc_headers_dict={
+                "WARC-Record-ID": record_id,
+                "Content-Type": content_type,
+                "WARC-Block-Digest": f"sha256:{sha256_digest}",
+            },
+            warc_version=WARC_VERSION,
         )
+
+        offset = self._buf.tell()
+        self._writer.write_record(warc_record)
         length = self._buf.tell() - offset
 
         rec = WarcRecord(
@@ -127,29 +128,26 @@ class WarcWriter:
 
         Body is empty — the original payload is referenced by digest.
         """
-        import warcio
-
         now = date or datetime.now(UTC)
         record_id = f"<urn:uuid:{secrets.token_hex(16)}>"
 
-        offset = self._buf.tell()
-        self._writer.write_record(
-            warcio.WARCRecord(
-                type="revisit",
-                uri=url,
-                date=now.isoformat(),
-                payload=io.BytesIO(b""),
-                http_headers=None,
-                warc_headers_dict={
-                    "WARC-Record-ID": record_id,
-                    "WARC-Refers-To": original_record_id,
-                    "WARC-Profile": (
-                        "http://netpreserve.org/warc/1.1/revisit/identical-payload-digest"
-                    ),
-                    "WARC-Block-Digest": f"sha256:{original_sha256}",
-                },
-            )
+        warc_record = self._builder.create_revisit_record(
+            url,
+            payload=io.BytesIO(b""),
+            http_headers=None,
+            warc_headers_dict={
+                "WARC-Record-ID": record_id,
+                "WARC-Refers-To": original_record_id,
+                "WARC-Profile": (
+                    "http://netpreserve.org/warc/1.1/revisit/identical-payload-digest"
+                ),
+                "WARC-Block-Digest": f"sha256:{original_sha256}",
+            },
+            warc_version=WARC_VERSION,
         )
+
+        offset = self._buf.tell()
+        self._writer.write_record(warc_record)
         length = self._buf.tell() - offset
 
         rec = WarcRecord(

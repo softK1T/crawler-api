@@ -132,7 +132,14 @@ class JobService:
             status=JobStatus(status_data["status"]),
             result=result,
             error=error,
-            created_at=_parse_dt(status_data.get("created_at") or status_data.get("enqueue_time")),
+            created_at=(
+                _parse_dt(
+                    status_data.get("created_at")
+                    or status_data.get("enqueue_time")
+                    or status_data.get("updated_at")
+                )
+                or datetime.now(UTC)
+            ),
             completed_at=(
                 _parse_dt(status_data.get("updated_at") or status_data.get("completed_at"))
                 if status_data["status"] in ("completed", "failed")

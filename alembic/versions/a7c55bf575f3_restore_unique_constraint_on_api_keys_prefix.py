@@ -21,6 +21,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Remove old keys with constant prefixes (crw_live/crw_test) that would
+    # violate the restored unique constraint.  New keys use distinctive prefixes
+    # (crwl…/crwt…) and do not collide.
+    op.execute(
+        "DELETE FROM api_keys WHERE prefix IN ('crw_live', 'crw_test')"
+    )
     op.create_unique_constraint("api_keys_prefix_key", "api_keys", ["prefix"])
 
 
