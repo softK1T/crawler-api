@@ -92,6 +92,17 @@ async def test_admin_plus_keys_caller_can_mint_keys_key(db_session, application_
     assert response.raw_key.startswith("crw")
     assert "keys" in response.scopes
 
+    # F5: response boundary assertions on the endpoint-returned object
+    # (same validation path as HTTP POST /v1/keys).
+    assert response.raw_key, "raw_key must not be empty"
+    assert isinstance(response.raw_key, str), "raw_key must be a string"
+    assert response.raw_key.startswith(("crwl", "crwt")), (
+        f"raw_key prefix mismatch: {response.raw_key[:8]!r}"
+    )
+    assert len(response.raw_key) >= 34, f"raw_key too short: {len(response.raw_key)}"
+    data = response.model_dump()
+    assert "hashed_key" not in data, "hashed_key must not appear in response"
+
 
 @pytest.mark.integration
 async def test_caller_cannot_grant_scope_not_held(db_session, application_factory):
@@ -471,9 +482,37 @@ async def test_create_api_key_returns_non_empty_raw_key(db_session, application_
     assert len(raw_key) > 20, f"raw_key too short: {len(raw_key)} chars"
 
 
-# NOTE: An HTTP-level POST /v1/keys → raw_key assertion cannot be written with
-# the current TestClient infrastructure because FastAPI's TestClient creates an
-# independent event loop that conflicts with asyncpg's greenlet-based connection
-# pool (RuntimeError: Task got Future attached to a different loop).  The
-# service-layer guard in key_service.py (`if not raw_key: raise RuntimeError`)
-# and test_create_api_key_returns_non_empty_raw_key cover this requirement.
+@pytest.mark.integration
+async def test_post_keys_response_boundary(app, application_factory, api_key_factory):
+    """HTTP POST /v1/keys via ASGI transport — raw_key present, hashed_key absent."""
+    from httpx import ASGITransport, AsyncClient
+
+    app_obj = await application_factory()
+    raw_op, _row = await api_key_factory(application=app_obj, scopes=["admin", "keys", "fetch"])
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        response = await client.post(
+            "/v1/keys",
+            json={
+                "application_id": str(app_obj.id),
+                "scopes": ["fetch"],
+                "mode": "live",
+            },
+            headers={"X-API-Key": raw_op},
+        )
+
+    assert response.status_code == 201, f"Expected 201, got {response.status_code}: {response.text}"
+
+    payload = response.json()
+    assert "raw_key" in payload, "raw_key field missing from response"
+    assert isinstance(payload["raw_key"], str), "raw_key must be a string"
+    assert payload["raw_key"], "raw_key must not be empty"
+
+    raw_key = payload["raw_key"]
+    assert raw_key.startswith(("crwl", "crwt")), (
+        f"raw_key must start with crwl or crwt, got {raw_key[:8]!r}"
+    )
+    assert len(raw_key) >= 34, f"raw_key too short: {len(raw_key)} chars"
+
+    assert "hashed_key" not in payload, "hashed_key must not appear in response"
