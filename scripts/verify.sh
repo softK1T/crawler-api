@@ -188,12 +188,16 @@ log "New key works: job_id=$NEW_JOB_ID"
 
 # 17. Old key still works during overlap window.
 log "Old key during overlap..."
-OLD_FETCH=$(curl -s -X POST http://localhost:8000/v1/fetch \
+OLD_CODE=$(curl -s -o /tmp/old-key-response.txt -w "%{http_code}" -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${NEW_KEY}" \
     -H "Content-Type: application/json" \
     -d '{"url":"http://example.com","mode":"static"}')
-OLD_JOB_ID=$(echo "$OLD_FETCH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
-[ -n "$OLD_JOB_ID" ] || err "Old key during overlap: no job_id — key prematurely dead"
+OLD_FETCH=$(cat /tmp/old-key-response.txt)
+OLD_JOB_ID=$(echo "$OLD_FETCH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
+if [ -z "$OLD_JOB_ID" ]; then
+    log "Old key response (status=$OLD_CODE): $OLD_FETCH"
+    err "Old key during overlap: no job_id — key prematurely dead (HTTP $OLD_CODE)"
+fi
 log "Old key works during overlap: job_id=$OLD_JOB_ID"
 
 # 18. Force old key expiry into the past.
