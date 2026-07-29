@@ -36,6 +36,27 @@ docker compose up -d
 curl http://localhost:8000/healthz
 ```
 
+## Verified State
+
+| Field | Value |
+|---|---|
+| Tag | `v0.1.0` |
+| Date | 2026-07-29 |
+| Migration head | `a7c55bf575f3` |
+| Tests | 86 passed, 0 failed |
+| verify.sh | OK (second run; cold-start archive timing documented in ADR-013) |
+
+**Quick reproduction:**
+```bash
+docker compose build --no-cache
+docker compose up -d
+docker compose exec api alembic upgrade head
+docker compose exec api python3 scripts/bootstrap_dev.py  # prints API key
+./scripts/verify.sh
+```
+
+For operations, see [docs/runbook.md](docs/runbook.md).
+
 ## API Examples
 
 ```bash
