@@ -496,18 +496,20 @@ async def test_post_keys_response_boundary(app, db_session, application_factory,
     # so the ASGI request borrows from the shared pool instead of creating
     # a second engine that would exhaust the testcontainer's connections.
     app.dependency_overrides[get_db] = lambda: db_session
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
-        response = await client.post(
-            "/v1/keys",
-            json={
-                "application_id": str(app_obj.id),
-                "scopes": ["fetch"],
-                "mode": "live",
-            },
-            headers={"X-API-Key": raw_op},
-        )
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            response = await client.post(
+                "/v1/keys",
+                json={
+                    "application_id": str(app_obj.id),
+                    "scopes": ["fetch"],
+                    "mode": "live",
+                },
+                headers={"X-API-Key": raw_op},
+            )
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 201, f"Expected 201, got {response.status_code}: {response.text}"
 
