@@ -469,3 +469,32 @@ async def test_create_api_key_returns_non_empty_raw_key(db_session, application_
     assert raw_key, "raw_key must not be empty"
     assert raw_key.startswith("crw"), f"raw_key must start with crw, got {raw_key[:8]!r}"
     assert len(raw_key) > 20, f"raw_key too short: {len(raw_key)} chars"
+
+
+@pytest.mark.integration
+async def test_post_keys_returns_non_empty_raw_key(
+    app, db_session, application_factory, api_key_factory
+):
+    """HTTP POST /v1/keys must return a non-empty raw_key of expected length."""
+    from fastapi.testclient import TestClient
+
+    app_obj = await application_factory()
+    raw_op, _row = await api_key_factory(application=app_obj, scopes=["admin", "keys", "fetch"])
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/keys",
+        json={
+            "application_id": str(app_obj.id),
+            "scopes": ["fetch"],
+            "mode": "live",
+        },
+        headers={"X-API-Key": raw_op},
+    )
+    assert response.status_code == 201, f"Expected 201, got {response.status_code}: {response.text}"
+    data = response.json()
+    assert "raw_key" in data, "raw_key field missing from response"
+    rk = data["raw_key"]
+    assert isinstance(rk, str) and len(rk) > 0, f"raw_key empty or not string: {rk!r}"
+    assert rk.startswith("crwl"), f"raw_key must start with crwl, got {rk[:8]!r}"
+    assert len(rk) > 30, f"raw_key too short for a full key: {len(rk)} chars"

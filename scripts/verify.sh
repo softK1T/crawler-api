@@ -110,6 +110,14 @@ KEY_ID=$(echo "$KEY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin);
 log "key_id=$KEY_ID prefix=${NEW_KEY:0:8}..."
 
 # 11. Fetch with the issued key.
+# Query usage BEFORE fetch to compare after.
+log "Usage before fetch..."
+USAGE_BEFORE=$(curl -sf "http://localhost:8000/v1/usage/applications/${APP_ID}" \
+    -H "X-API-Key: ${TEST_KEY}")
+REQ_BEFORE=$(echo "$USAGE_BEFORE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_requests',0))" 2>/dev/null)
+echo "application_id=$APP_ID requests_before=$REQ_BEFORE"
+[ "$REQ_BEFORE" != "" ] || err "Usage before: empty response"
+
 log "Fetch with issued key..."
 sleep 2
 FETCH_RESP=$(curl -s -X POST http://localhost:8000/v1/fetch \
@@ -155,14 +163,14 @@ log "Archive OK"
 
 # 14. Assert usage_counter advanced for the application.
 log "Usage counter check..."
-USAGE_RESP=$(curl -sf "http://localhost:8000/v1/usage/applications/${APP_ID}" \
+USAGE_AFTER=$(curl -sf "http://localhost:8000/v1/usage/applications/${APP_ID}" \
     -H "X-API-Key: ${TEST_KEY}")
-echo "$USAGE_RESP" | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-assert d.get('total_requests',0) >= 1, 'usage counter did not advance'
-assert d.get('total_bytes',0) > 0, 'zero bytes in usage'
-" || err "Usage counter check failed"
+REQ_AFTER=$(echo "$USAGE_AFTER" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_requests',0))" 2>/dev/null)
+BYTES_AFTER=$(echo "$USAGE_AFTER" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_bytes',0))" 2>/dev/null)
+echo "application_id=$APP_ID requests_before=$REQ_BEFORE requests_after=$REQ_AFTER"
+[ "$REQ_AFTER" != "" ] || err "Usage after: empty response — zero rows matched"
+[ "$REQ_AFTER" -gt "$REQ_BEFORE" ] || err "Usage counter did not advance: before=$REQ_BEFORE after=$REQ_AFTER"
+[ "$BYTES_AFTER" -gt 0 ] || err "Zero bytes in usage"
 log "Usage counter OK"
 
 # 15. Rotate the key.
