@@ -139,11 +139,17 @@ async def create_warc_storage(settings) -> "WarcStorage":
         region_name=settings.s3_region,
     ).__aenter__()
 
-    # Ensure the WARC bucket exists (idempotent).
-    try:
-        await s3_client.create_bucket(Bucket=settings.s3_bucket)
-    except Exception:  # noqa: S110
-        pass  # BucketAlreadyExists / BucketAlreadyOwnedByYou — fine.
+    # Ensure the WARC bucket exists (idempotent, with retries).
+    import asyncio
+
+    for attempt in range(5):
+        try:
+            await s3_client.create_bucket(Bucket=settings.s3_bucket)
+            break
+        except Exception:
+            if attempt < 4:
+                await asyncio.sleep(1)
+            # BucketAlreadyExists / BucketAlreadyOwnedByYou — fine.
 
     writer = WarcWriter(
         filename=_new_filename(settings.warc_prefix),
