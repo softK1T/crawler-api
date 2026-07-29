@@ -69,10 +69,15 @@ async def resolve_api_key(
     return row
 
 
-async def _update_last_used_safe(key_id: UUID, db: AsyncSession) -> None:
-    """Wrapper that ensures ``update_last_used`` never propagates exceptions."""
+async def _update_last_used_safe(key_id: UUID, _db: AsyncSession) -> None:
+    """Wrapper that creates its own DB session so it never conflicts with
+    the request's session.  Fire-and-forget — exceptions are logged only.
+    """
+    from app.core.db import AsyncSessionLocal
+
     try:
-        await update_last_used(str(key_id), db)
+        async with AsyncSessionLocal() as db:
+            await update_last_used(str(key_id), db)
     except Exception:
         logger.warning("update_last_used task failed for key_id=%s", key_id, exc_info=True)
 

@@ -50,7 +50,9 @@ class WarcWriter:
         self._max_size_bytes = max_size_bytes
         self._max_age_s = max_age_s
         self._records: list[WarcRecord] = []
-        self._builder = __import__("warcio.recordbuilder", fromlist=["RecordBuilder"]).RecordBuilder()
+        self._builder = __import__(
+            "warcio.recordbuilder", fromlist=["RecordBuilder"]
+        ).RecordBuilder()
 
     # ── properties ────────────────────────────────────────────────────────────
 
@@ -81,9 +83,7 @@ class WarcWriter:
         sha256_digest = hashlib.sha256(body).hexdigest()
 
         status_line = f"{status_code} OK"
-        http_status = StatusAndHeaders(
-            status_line, list(http_headers.items()), protocol="HTTP/1.1"
-        )
+        http_status = StatusAndHeaders(status_line, list(http_headers.items()), protocol="HTTP/1.1")
 
         warc_record = self._builder.create_warc_record(
             url,
@@ -95,7 +95,6 @@ class WarcWriter:
                 "Content-Type": content_type,
                 "WARC-Block-Digest": f"sha256:{sha256_digest}",
             },
-            warc_version=WARC_VERSION,
         )
 
         offset = self._buf.tell()
@@ -133,8 +132,9 @@ class WarcWriter:
 
         warc_record = self._builder.create_revisit_record(
             url,
-            payload=io.BytesIO(b""),
-            http_headers=None,
+            digest=f"sha256:{original_sha256}",
+            refers_to_uri=original_record_id,
+            refers_to_date=now.isoformat(),
             warc_headers_dict={
                 "WARC-Record-ID": record_id,
                 "WARC-Refers-To": original_record_id,
@@ -143,7 +143,6 @@ class WarcWriter:
                 ),
                 "WARC-Block-Digest": f"sha256:{original_sha256}",
             },
-            warc_version=WARC_VERSION,
         )
 
         offset = self._buf.tell()

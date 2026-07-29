@@ -9,6 +9,11 @@ err()  { echo -e "${RED}[verify]${NC} $*"; exit 1; }
 
 cd "$(dirname "$0")/.."
 
+# Use the project venv if it exists.
+if [ -f .venv/bin/python3 ]; then
+    export PATH="$(pwd)/.venv/bin:$PATH"
+fi
+
 export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://crawler:crawler@localhost:5432/crawlerdb}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379/0}"
 
@@ -73,7 +78,7 @@ log "POST /v1/fetch..."
 RESP=$(curl -s -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${TEST_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://httpbin.org/html","mode":"httpx"}')
+    -d '{"url":"http://example.com","mode":"static"}')
 
 JOB_ID=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
 if [ -z "$JOB_ID" ]; then
@@ -100,11 +105,11 @@ done
 
 # 11. Archive — list and get content.
 log "GET /v1/archive/..."
-ARCHIVE_LIST=$(curl -sf "http://localhost:8000/v1/archive/?url=http://httpbin.org/html" \
+ARCHIVE_LIST=$(curl -sf "http://localhost:8000/v1/archive/?url=http://example.com" \
     -H "X-API-Key: ${TEST_KEY}")
 echo "$ARCHIVE_LIST" | python3 -c "import sys,json; items=json.load(sys.stdin); assert len(items)>=1, 'empty archive'" || err "Archive empty"
 
-REQUEST_ID=$(echo "$ARCHIVE_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['request_id'])" 2>/dev/null)
+REQUEST_ID=$(echo "$ARCHIVE_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])" 2>/dev/null)
 log "GET /v1/archive/${REQUEST_ID}..."
 ARCHIVE_CONTENT=$(curl -sf "http://localhost:8000/v1/archive/${REQUEST_ID}" \
     -H "X-API-Key: ${TEST_KEY}")

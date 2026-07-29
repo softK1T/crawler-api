@@ -122,7 +122,9 @@ def _new_filename(prefix: str = "warc") -> str:
 
 
 async def create_warc_storage(settings) -> "WarcStorage":
-    """Factory — creates the S3 client and WarcWriter for the app lifespan."""
+    """Factory — creates the S3 client, ensures the bucket exists, and
+    returns a ready-to-use WarcStorage.
+    """
     import aioboto3
 
     from app.core.db import AsyncSessionLocal
@@ -136,6 +138,12 @@ async def create_warc_storage(settings) -> "WarcStorage":
         aws_secret_access_key=settings.s3_secret_key,
         region_name=settings.s3_region,
     ).__aenter__()
+
+    # Ensure the WARC bucket exists (idempotent).
+    try:
+        await s3_client.create_bucket(Bucket=settings.s3_bucket)
+    except Exception:  # noqa: S110
+        pass  # BucketAlreadyExists / BucketAlreadyOwnedByYou — fine.
 
     writer = WarcWriter(
         filename=_new_filename(settings.warc_prefix),

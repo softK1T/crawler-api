@@ -18,22 +18,14 @@ class ArchiveReader:
         self._s3: Any = s3_client
         self._bucket = bucket
 
-    async def read_warc_record(
-        self,
-        warc_filename: str,
-        offset: int,
-        length: int,
-    ) -> bytes:
-        """Fetch a byte range from a WARC file stored in S3."""
-        range_header = f"bytes={offset}-{offset + length - 1}"
+    async def _read_full_warc(self, warc_filename: str) -> bytes:
+        """Fetch the full WARC file from S3 (gzip range-reads are not valid)."""
         try:
             response = await self._s3.get_object(
                 Bucket=self._bucket,
                 Key=warc_filename,
-                Range=range_header,
             )
-            body = await response["Body"].read()
-            return body
+            return await response["Body"].read()
         except Exception as exc:
             msg = str(exc)
             if "NoSuchKey" in msg:
@@ -43,19 +35,15 @@ class ArchiveReader:
     async def extract_body(
         self,
         warc_filename: str,
-        offset: int,
-        length: int,
+        offset: int = 0,
+        length: int = 0,
     ) -> tuple[bytes, str | None]:
-        """Download a WARC record from S3 and extract the HTTP response body.
-
-        Returns ``(payload_bytes, content_type)``.
-        """
+        """Download a WARC file from S3 and extract the first response body."""
         import warcio
 
-        raw = await self.read_warc_record(warc_filename, offset, length)
+        raw = await self._read_full_warc(warc_filename)
 
         try:
-            # warcio.ArchiveIterator handles gzip decompression transparently.
             reader = warcio.ArchiveIterator(io.BytesIO(raw))
             for record in reader:
                 if record.rec_type == "response":
@@ -65,10 +53,9 @@ class ArchiveReader:
                     )
                     return payload, content_type
                 if record.rec_type == "revisit":
-                    # Revisit records have no body; return empty.
-                    return b"", None
+                    return b"[revisit]", "application/warc-fields"
 
-            raise ArchiveReadError("No response/revisit record found in WARC range")
+            raise ArchiveReadError("No response/revisit record found in WARC")
         except ArchiveReadError:
             raise
         except Exception as exc:

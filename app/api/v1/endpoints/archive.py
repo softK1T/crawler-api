@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/archive", tags=["archive"])
 
 
-@router.get("/{request_id}", response_model=ArchiveContentResponse)
+@router.get("/{entry_id}", response_model=ArchiveContentResponse)
 async def get_archive_by_request(
-    request_id: UUID,
+    entry_id: UUID,
     req: Request,
     _api_key: ApiKey = Depends(require_scope(SCOPE_ARCHIVE)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve the full archived content for a request_id."""
-    stmt = select(WarcIndex).where(WarcIndex.request_log_id == request_id).limit(1)
+    """Retrieve the full archived content for a WARC index entry."""
+    stmt = select(WarcIndex).where(WarcIndex.id == entry_id).limit(1)
     result = await db.execute(stmt)
     row = result.scalar_one_or_none()
 

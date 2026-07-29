@@ -52,7 +52,9 @@ async def fetch_task(
                 "browser": "playwright",
                 "camoufox": "playwright",
             }
-            engine = policy.engine if policy and policy.engine else _MODE_TO_ENGINE.get(mode, "httpx")
+            engine = (
+                policy.engine if policy and policy.engine else _MODE_TO_ENGINE.get(mode, "httpx")
+            )
             fetcher = get_fetcher(engine)
 
             # 4. Execute fetch with retry.
@@ -267,9 +269,11 @@ async def startup(ctx: dict) -> None:
 
     from app.core.config import settings
     from app.core.db import AsyncSessionLocal
+    from app.core.logging_config import configure_logging
     from app.services.proxy_manager import ProxyManager
     from app.services.warc.storage import create_warc_storage
 
+    configure_logging(settings.log_level)
     ctx["settings"] = settings
     # Status keys must be on the same Redis DB the API reads from.
     ctx["redis"] = aioredis.from_url(settings.redis_url, decode_responses=False)

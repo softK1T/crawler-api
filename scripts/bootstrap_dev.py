@@ -39,7 +39,9 @@ async def _bootstrap() -> str:
 
         # Application — idempotent.
         result = await db.execute(
-            select(Application).where(Application.tenant_id == tenant.id, Application.name == "dev-app")
+            select(Application).where(
+                Application.tenant_id == tenant.id, Application.name == "dev-app"
+            )
         )
         app = result.scalar_one_or_none()
         if app is None:

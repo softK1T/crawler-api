@@ -60,6 +60,8 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_REGION: us-east-1
+      WARC_MAX_SIZE_BYTES: "1"
+      WARC_MAX_AGE_S: "0"
       CALLBACK_HMAC_SECRET: dev-secret-change-in-prod
       API_KEYS_RAW: crw_live_local_dev_key_abcdefghijkl
       ENABLE_TRACING: "false"
@@ -74,6 +76,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://crawler:crawler@db:5432/crawlerdb
       REDIS_URL: redis://redis:6379/0
@@ -83,6 +87,8 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_REGION: us-east-1
+      WARC_MAX_SIZE_BYTES: "1"
+      WARC_MAX_AGE_S: "0"
       CALLBACK_HMAC_SECRET: dev-secret-change-in-prod
       API_KEYS_RAW: crw_live_local_dev_key_abcdefghijkl
       ENABLE_TRACING: "false"
