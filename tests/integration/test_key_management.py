@@ -450,3 +450,22 @@ def test_require_scope_rejects_unknown_scope():
 
     with pt.raises(ValueError, match="Invalid scope"):
         require_scope("invalid_scope")
+
+
+@pytest.mark.integration
+async def test_create_api_key_returns_non_empty_raw_key(db_session, application_factory):
+    """create_api_key must return a non-empty raw_key — empty is a silent auth bypass."""
+    from app.services.key_service import create_api_key
+
+    app = await application_factory()
+    _row, raw_key = await create_api_key(
+        db_session,
+        application_id=app.id,
+        scopes=["fetch"],
+        mode="live",
+        issuer_key_id=None,
+    )
+
+    assert raw_key, "raw_key must not be empty"
+    assert raw_key.startswith("crw"), f"raw_key must start with crw, got {raw_key[:8]!r}"
+    assert len(raw_key) > 20, f"raw_key too short: {len(raw_key)} chars"

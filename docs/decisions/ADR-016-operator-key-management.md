@@ -325,6 +325,8 @@ We will create a new Alembic revision, chained from `a7c55bf575f3`, that adds tw
 
 The revision ID format will be `0002_add_issuer_key_id_and_owner_label`, chained from `a7c55bf575f3`. The migration will be reviewed in isolation in Stage B before any endpoint code is written.
 
+**Disposition (Stage B):** The shipped revision is `"0002"` (short form) in the `revision` constant, matching the project convention established by migration `0001` which also uses a short revision string despite the file being named `0001_initial_schema.py`. The file is named `0002_add_issuer_key_id_and_owner_label.py` as specified; only the `revision` constant uses the short form for consistency.
+
 ### D9. Bootstrap Convergence
 
 We will rewrite `scripts/bootstrap_dev.py` in Stage B so that API key creation calls `app.services.key_service.create_api_key()` (the same function `POST /v1/keys` will call), eliminating the dual key-minting path. Tenant and application creation may continue to use direct ORM inserts, as those entities have no equivalent HTTP endpoints invoked from bootstrap — only the key-minting path must converge to a single code path.
@@ -362,6 +364,7 @@ Test name: `test_log_redaction_covers_generated_key_format`. The test: generates
 8. Stage B must rewrite `scripts/bootstrap_dev.py` to call the service layer for key creation per D9.
 9. Stage B must add the `KEY_ROTATION_OVERLAP_HOURS` setting to config and `.env.example`.
 10. Stage B must write all named tests from D2, D4, D5, D9, and D10.
+11. Stage B verify.sh uses `sleep 2` between fetch steps with different URLs to avoid domain-level rate limiting (default 1 RPS per domain). Trigger for revisiting: when the default domain policy is relaxed or verify.sh uses a dedicated test domain with a higher or disabled rate limit.
 
 ## Deferred
 

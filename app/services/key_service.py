@@ -67,6 +67,9 @@ async def create_api_key(
         db.add(row)
         await db.commit()
         await db.refresh(row)
+        # raw_key must never be empty — an empty key is a silent auth bypass.
+        if not raw_key:
+            raise RuntimeError("generate_api_key returned an empty raw key")
         return row, raw_key
 
     raise ConflictError(detail="Key prefix collision — retry exhausted")
@@ -128,6 +131,9 @@ async def rotate_api_key(
     await db.commit()
     await db.refresh(successor)
     await db.refresh(old_key)
+
+    if not raw_key:
+        raise RuntimeError("generate_api_key returned an empty raw key during rotation")
 
     logger.info(
         "Key rotated: issuer_key_id=%s rotated_key_id=%s new_key_prefix=%s old_key_expires_at=%s",
