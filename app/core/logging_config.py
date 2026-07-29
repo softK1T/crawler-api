@@ -17,7 +17,7 @@ import structlog
 # ── Credential redaction ─────────────────────────────────────────────────────
 _PROXY_LINE = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3}|[\w.-]+):(\d{2,5}):[^:\s]+:[^:\s]+")
 _PROXY_URL = re.compile(r"(https?|socks5)://[^:/@\s]+:[^:/@\s]+@")
-_API_KEY = re.compile(r"\b(crw_(?:live|test)_[A-Za-z0-9]{8})_[A-Za-z0-9_-]+")
+_API_KEY = re.compile(r"\b(crw[lt][A-Za-z0-9_-]{4}|crw_(?:live|test)_[A-Za-z0-9]{8})[A-Za-z0-9_-]+")
 
 
 def redact(text: str) -> str:

@@ -39,6 +39,7 @@ class ApiKey(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    issuer_key_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     # ORM relationship — requires explicit selectinload; lazy="raise" prevents N+1.
     application: Mapped["Application"] = relationship(

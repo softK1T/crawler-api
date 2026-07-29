@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 # Use the project venv if it exists.
 if [ -f .venv/bin/python3 ]; then
     export PATH="$(pwd)/.venv/bin:$PATH"
+elif GIT_DIR="$(git rev-parse --git-common-dir 2>/dev/null)" && [ -f "$GIT_DIR/../.venv/bin/python3" ]; then
+    export PATH="$(cd "$GIT_DIR/.." && pwd)/.venv/bin:$PATH"
 fi
 
 export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://crawler:crawler@localhost:5432/crawlerdb}"
@@ -73,56 +75,159 @@ for i in $(seq 1 20); do
 done
 log "/readyz OK"
 
-# 9. Smoke test — POST /v1/fetch
-log "POST /v1/fetch..."
-RESP=$(curl -s -X POST http://localhost:8000/v1/fetch \
+# ── Operator key management workflow (ADR-016) ─────────────────────────────────
+
+# 9. Create a tenant and application via the operator key.
+log "Create tenant..."
+TENANT_RESP=$(curl -sf -X POST http://localhost:8000/v1/tenants \
     -H "X-API-Key: ${TEST_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://example.com","mode":"static"}')
+    -d '{"name":"verify-tenant"}')
+TENANT_ID=$(echo "$TENANT_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])")
+[ -n "$TENANT_ID" ] || err "Tenant: no id in response: $TENANT_RESP"
+log "tenant_id=$TENANT_ID"
 
-JOB_ID=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
-if [ -z "$JOB_ID" ]; then
-    err "Smoke: no job_id in response: $RESP"
-fi
+log "Create application..."
+APP_RESP=$(curl -sf -X POST http://localhost:8000/v1/applications \
+    -H "X-API-Key: ${TEST_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"tenant_id\":\"${TENANT_ID}\",\"name\":\"verify-app\"}")
+APP_ID=$(echo "$APP_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])")
+[ -n "$APP_ID" ] || err "Application: no id in response: $APP_RESP"
+log "application_id=$APP_ID"
+
+# 10. Issue a key for that application.
+log "Issue key..."
+KEY_RESP=$(curl -sf -X POST http://localhost:8000/v1/keys \
+    -H "X-API-Key: ${TEST_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"application_id\":\"${APP_ID}\",\"scopes\":[\"fetch\",\"archive\"],\"mode\":\"live\"}")
+NEW_KEY=$(echo "$KEY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['raw_key'])")
+KEY_ID=$(echo "$KEY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])")
+[ -n "$NEW_KEY" ] || err "Issue key: no raw_key in response: $KEY_RESP"
+[ -n "$KEY_ID" ] || err "Issue key: no id in response: $KEY_RESP"
+[ "$NEW_KEY" != "${TEST_KEY}" ] || err "Issued key must differ from operator key"
+log "key_id=$KEY_ID prefix=${NEW_KEY:0:8}..."
+
+# 11. Fetch with the issued key.
+# Query usage BEFORE fetch to compare after.
+log "Usage before fetch..."
+USAGE_BEFORE=$(curl -sf "http://localhost:8000/v1/usage/applications/${APP_ID}" \
+    -H "X-API-Key: ${TEST_KEY}")
+REQ_BEFORE=$(echo "$USAGE_BEFORE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_requests',0))" 2>/dev/null)
+echo "application_id=$APP_ID requests_before=$REQ_BEFORE"
+[ "$REQ_BEFORE" != "" ] || err "Usage before: empty response"
+
+log "Fetch with issued key..."
+sleep 2
+FETCH_RESP=$(curl -s -X POST http://localhost:8000/v1/fetch \
+    -H "X-API-Key: ${NEW_KEY}" \
+    -H "Content-Type: application/json" \
+    -d '{"url":"http://httpbin.org/get","mode":"static"}')
+JOB_ID=$(echo "$FETCH_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
+[ -n "$JOB_ID" ] || err "Fetch: no job_id in response: $FETCH_RESP"
 log "job_id=$JOB_ID"
 
-# 10. Poll job — wait for completion (bounded).
+# 12. Poll for completion.
 log "Poll job..."
 for i in $(seq 1 30); do
     S="$(curl -s "http://localhost:8000/v1/jobs/${JOB_ID}" \
-        -H "X-API-Key: ${TEST_KEY}" | python3 -c "
+        -H "X-API-Key: ${NEW_KEY}" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 print(d.get('status',''))
 " 2>/dev/null)"
     if [ "$S" = "completed" ] || [ "$S" = "failed" ]; then
+        [ "$S" = "failed" ] && err "Fetch: job failed"
         log "Job status: $S"
-        [ "$S" = "failed" ] && err "Smoke: job failed"
         break
     fi
     sleep 2
 done
 
-# 11. Archive — list and get content.
-log "GET /v1/archive/..."
-ARCHIVE_LIST=$(curl -sf "http://localhost:8000/v1/archive/?url=http://example.com" \
-    -H "X-API-Key: ${TEST_KEY}")
-echo "$ARCHIVE_LIST" | python3 -c "import sys,json; items=json.load(sys.stdin); assert len(items)>=1, 'empty archive'" || err "Archive empty"
+# 13. Archive with issued key.
+log "Archive with issued key..."
+ARCHIVE_LIST=$(curl -sf "http://localhost:8000/v1/archive/?url=http://httpbin.org/get" \
+    -H "X-API-Key: ${NEW_KEY}")
+echo "$ARCHIVE_LIST" | python3 -c "
+import sys,json
+items=json.load(sys.stdin)
+assert len(items)>=1, 'empty archive'
+" || err "Archive empty for issued key"
 
-REQUEST_ID=$(echo "$ARCHIVE_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])" 2>/dev/null)
-log "GET /v1/archive/${REQUEST_ID}..."
-ARCHIVE_CONTENT=$(curl -sf --max-time 30 "http://localhost:8000/v1/archive/${REQUEST_ID}" \
-    -H "X-API-Key: ${TEST_KEY}")
+ARCHIVE_ID=$(echo "$ARCHIVE_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+ARCHIVE_CONTENT=$(curl -sf --max-time 30 "http://localhost:8000/v1/archive/${ARCHIVE_ID}" \
+    -H "X-API-Key: ${NEW_KEY}")
 echo "$ARCHIVE_CONTENT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('body_b64'), 'empty body_b64'" || err "Archive body empty"
 log "Archive OK"
 
-# 12. Usage
-log "GET /v1/usage/..."
-USAGE=$(curl -sf "http://localhost:8000/v1/usage/" -H "X-API-Key: ${TEST_KEY}")
-echo "$USAGE"
-echo "$USAGE" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('total_requests',0)>=1, 'no requests'; assert d.get('total_bytes',0)>0, 'zero bytes'" || err "Usage empty"
+# 14. Assert usage_counter advanced for the application.
+log "Usage counter check..."
+USAGE_AFTER=$(curl -sf "http://localhost:8000/v1/usage/applications/${APP_ID}" \
+    -H "X-API-Key: ${TEST_KEY}")
+REQ_AFTER=$(echo "$USAGE_AFTER" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_requests',0))" 2>/dev/null)
+BYTES_AFTER=$(echo "$USAGE_AFTER" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_bytes',0))" 2>/dev/null)
+echo "application_id=$APP_ID requests_before=$REQ_BEFORE requests_after=$REQ_AFTER"
+[ "$REQ_AFTER" != "" ] || err "Usage after: empty response — zero rows matched"
+[ "$REQ_AFTER" -gt "$REQ_BEFORE" ] || err "Usage counter did not advance: before=$REQ_BEFORE after=$REQ_AFTER"
+[ "$BYTES_AFTER" -gt 0 ] || err "Zero bytes in usage"
+log "Usage counter OK"
 
-# 13. Cleanup
+# 15. Rotate the key.
+log "Rotate key..."
+ROTATE_RESP=$(curl -sf -X POST "http://localhost:8000/v1/keys/${KEY_ID}/rotate" \
+    -H "X-API-Key: ${TEST_KEY}" \
+    -H "Content-Type: application/json")
+ROTATED_KEY=$(echo "$ROTATE_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['raw_key'])")
+ROTATED_KEY_ID=$(echo "$ROTATE_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])")
+[ -n "$ROTATED_KEY" ] || err "Rotate: no raw_key in response"
+[ "$ROTATED_KEY" != "$NEW_KEY" ] || err "Rotated key must differ from original"
+[ "$ROTATED_KEY_ID" != "$KEY_ID" ] || err "Rotated key id must differ from original"
+log "rotated_key_id=$ROTATED_KEY_ID prefix=${ROTATED_KEY:0:8}..."
+
+# 16. New key works.
+log "New key works..."
+sleep 2
+NEW_FETCH=$(curl -s -X POST http://localhost:8000/v1/fetch \
+    -H "X-API-Key: ${ROTATED_KEY}" \
+    -H "Content-Type: application/json" \
+    -d '{"url":"http://httpbin.org/ip","mode":"static"}')
+NEW_JOB_ID=$(echo "$NEW_FETCH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
+[ -n "$NEW_JOB_ID" ] || err "New key fetch: no job_id in response"
+log "New key works: job_id=$NEW_JOB_ID"
+
+# 17. Old key still works during overlap window.
+sleep 2
+log "Old key during overlap..."
+OLD_CODE=$(curl -s -o /tmp/old-key-response.txt -w "%{http_code}" -X POST http://localhost:8000/v1/fetch \
+    -H "X-API-Key: ${NEW_KEY}" \
+    -H "Content-Type: application/json" \
+    -d '{"url":"http://httpbin.org/headers","mode":"static"}')
+OLD_FETCH=$(cat /tmp/old-key-response.txt)
+OLD_JOB_ID=$(echo "$OLD_FETCH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
+if [ -z "$OLD_JOB_ID" ]; then
+    log "Old key response (status=$OLD_CODE): $OLD_FETCH"
+    err "Old key during overlap: no job_id — key prematurely dead (HTTP $OLD_CODE)"
+fi
+log "Old key works during overlap: job_id=$OLD_JOB_ID"
+
+# 18. Force old key expiry into the past.
+log "Force old key expiry..."
+docker compose exec -T db psql -U crawler -d crawlerdb -c \
+    "UPDATE api_keys SET expires_at = NOW() - INTERVAL '1 hour' WHERE id = '${KEY_ID}'" 2>/dev/null || true
+
+# 19. Old key must now get 401.
+log "Old key after forced expiry..."
+EXPIRE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/v1/fetch \
+    -H "X-API-Key: ${NEW_KEY}" \
+    -H "Content-Type: application/json" \
+    -d '{"url":"http://httpbin.org/anything","mode":"static"}')
+[ "$EXPIRE_CODE" = "401" ] || err "Old key after expiry: expected 401, got $EXPIRE_CODE"
+log "Old key returns 401 after forced expiry"
+
+# ── End operator key management workflow ───────────────────────────────────────
+
+# 20. Cleanup
 docker compose down -v 2>/dev/null || true
 
 log "verify.sh: OK"

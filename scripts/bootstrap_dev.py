@@ -19,10 +19,9 @@ async def _bootstrap() -> str:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from app.core.config import settings
-    from app.core.security import generate_api_key
-    from app.models.api_key import ApiKey
     from app.models.application import Application
     from app.models.tenant import Tenant
+    from app.services.key_service import create_api_key
 
     engine = create_async_engine(str(settings.database_url), echo=False)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -50,17 +49,14 @@ async def _bootstrap() -> str:
             await db.commit()
             await db.refresh(app)
 
-        # API key with admin + fetch scopes — always create a new one.
-        raw_key, hashed_key = generate_api_key(mode="live")
-        api_key = ApiKey(
+        # API key with full scopes — delegate to the single key-minting path.
+        _row, raw_key = await create_api_key(
+            db,
             application_id=app.id,
-            prefix=raw_key[:8],
-            hashed_key=hashed_key,
             scopes=["fetch", "archive", "admin", "keys"],
             mode="live",
+            issuer_key_id=None,
         )
-        db.add(api_key)
-        await db.commit()
 
         print(raw_key)
         return raw_key

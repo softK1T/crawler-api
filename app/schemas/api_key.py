@@ -16,15 +16,16 @@ class ApiKeyResponse(BaseModel):
     prefix: str
     scopes: list[str]
     mode: str
-    is_active: bool
+    created_at: datetime
     last_used_at: datetime | None
     expires_at: datetime | None
-    created_at: datetime
+    revoked_at: datetime | None
+    application_id: UUID
     model_config = ConfigDict(from_attributes=True)
 
 
 class ApiKeyCreateResponse(ApiKeyResponse):
-    raw_key: str  # returned ONLY on creation, never stored, never logged
+    raw_key: str = ""  # set by endpoint after model_validate; returned ONCE
 
 
 class ApiKeyRevoke(BaseModel):
