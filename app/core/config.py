@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     max_batch_size: int = 1000
     batch_timeout_secs: int = 900
 
+    # Key rotation overlap window in hours (ADR-016 D4).
+    key_rotation_overlap_hours: int = 24
+
     # Rate limiter defaults
     key_rate_limit_rpm: int = 60  # per-key requests per minute
     default_monthly_quota: int = 100_000  # per-application monthly quota
