@@ -111,10 +111,11 @@ log "key_id=$KEY_ID prefix=${NEW_KEY:0:8}..."
 
 # 11. Fetch with the issued key.
 log "Fetch with issued key..."
+sleep 2
 FETCH_RESP=$(curl -s -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${NEW_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://example.com","mode":"static"}')
+    -d '{"url":"http://httpbin.org/get","mode":"static"}')
 JOB_ID=$(echo "$FETCH_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
 [ -n "$JOB_ID" ] || err "Fetch: no job_id in response: $FETCH_RESP"
 log "job_id=$JOB_ID"
@@ -138,7 +139,7 @@ done
 
 # 13. Archive with issued key.
 log "Archive with issued key..."
-ARCHIVE_LIST=$(curl -sf "http://localhost:8000/v1/archive/?url=http://example.com" \
+ARCHIVE_LIST=$(curl -sf "http://localhost:8000/v1/archive/?url=http://httpbin.org/get" \
     -H "X-API-Key: ${NEW_KEY}")
 echo "$ARCHIVE_LIST" | python3 -c "
 import sys,json
@@ -178,20 +179,22 @@ log "rotated_key_id=$ROTATED_KEY_ID prefix=${ROTATED_KEY:0:8}..."
 
 # 16. New key works.
 log "New key works..."
+sleep 2
 NEW_FETCH=$(curl -s -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${ROTATED_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://example.com","mode":"static"}')
+    -d '{"url":"http://httpbin.org/ip","mode":"static"}')
 NEW_JOB_ID=$(echo "$NEW_FETCH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
 [ -n "$NEW_JOB_ID" ] || err "New key fetch: no job_id in response"
 log "New key works: job_id=$NEW_JOB_ID"
 
 # 17. Old key still works during overlap window.
+sleep 2
 log "Old key during overlap..."
 OLD_CODE=$(curl -s -o /tmp/old-key-response.txt -w "%{http_code}" -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${NEW_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://example.com","mode":"static"}')
+    -d '{"url":"http://httpbin.org/headers","mode":"static"}')
 OLD_FETCH=$(cat /tmp/old-key-response.txt)
 OLD_JOB_ID=$(echo "$OLD_FETCH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
 if [ -z "$OLD_JOB_ID" ]; then
@@ -210,7 +213,7 @@ log "Old key after forced expiry..."
 EXPIRE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${NEW_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://example.com","mode":"static"}')
+    -d '{"url":"http://httpbin.org/anything","mode":"static"}')
 [ "$EXPIRE_CODE" = "401" ] || err "Old key after expiry: expected 401, got $EXPIRE_CODE"
 log "Old key returns 401 after forced expiry"
 
