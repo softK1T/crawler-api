@@ -1,4 +1,10 @@
-"""Playwright-based fetcher — browser-per-fetch with SSRF interception."""
+"""Playwright-based fetcher — browser-per-fetch with SSRF interception.
+
+INVARIANT (ADR-014): every fetch creates a **fresh browser context** and closes
+it in a finally block.  A future browser pool (Stage 15) reuses *browsers*, never
+contexts — sharing a context across two fetches would leak cookies across tenants.
+Do not weaken this boundary.
+"""
 
 import logging
 import time
@@ -12,8 +18,8 @@ logger = logging.getLogger(__name__)
 class PlaywrightFetcher:
     """Implements FetcherProtocol using Playwright async API.
 
-    A new browser is launched per-fetch (not pooled). Browser reuse is
-    deferred to a future optimization stage (see ADR-007).
+    Browser-per-fetch with strict context isolation.  Pooling of browsers
+    (not contexts) is deferred to Stage 15 (see ADR-007, ADR-014).
     """
 
     async def fetch(
@@ -49,14 +55,18 @@ class PlaywrightFetcher:
         except ImportError:
             raise FetchError("Playwright not installed. Run: pip install playwright") from None
 
+        playwright_api = None
         browser = None
+        context = None
         try:
-            p = await async_playwright().start()
+            playwright_api = await async_playwright().start()
             launch_kwargs: dict = {"headless": True}
             if proxy_config:
                 launch_kwargs["proxy"] = proxy_config
 
-            browser = await p.chromium.launch(**launch_kwargs)
+            browser = await playwright_api.chromium.launch(**launch_kwargs)
+
+            # ── Fresh context per fetch (INVARIANT — ADR-014) ──────────────
             context = await browser.new_context(extra_http_headers=headers or {})
             page = await context.new_page()
 
@@ -66,9 +76,9 @@ class PlaywrightFetcher:
                     await validate_url_async(response.url)
                 except URLGuardError:
                     logger.warning(
-                        "[playwright] SSRF blocked navigation to %s — aborting", response.url
+                        "[playwright] SSRF blocked navigation to %s — aborting",
+                        response.url,
                     )
-                    # Abort by raising — caught in goto error handler.
 
             page.on("response", _check_response)
 
@@ -109,12 +119,19 @@ class PlaywrightFetcher:
                 raise FetchError(f"Request timed out: {url}") from exc
             raise FetchError(f"Playwright fetch failed: {msg}") from exc
         finally:
+            # Close in reverse order: page (implicit via context), context, browser.
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    logger.warning("Failed to close Playwright context", exc_info=True)
             if browser is not None:
                 try:
                     await browser.close()
                 except Exception:
                     logger.warning("Failed to close Playwright browser", exc_info=True)
-            try:
-                await p.stop()
-            except Exception:
-                pass
+            if playwright_api is not None:
+                try:
+                    await playwright_api.stop()
+                except Exception:
+                    pass

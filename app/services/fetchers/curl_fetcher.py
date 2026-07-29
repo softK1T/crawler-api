@@ -1,23 +1,51 @@
-"""curl_cffi-based fetcher — runs sync requests in ThreadPoolExecutor."""
+"""curl_cffi-based fetcher — runs sync requests in a shared ThreadPoolExecutor."""
 
 import asyncio
+import atexit
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from uuid import UUID
 
+from app.core.config import settings
 from app.services.fetchers.base import FetchError, FetchResult, _detect_block
 
 logger = logging.getLogger(__name__)
 
 IMPERSONATION = "chrome120"
 
+# ── Shared executor ───────────────────────────────────────────────────────────
+_executor: ThreadPoolExecutor | None = None
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    """Return the module-level shared executor, creating it lazily."""
+    global _executor
+    if _executor is None:
+        max_workers = getattr(settings, "curl_executor_max_workers", 8)
+        _executor = ThreadPoolExecutor(max_workers=max_workers)
+        logger.info("CurlFetcher: created shared executor max_workers=%d", max_workers)
+    return _executor
+
+
+def _shutdown_executor() -> None:
+    """Shut down the shared executor cleanly. Called from worker/app shutdown hooks."""
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=True)
+        _executor = None
+
+
+# Ensure cleanup on process exit if the hooks didn't fire.
+atexit.register(_shutdown_executor)
+
 
 class CurlFetcher:
     """Implements FetcherProtocol using curl_cffi.requests.
 
-    The sync curl_cffi call runs in a ``ThreadPoolExecutor`` to avoid
-    blocking the event loop and to sidestep the gevent+asyncio conflict.
+    Sync curl_cffi calls run in a shared ``ThreadPoolExecutor`` to avoid
+    blocking the event loop.  The executor is sized from config
+    (``curl_executor_max_workers``, default 8) and reused across calls.
     """
 
     async def fetch(
@@ -45,7 +73,7 @@ class CurlFetcher:
             proxy_url = getattr(proxy, "url", None)
         proxy_id: UUID | None = getattr(proxy, "id", None) if proxy else None
 
-        # 2. Run sync fetch in thread executor.
+        # 2. Run sync fetch in the shared thread executor.
         loop = asyncio.get_running_loop()
 
         def _sync_fetch() -> tuple:
@@ -88,15 +116,15 @@ class CurlFetcher:
 
             raise FetchError(f"Too many redirects from {url}")
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            try:
-                final_url, status_code, resp_headers, body, is_success = await loop.run_in_executor(
-                    executor, _sync_fetch
-                )
-            except FetchError:
-                raise
-            except Exception as exc:
-                raise FetchError(f"curl_cffi fetch failed: {exc}") from exc
+        executor = _get_executor()
+        try:
+            final_url, status_code, resp_headers, body, is_success = await loop.run_in_executor(
+                executor, _sync_fetch
+            )
+        except FetchError:
+            raise
+        except Exception as exc:
+            raise FetchError(f"curl_cffi fetch failed: {exc}") from exc
 
         # 3. Detect block.
         blocked, reason = _detect_block(status_code, body if is_success else b"")

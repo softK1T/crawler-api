@@ -9,9 +9,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "httpx[http2]>=0.27.0",
-    "celery>=5.3.4",                       # Stage-8 compat shim — scheduled for removal
     "redis>=5.0.1",
-    "gevent>=24.2.1",
     "starlette>=0.27.0",
     "sqlalchemy>=2.0.0",
     "asyncpg>=0.29.0",
@@ -80,10 +78,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S106"]  # asserts and dummy credentials are expected
 "__init__.py" = ["F401"]
-"app/services/crawler.py" = ["S311", "B007", "ASYNC109"]  # random for UA selection, pre-existing
 "app/core/logging_config.py" = ["S110"]  # intentional try-except-pass in redaction filter
-"app/services/geo_proxy_pool.py" = ["S110"]  # intentional try-except-pass in country detection
-"app/services/stealth_crawler.py" = ["S311", "ASYNC109", "S110"]  # random for impersonation/viewport; timeout param pre-existing
 "app/services/proxy_manager.py" = ["S311", "S110"]  # random for weighted selection (non-crypto); intentional try-except-pass on sticky delete
 "app/services/fetchers/base.py" = ["S311"]  # random.uniform for jittered delay (non-crypto)
 "app/services/fetchers/headers.py" = ["S311"]  # random.choice for UA rotation (non-crypto)
@@ -116,7 +111,6 @@ module = [
     "curl_cffi.*",
     "html2text.*",
     "testcontainers.*",
-    "celery.*",
     "sqlalchemy.*",
     "asyncpg.*",
     "argon2.*",
@@ -124,7 +118,6 @@ module = [
     "redis.*",
     "httpx.*",
     "lxml.*",
-    "gevent.*",
     "starlette.*",
     "tldextract.*",
     "warcio.*",
@@ -138,7 +131,6 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "app.services.crawler",
     "app.services.session_manager",
     "app.services.job_service",
     "app.services.proxy_health",
@@ -151,7 +143,6 @@ warn_return_any = false
 module = [
     "app.services.storage",
     "app.services.webshare_sync",
-    "app.worker.tasks.crawl",
 ]
 disable_error_code = ["return-value", "arg-type", "assignment"]
 

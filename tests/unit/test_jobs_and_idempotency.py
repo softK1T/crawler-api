@@ -1,4 +1,4 @@
-"""Unit tests for job idempotency and Celery shim."""
+"""Unit tests for job idempotency."""
 
 from uuid import uuid4
 
@@ -21,11 +21,3 @@ async def test_idempotency_namespaced_by_application(redis_client):
 
     r3 = await svc.handle_idempotency("key-1", app_b)
     assert r3 is None  # Different namespace.
-
-
-def test_submit_crawl_shim_exists():
-    from app.services.job_service import submit_crawl
-
-    job_id = submit_crawl("https://example.com", mode="static")
-    assert isinstance(job_id, str)
-    assert len(job_id) > 0

@@ -30,9 +30,6 @@ class Settings(BaseSettings):
     # Example: postgresql+asyncpg://user:pass@localhost:5432/crawlerdb
     database_url: PostgresDsn
 
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/1"
-
     redis_url: str = "redis://localhost:6379/2"
     result_ttl_secs: int = 86400
 
@@ -61,6 +58,13 @@ class Settings(BaseSettings):
     webshare_proxy_file: str = "proxies.txt"
     # How often to re-sync in seconds (default: 6 hours)
     webshare_sync_interval_secs: int = 21600
+    # Enable/disable the arq cron proxy sync (Stage 14).
+    proxy_sync_enabled: bool = True
+
+    # Fetcher tuning (Stage 14).
+    curl_executor_max_workers: int = 8
+    browser_pool_size: int = 2
+    browser_idle_timeout_s: int = 300
 
     # WARC / S3 archival settings
     s3_endpoint_url: str | None = None  # None = AWS S3; set for MinIO

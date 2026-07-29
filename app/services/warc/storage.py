@@ -53,14 +53,16 @@ class WarcStorage:
                 content_type=content_type,
             )
 
-        # 2. Rotate if needed.
+        # 2. Rotate if needed — capture the filename BEFORE rotation so the
+        #    index row matches the file actually uploaded to S3.
+        warc_filename = self._writer.filename
         if self._writer.needs_rotation():
             await self._rotate()
 
         # 3. Index.
         warc_index = await index_record(
             warc_record,
-            self._writer.filename,
+            warc_filename,
             request_log_id,
             fetch_result.status_code,
             content_type,

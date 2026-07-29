@@ -61,3 +61,11 @@ are not migrated. The shim will be removed in Stage 13 after full verification.
 - arq workers must be added to docker-compose as a separate service (Stage 12).
 - retry_jobs=False: all retry logic lives inside fetch_with_retry (Stage 6).
   arq-level retries would cause double-crawls on transient failures.
+
+## Stage 14 update (ADR-014)
+
+The Celery compatibility shim and Celery Beat consequence described above
+were resolved in ADR-014 (Stage 14):
+- Celery fully removed from codebase and dependencies
+- Periodic proxy sync migrated to arq cron (every 30 min)
+- Legacy endpoints POST /v1/jobs/, GET status, GET result removed

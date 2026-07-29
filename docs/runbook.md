@@ -89,3 +89,35 @@ Run before December of the current year. See ADR-003.
 ### Backup
 - PostgreSQL: `docker compose exec db pg_dump -U crawler crawlerdb > backup.sql`
 - WARC files are in S3/MinIO — ensure bucket versioning or lifecycle policies are configured.
+
+## Proxy Sync Cron (Stage 14)
+
+Webshare proxies are synced every 30 minutes via arq cron (`sync_proxies`).
+**Manual trigger:**
+```bash
+docker compose exec worker python3 -c "
+import asyncio
+from app.worker.tasks.proxy_sync import sync_proxies
+from app.worker.tasks.fetch_task import startup, shutdown
+async def run():
+    ctx = {}
+    await startup(ctx)
+    await sync_proxies(ctx)
+    await shutdown(ctx)
+asyncio.run(run())
+"
+```
+
+**Reading the summary log event:**
+The task logs `sync_proxies: done added=X updated=Y deactivated=Z total_fetched=N`.
+- `added`: new proxies inserted.
+- `updated`: previously inactive proxies reactivated.
+- `deactivated`: proxies no longer in the Webshare list were set `is_active=False`.
+  They are never hard-deleted — FK constraints from `request_log` and health
+  history depend on the row surviving.
+
+## Browser Mode (Stage 14)
+
+Playwright ("browser"/"camoufox" modes) runs **browser-per-fetch** — each request
+launches a fresh browser and context.  There is no pooling.  This caps throughput
+at ~1 req/s per worker.  A bounded browser pool is planned for Stage 15.
