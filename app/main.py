@@ -20,41 +20,9 @@ configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
-async def _startup_proxy_sync():
-    """On startup: if WEBSHARE_API_KEY is set, sync proxies from Webshare API."""
-    if not settings.webshare_api_key:
-        logger.info("WEBSHARE_API_KEY not set — skipping auto proxy sync")
-        return
-    try:
-        from app.services.proxy_singleton import get_proxy_pool, reset_proxy_pool
-        from app.services.webshare_sync import sync_webshare_to_file
-
-        logger.info("Auto-syncing proxies from Webshare...")
-        _count = sync_webshare_to_file(
-            api_key=settings.webshare_api_key,
-            output_path=settings.webshare_proxy_file,
-        )
-        reset_proxy_pool()
-        pool = get_proxy_pool()
-        if pool:
-            stats = pool.get_stats()
-            logger.info(
-                "Proxy pool ready: %d total, %d healthy (geo: %s)",
-                stats["total_proxies"],
-                stats["healthy"],
-                list(pool.get_geo_stats().keys()),
-            )
-        else:
-            logger.warning("Proxy pool failed to initialise after sync")
-    except Exception as exc:
-        logger.error("Startup proxy sync failed: %s", exc)
-        # Non-fatal — app continues without proxies
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_tracing(settings)
-    await _startup_proxy_sync()
 
     # Initialize services in background — don't block server startup.
     _init_task = asyncio.create_task(_init_services(app))  # noqa: RUF006 — kept for cancellation

@@ -1,7 +1,7 @@
 """Proxy manager: weighted selection, circuit breaker, sticky sessions.
 
 Replaces the legacy SmartProxyPool / GeoProxyPool for all Stage 6+ code paths.
-Legacy pools in ``geo_proxy_pool.py`` and ``crawler.py`` remain intact for
+Legacy pools were removed in Stage 14.
 backward compatibility with existing Celery worker tasks.
 """
 

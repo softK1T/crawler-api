@@ -14,7 +14,7 @@ redis_settings = arq.connections.RedisSettings.from_dsn(_redis_dsn)
 
 class WorkerSettings:
     functions = [fetch_task]
-    cron_jobs = [arq_cron(sync_proxies, minute={0, 30}, run_at_startup=False)]
+    cron_jobs = [arq_cron(sync_proxies, minute={0, 30}, run_at_startup=True)]
     on_startup = startup
     on_shutdown = shutdown
     queue_name = "arq:crawler"
