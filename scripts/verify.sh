@@ -111,7 +111,7 @@ echo "$ARCHIVE_LIST" | python3 -c "import sys,json; items=json.load(sys.stdin); 
 
 REQUEST_ID=$(echo "$ARCHIVE_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])" 2>/dev/null)
 log "GET /v1/archive/${REQUEST_ID}..."
-ARCHIVE_CONTENT=$(curl -sf "http://localhost:8000/v1/archive/${REQUEST_ID}" \
+ARCHIVE_CONTENT=$(curl -sf --max-time 30 "http://localhost:8000/v1/archive/${REQUEST_ID}" \
     -H "X-API-Key: ${TEST_KEY}")
 echo "$ARCHIVE_CONTENT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('body_b64'), 'empty body_b64'" || err "Archive body empty"
 log "Archive OK"
