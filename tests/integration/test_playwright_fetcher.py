@@ -31,9 +31,7 @@ async def test_fresh_context_per_fetch_cookie_isolation():
         api = await async_playwright().start()
         browser = await api.chromium.launch(headless=True)
         context = await browser.new_context()
-        await context.add_cookies(
-            [{"name": "leaked", "value": "xyz", "url": "http://httpbin.org"}]
-        )
+        await context.add_cookies([{"name": "leaked", "value": "xyz", "url": "http://httpbin.org"}])
         page = await context.new_page()
         await page.goto("http://httpbin.org/cookies", timeout=15000)
         body = await page.content()
@@ -80,8 +78,6 @@ async def test_ssrf_interception_handler_fires_per_fetch():
         # that's acceptable (the SSRF guard on the initial URL passed).
     except FetchError as exc:
         # FetchError is expected if SSRF was triggered.
-        assert "blocked" in str(exc).lower() or "169.254" in str(exc), (
-            f"Unexpected error: {exc}"
-        )
+        assert "blocked" in str(exc).lower() or "169.254" in str(exc), f"Unexpected error: {exc}"
     except Exception:
         pytest.skip("httpbin.org not reachable")
