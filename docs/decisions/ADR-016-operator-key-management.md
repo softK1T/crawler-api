@@ -302,6 +302,8 @@ This will be enforced in the Pydantic response schema — either by not declarin
 
 Test name: `test_list_keys_response_excludes_hashed_key`. The test asserts: for each item in the response list, `"hashed_key" not in item`; the test first asserts the response list is non-empty so a zero-result response cannot be mistaken for evidence.
 
+**Disposition of `is_active` (Stage B, B0):** `is_active` is dropped from the response. It is derivable from `revoked_at IS NOT NULL` (a revoked key is inactive) and `expires_at` (an expired key is rejected by `resolve_api_key` but `is_active` stays `TRUE` internally). No consumer — frontend, test, or integration — reads `is_active` from the API key response. The column remains on the model for query filtering in `resolve_api_key` (which uses `is_active.is_(True)`).
+
 ### D6. Test vs Live Mode
 
 We will treat `mode` as a label only at this time. Keys with `mode="test"` (prefix `crwt`) carry no behavioural difference from `mode="live"`: they use the same proxy pool, incur the same billing, and execute fetches identically. The label exists for future use.
