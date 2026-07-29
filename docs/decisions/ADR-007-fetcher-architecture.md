@@ -96,3 +96,11 @@ a future stage when residential proxy support is added.
 - **Negative:** Three engines mean three places where new features (e.g.,
   custom TLS fingerprinting) must be implemented. The Protocol interface
   minimizes drift but doesn't eliminate it.
+
+## Stage 14 update (ADR-014)
+
+The shared-executor and browser-pooling items deferred in this ADR were
+addressed in ADR-014 (Stage 14):
+- Shared executor: implemented (module-level ThreadPoolExecutor, max_workers=8)
+- Browser pool: re-deferred to Stage 15 with context-isolation invariant
+  (pool reuses browsers, never contexts — ADR-014 §5)
