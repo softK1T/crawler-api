@@ -37,6 +37,7 @@ from app.schemas.tenant import (
     TenantResponse,
 )
 from app.services.key_service import create_api_key as mint_key
+from app.services.key_service import rotate_api_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth-keys"])
@@ -171,6 +172,40 @@ async def revoke_api_key(
         )
 
     return row
+
+
+@router.post("/v1/keys/{key_id}/rotate", response_model=ApiKeyCreateResponse, status_code=201)
+async def rotate_api_key_endpoint(
+    key_id: UUID,
+    api_key: ApiKey = Depends(require_scope(SCOPE_KEYS)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rotate an API key: mint a successor, set the old key's expiry.
+
+    The old key remains valid for KEY_ROTATION_OVERLAP_HOURS so clients
+    have time to swap.  The new raw key is returned exactly once.
+    """
+    # Load the target key first — for non-admin cross-tenant access, return
+    # 404 to avoid leaking existence of other tenants' key IDs.
+    result = await db.execute(select(ApiKey).where(ApiKey.id == key_id))
+    target = result.scalar_one_or_none()
+    if target is None:
+        raise NotFoundError(detail="API key not found")
+
+    # D3 — cross-application access requires admin.  Return 404, not 403,
+    # when the caller is not admin and the key belongs to another app.
+    if SCOPE_ADMIN not in api_key.scopes and api_key.application_id != target.application_id:
+        raise NotFoundError(detail="API key not found")
+
+    successor, raw_key = await rotate_api_key(
+        db,
+        key_id=key_id,
+        issuer_key_id=api_key.id,
+    )
+
+    response = ApiKeyCreateResponse.model_validate(successor)
+    response.raw_key = raw_key
+    return response
 
 
 # ── Tenant & Application management ──────────────────────────────────────────
