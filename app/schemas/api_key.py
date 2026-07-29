@@ -25,7 +25,7 @@ class ApiKeyResponse(BaseModel):
 
 
 class ApiKeyCreateResponse(ApiKeyResponse):
-    raw_key: str  # returned ONLY on creation, never stored, never logged
+    raw_key: str = ""  # set by endpoint after model_validate; returned ONCE
 
 
 class ApiKeyRevoke(BaseModel):

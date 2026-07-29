@@ -5,6 +5,12 @@ from uuid import uuid4
 
 import pytest
 
+
+def _unique_prefix() -> str:
+    """Generate a unique 8-char prefix with random hex suffix."""
+    return f"crwl{uuid4().hex[:4]}"
+
+
 # ── D2: Privilege escalation ──────────────────────────────────────────────────
 
 
@@ -21,7 +27,7 @@ async def test_keys_only_caller_cannot_mint_admin_key(db_session, application_fa
     # Caller has keys + fetch, NOT admin.
     caller = ApiKey(
         application_id=app.id,
-        prefix="crwlAAAA",
+        prefix=_unique_prefix(),
         hashed_key="dummy",
         scopes=["keys", "fetch"],
         mode="live",
@@ -47,7 +53,7 @@ async def test_keys_only_caller_cannot_mint_keys_key(db_session, application_fac
 
     caller = ApiKey(
         application_id=app.id,
-        prefix="crwlBBBB",
+        prefix=_unique_prefix(),
         hashed_key="dummy",
         scopes=["keys", "fetch"],
         mode="live",
@@ -72,7 +78,7 @@ async def test_admin_plus_keys_caller_can_mint_keys_key(db_session, application_
 
     caller = ApiKey(
         application_id=app.id,
-        prefix="crwlCCCC",
+        prefix=_unique_prefix(),
         hashed_key="dummy",
         scopes=["admin", "keys", "fetch"],
         mode="live",
@@ -99,7 +105,7 @@ async def test_caller_cannot_grant_scope_not_held(db_session, application_factor
 
     caller = ApiKey(
         application_id=app.id,
-        prefix="crwlDDDD",
+        prefix=_unique_prefix(),
         hashed_key="dummy",
         scopes=["fetch"],
         mode="live",
@@ -129,7 +135,7 @@ async def test_keys_only_caller_confined_to_own_application(db_session, applicat
 
     caller = ApiKey(
         application_id=app1.id,
-        prefix="crwlEEEE",
+        prefix=_unique_prefix(),
         hashed_key="dummy",
         scopes=["keys", "fetch"],
         mode="live",
@@ -155,7 +161,7 @@ async def test_admin_caller_can_target_any_application(db_session, application_f
 
     caller = ApiKey(
         application_id=app1.id,
-        prefix="crwlFFFF",
+        prefix=_unique_prefix(),
         hashed_key="dummy",
         scopes=["admin", "keys", "fetch"],
         mode="live",
@@ -182,11 +188,12 @@ async def test_rotate_returns_new_raw_key_once(db_session):
     from app.models.tenant import Tenant
     from app.services.key_service import rotate_api_key
 
+    tag = uuid4().hex[:8]
     # Setup: tenant → app → key.
-    tenant = Tenant(name="test-tenant")
+    tenant = Tenant(name=f"test-tenant-{tag}")
     db_session.add(tenant)
     await db_session.commit()
-    app = Application(tenant_id=tenant.id, name="test-app")
+    app = Application(tenant_id=tenant.id, name=f"test-app-{tag}")
     db_session.add(app)
     await db_session.commit()
 
@@ -220,10 +227,11 @@ async def test_rotated_old_key_valid_during_overlap(db_session):
     from app.models.tenant import Tenant
     from app.services.key_service import rotate_api_key
 
-    tenant = Tenant(name="test-tenant")
+    tag = uuid4().hex[:8]
+    tenant = Tenant(name=f"test-tenant-{tag}")
     db_session.add(tenant)
     await db_session.commit()
-    app = Application(tenant_id=tenant.id, name="test-app")
+    app = Application(tenant_id=tenant.id, name=f"test-app-{tag}")
     db_session.add(app)
     await db_session.commit()
 
@@ -257,10 +265,11 @@ async def test_rotated_old_key_rejected_after_overlap_forced_to_expire(db_sessio
     from app.models.tenant import Tenant
     from app.services.key_service import rotate_api_key
 
-    tenant = Tenant(name="test-tenant")
+    tag = uuid4().hex[:8]
+    tenant = Tenant(name=f"test-tenant-{tag}")
     db_session.add(tenant)
     await db_session.commit()
-    app = Application(tenant_id=tenant.id, name="test-app")
+    app = Application(tenant_id=tenant.id, name=f"test-app-{tag}")
     db_session.add(app)
     await db_session.commit()
 
@@ -297,10 +306,11 @@ async def test_rotate_revoked_key_returns_409(db_session):
     from app.models.tenant import Tenant
     from app.services.key_service import rotate_api_key
 
-    tenant = Tenant(name="test-tenant")
+    tag = uuid4().hex[:8]
+    tenant = Tenant(name=f"test-tenant-{tag}")
     db_session.add(tenant)
     await db_session.commit()
-    app = Application(tenant_id=tenant.id, name="test-app")
+    app = Application(tenant_id=tenant.id, name=f"test-app-{tag}")
     db_session.add(app)
     await db_session.commit()
 
