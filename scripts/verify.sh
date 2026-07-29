@@ -21,9 +21,9 @@ ruff format --check . || err "ruff format check failed"
 log "mypy..."
 mypy app/ tests/ || err "mypy failed"
 
-# 3. Alembic
+# 3. Alembic — run via Docker compose against the compose DB.
 log "alembic upgrade..."
-alembic upgrade head || err "alembic upgrade failed"
+docker compose run --rm -T api alembic upgrade head 2>/dev/null || err "alembic upgrade failed"
 
 # 4. Tests
 log "pytest..."
@@ -39,49 +39,41 @@ docker build -t crawler-api-local . || err "docker build failed"
 
 # 6. Compose up
 log "docker compose up..."
-docker compose up -d db redis minio || err "compose services failed"
+docker compose up -d || err "compose failed"
 sleep 5
 
-# Wait for DB readiness
-for i in $(seq 1 15); do
-    docker compose exec -T db pg_isready -U crawler -d crawlerdb 2>/dev/null && break
-    sleep 1
-done
+# Re-run alembic after compose up (fresh DB).
+docker compose run --rm -T api alembic upgrade head 2>/dev/null || true
 
-# Run alembic inside the compose network if needed, then start remaining services
-docker compose up -d api worker || err "compose api/worker failed"
-
-# 7. Bootstrap auth
+# 7. Bootstrap auth — always runs inside container now that scripts/ is in the image.
 log "bootstrap auth..."
-TEST_KEY=$(python3 scripts/bootstrap_dev.py 2>/dev/null) || true
-if [ -z "$TEST_KEY" ]; then
-    # Fallback: run bootstrap in the API container
-    TEST_KEY=$(docker compose exec -T api python3 scripts/bootstrap_dev.py 2>/dev/null) || true
-fi
+TEST_KEY=$(docker compose exec -T api python3 scripts/bootstrap_dev.py 2>/dev/null | tail -1) || true
 if [ -z "$TEST_KEY" ]; then
     err "Could not bootstrap auth key"
 fi
 log "Test key: ${TEST_KEY:0:16}..."
 
 # 8. Health checks
+log "/healthz..."
 for i in $(seq 1 20); do
     curl -sf http://localhost:8000/healthz && break
     sleep 1
 done
 log "/healthz OK"
 
+log "/readyz..."
 for i in $(seq 1 20); do
     curl -sf http://localhost:8000/readyz && break
     sleep 1
 done
 log "/readyz OK"
 
-# 9. Smoke test
+# 9. Smoke test — POST /v1/fetch
 log "POST /v1/fetch..."
 RESP=$(curl -s -X POST http://localhost:8000/v1/fetch \
     -H "X-API-Key: ${TEST_KEY}" \
     -H "Content-Type: application/json" \
-    -d '{"url":"http://example.com","mode":"static"}')
+    -d '{"url":"http://httpbin.org/html","mode":"static"}')
 
 JOB_ID=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null)
 if [ -z "$JOB_ID" ]; then
@@ -89,27 +81,43 @@ if [ -z "$JOB_ID" ]; then
 fi
 log "job_id=$JOB_ID"
 
-# 10. Poll job
+# 10. Poll job — wait for completion (bounded).
+log "Poll job..."
 for i in $(seq 1 30); do
-    STATUS=$(curl -s "http://localhost:8000/v1/jobs/${JOB_ID}" \
-        -H "X-API-Key: ${TEST_KEY}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
-    if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
-        log "Job status: $STATUS"
+    S="$(curl -s "http://localhost:8000/v1/jobs/${JOB_ID}" \
+        -H "X-API-Key: ${TEST_KEY}" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(d.get('status',''))
+" 2>/dev/null)"
+    if [ "$S" = "completed" ] || [ "$S" = "failed" ]; then
+        log "Job status: $S"
+        [ "$S" = "failed" ] && err "Smoke: job failed"
         break
     fi
     sleep 2
 done
 
-# 11. Archive
-log "GET /v1/archive..."
-curl -sf "http://localhost:8000/v1/archive?url=http://example.com" \
-    -H "X-API-Key: ${TEST_KEY}" || log "Archive empty (expected)"
+# 11. Archive — list and get content.
+log "GET /v1/archive/..."
+ARCHIVE_LIST=$(curl -sf "http://localhost:8000/v1/archive/?url=http://httpbin.org/html" \
+    -H "X-API-Key: ${TEST_KEY}")
+echo "$ARCHIVE_LIST" | python3 -c "import sys,json; items=json.load(sys.stdin); assert len(items)>=1, 'empty archive'" || err "Archive empty"
+
+REQUEST_ID=$(echo "$ARCHIVE_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['request_id'])" 2>/dev/null)
+log "GET /v1/archive/${REQUEST_ID}..."
+ARCHIVE_CONTENT=$(curl -sf "http://localhost:8000/v1/archive/${REQUEST_ID}" \
+    -H "X-API-Key: ${TEST_KEY}")
+echo "$ARCHIVE_CONTENT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('body_b64'), 'empty body_b64'" || err "Archive body empty"
+log "Archive OK"
 
 # 12. Usage
-log "GET /v1/usage..."
-curl -sf "http://localhost:8000/v1/usage" -H "X-API-Key: ${TEST_KEY}" || log "Usage empty"
+log "GET /v1/usage/..."
+USAGE=$(curl -sf "http://localhost:8000/v1/usage/" -H "X-API-Key: ${TEST_KEY}")
+echo "$USAGE"
+echo "$USAGE" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('total_requests',0)>=1, 'no requests'; assert d.get('total_bytes',0)>0, 'zero bytes'" || err "Usage empty"
 
 # 13. Cleanup
-docker compose down
+docker compose down -v 2>/dev/null || true
 
 log "verify.sh: OK"

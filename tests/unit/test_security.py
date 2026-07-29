@@ -31,9 +31,12 @@ def test_verify_rejects_empty_hash():
 
 def test_generate_api_key_format():
     raw, hashed = generate_api_key()
-    assert raw.startswith("crw_live_")
+    assert raw.startswith("crwl")  # live key format: crwl<4 random>_...
     assert len(raw) > 32
     assert hashed.startswith("$argon2id$")
+
+    raw_t, _hashed_t = generate_api_key(mode="test")
+    assert raw_t.startswith("crwt")  # test key format: crwt<4 random>_...
 
 
 class TestResolveApiKey:
@@ -89,3 +92,25 @@ class TestResolveApiKey:
         # require_scope returns a sync callable, not an async one.
         with pytest.raises(ScopeError):
             checker(api_key=row)  # type: ignore[call-arg]
+
+    async def test_exactly_one_argon2_verify_per_auth(self, db_session, api_key_factory):
+        """With N keys in the DB (distinct prefixes), auth calls Argon2 exactly once."""
+        from unittest.mock import patch
+
+        from app.api.v1.dependencies import resolve_api_key
+        from app.core import security as sec_module
+
+        # Seed several keys with different prefixes.
+        raw1, _row1 = await api_key_factory(scopes=["fetch"])
+        _raw2, _row2 = await api_key_factory(scopes=["fetch"])
+        _raw3, _row3 = await api_key_factory(scopes=["fetch"])
+
+        # Spy on verify_api_key_hash to count calls.
+        with patch(
+            "app.api.v1.dependencies.verify_api_key_hash",
+            wraps=sec_module.verify_api_key_hash,
+        ) as spy:
+            result = await resolve_api_key(x_api_key=raw1, db=db_session)
+            assert result.id == _row1.id
+            # Exactly one Argon2 verification call — NOT iterating over all rows.
+            assert spy.call_count == 1, f"Expected 1 Argon2 call, got {spy.call_count}"

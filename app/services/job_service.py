@@ -82,6 +82,7 @@ class JobService:
             callback_url=callback_url,
             options=options,
             trace_id=trace_id,
+            _queue_name="arq:crawler",
         )
         await arq_redis.aclose()
 

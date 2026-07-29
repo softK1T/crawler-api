@@ -43,13 +43,15 @@ def verify_api_key_hash(raw_key: str, stored_hash: str) -> bool:
         return False
 
 
-def generate_api_key() -> tuple[str, str]:
+def generate_api_key(mode: str = "live") -> tuple[str, str]:
     """Generate a new API key pair.
 
-    Returns ``(raw_key, hashed_key)`` where *raw_key* always starts with
-    ``crw_live_`` followed by 32 url-safe random bytes.
+    The key starts with ``crwl`` (live) or ``crwt`` (test) followed by 4 random
+    url-safe chars so the 8-char prefix is distinctive (~16M combinations).
+    Collisions are handled by the caller (retry once, then 409).
     """
-    raw_key = f"crw_live_{secrets.token_urlsafe(32)}"
+    tag = "l" if mode == "live" else "t"
+    raw_key = f"crw{tag}{secrets.token_urlsafe(4)}{secrets.token_urlsafe(28)}"
     hashed_key = hash_api_key(raw_key)
     return raw_key, hashed_key
 

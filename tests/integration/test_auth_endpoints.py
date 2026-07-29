@@ -10,7 +10,7 @@ async def test_api_key_create_returns_raw_key_only_at_creation(
     """POST /v1/keys returns raw_key; GET /v1/keys does not."""
     # Creation returns raw_key.
     raw, row = await api_key_factory(scopes=["keys", "fetch"])
-    assert raw.startswith("crw_live_")
+    assert raw.startswith("crwl")
 
     # GET /v1/keys response schema must not have raw_key field.
     from app.schemas.api_key import ApiKeyResponse
@@ -71,17 +71,19 @@ async def test_invalid_scope_on_key_creation():
 async def test_prefix_collision_retry_once_then_409(db_session, application_factory):
     """Prefix collision retries once, then raises ConflictError."""
 
-    # First key occupies the prefix.
+    # First key occupies the prefix.  Use a prefix that can collide
+    # with a real generate_api_key() call — "crwlAAAA" (8 chars).
     app = await application_factory()
-    raw_key = "crw_live_collision_test_abcdefghijklm"
+    raw_key = "crwlAAAAtest_collision_abcdefghijklm"
     prefix = raw_key[:8]
 
+    from app.core.security import hash_api_key
     from app.models.api_key import ApiKey
 
     row = ApiKey(
         application_id=app.id,
         prefix=prefix,
-        hashed_key="hash1",
+        hashed_key=hash_api_key(raw_key),
         scopes=["fetch"],
         mode="live",
     )

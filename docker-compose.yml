@@ -87,6 +87,12 @@ services:
       API_KEYS_RAW: crw_live_local_dev_key_abcdefghijkl
       ENABLE_TRACING: "false"
     command: arq app.worker.arq_worker.WorkerSettings
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import redis; r=redis.from_url(\"redis://redis:6379/0\"); r.ping()'"]
+      interval: 30s
+      timeout: 5s
+      start-period: 10s
+      retries: 3
 
 volumes:
   postgres_data:
