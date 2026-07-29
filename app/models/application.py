@@ -30,6 +30,7 @@ class Application(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    owner_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Back-populates ApiKey.application; lazy="raise" prevents N+1 queries.
     api_keys: Mapped[list["ApiKey"]] = relationship(
