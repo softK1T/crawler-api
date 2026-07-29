@@ -386,3 +386,57 @@ def test_bootstrap_creates_key_via_service_layer():
 
 # ── D10: Log redaction (covered by tests/test_logging_redaction.py) ───────────
 # test_log_redaction_covers_generated_key_format already exists (B2).
+
+
+# ── Additional required behaviors ─────────────────────────────────────────────
+
+
+@pytest.mark.integration
+async def test_key_issue_persists_issuer_key_id(db_session, application_factory):
+    """When create_api_key is called with issuer_key_id, the row stores it."""
+    from app.services.key_service import create_api_key
+
+    app = await application_factory()
+    issuer_id = uuid4()
+
+    row, _raw = await create_api_key(
+        db_session,
+        application_id=app.id,
+        scopes=["fetch"],
+        mode="live",
+        issuer_key_id=issuer_id,
+    )
+
+    assert row.issuer_key_id == issuer_id, (
+        f"issuer_key_id should be {issuer_id}, got {row.issuer_key_id}"
+    )
+
+
+@pytest.mark.integration
+async def test_bootstrap_key_has_issuer_key_id_null(db_session, application_factory):
+    """When create_api_key is called with issuer_key_id=None, the column is NULL."""
+    from app.services.key_service import create_api_key
+
+    app = await application_factory()
+
+    row, _raw = await create_api_key(
+        db_session,
+        application_id=app.id,
+        scopes=["fetch"],
+        mode="live",
+        issuer_key_id=None,
+    )
+
+    assert row.issuer_key_id is None, (
+        f"issuer_key_id should be NULL for bootstrap keys, got {row.issuer_key_id}"
+    )
+
+
+def test_require_scope_rejects_unknown_scope():
+    """require_scope('invalid_scope') raises ValueError at registration time."""
+    import pytest as pt
+
+    from app.api.v1.dependencies import require_scope
+
+    with pt.raises(ValueError, match="Invalid scope"):
+        require_scope("invalid_scope")
