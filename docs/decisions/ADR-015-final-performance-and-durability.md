@@ -66,9 +66,17 @@ If the DLQ directory is not writable, the fetch path degrades gracefully
 | httpx per-call client (ADR-007) | Unchanged by Stage 14 shared-executor work.  Revisit when sustained request rate exceeds 100 req/s. |
 | Camoufox native (ADR-007) | Deferred until residential proxy support lands.  `PlaywrightFetcher` is the sole browser engine. |
 
-## Part E — Gauge Naming (Stage 14 + 15)
+## Part E — Gauge Naming
 
-Three new gauges follow the existing `crawler_<name>` convention:
-- `crawler_browser_pool_size` — browsers launched in pool
-- `crawler_browser_pool_in_use` — browsers currently checked out
+One new gauge follows the existing `crawler_<name>` convention:
 - `crawler_warc_dlq_entries` — WARC files pending re-upload
+
+## Deferred with triggers
+
+| Item | Status | Trigger |
+|---|---|---|
+| Browser pool | NOT implemented. Design skeleton only. | Sustained >1 req/s in browser mode (ADR-007). Invariant: reuse browsers, never contexts (ADR-014). |
+| Chunked streaming archive endpoint | NOT implemented. | Archived bodies >10 MB making base64-in-JSON impractical (ADR-010). |
+| Camoufox native support | NOT implemented. Permanent deferral. | Residential proxy integration lands (ADR-007). |
+| WebSocket/SSE job notifications | NOT implemented. Sync polling is the contract. | >50 concurrent sync requests (ADR-009). |
+| httpx per-call client | Unchanged. | >100 req/s sustained (ADR-007). |

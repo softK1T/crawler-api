@@ -75,4 +75,4 @@
 
 - v0.1.0 — Verified platform rebuild (Stages 1-13)
 - v0.2.0 — Celery removed, arq cron, shared executor, cost metric
-- v1.0.0 — Browser pool, streaming archive, WARC DLQ
+- v1.0.0 — WARC dead-letter queue, threshold-based rotation flag, archive filename-before-rotation fix

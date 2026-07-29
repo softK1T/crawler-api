@@ -116,8 +116,11 @@ The task logs `sync_proxies: done added=X updated=Y deactivated=Z total_fetched=
   They are never hard-deleted — FK constraints from `request_log` and health
   history depend on the row surviving.
 
-## Browser Mode (Stage 14)
+## Browser Mode
 
-Playwright ("browser"/"camoufox" modes) runs **browser-per-fetch** — each request
-launches a fresh browser and context.  There is no pooling.  This caps throughput
-at ~1 req/s per worker.  A bounded browser pool is planned for Stage 15.
+Playwright ("browser"/"camoufox" modes) runs **browser-per-fetch** with
+context-per-fetch isolation.  There is no pooling.  Each request launches a
+fresh browser and a fresh context (never reused).  This caps throughput at
+roughly 1 req/s per worker.  A bounded browser pool is deferred — see ADR-015
+for the trigger condition (>1 req/s sustained in browser mode) and the
+invariant (reuse browsers, never contexts).
