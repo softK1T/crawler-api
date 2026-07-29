@@ -97,8 +97,8 @@ class ProxyRateLimiter:
         return None
 
     def ttl_remaining(self, proxy: str) -> float:
-        ttl_ms = self._redis.pttl(f"{self.KEY_PREFIX}{proxy}")
-        return max(0.0, ttl_ms / 1000) if ttl_ms and ttl_ms > 0 else 0.0
+        ttl_ms: int = self._redis.pttl(f"{self.KEY_PREFIX}{proxy}")
+        return max(0.0, ttl_ms / 1000.0) if ttl_ms and ttl_ms > 0 else 0.0
 
 
 class SmartProxyPool:

@@ -147,7 +147,7 @@ warn_return_any = false
 module = [
     "app.services.storage",
     "app.services.webshare_sync",
-    "app.worker.tasks.crawl",
+    "app.services.geo_proxy_pool",
 ]
 disable_error_code = ["return-value", "arg-type", "assignment"]
 

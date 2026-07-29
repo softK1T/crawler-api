@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     # Example: postgresql+asyncpg://user:pass@localhost:5432/crawlerdb
     database_url: PostgresDsn
 
-
     redis_url: str = "redis://localhost:6379/2"
     result_ttl_secs: int = 86400
 
