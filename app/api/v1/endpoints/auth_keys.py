@@ -21,7 +21,6 @@ from app.core.errors import (
     ConflictError,
     NotFoundError,
 )
-from app.core.security import generate_api_key
 from app.models.api_key import ApiKey
 from app.models.application import Application
 from app.models.tenant import Tenant
@@ -37,9 +36,19 @@ from app.schemas.tenant import (
     TenantCreate,
     TenantResponse,
 )
+from app.services.key_service import create_api_key as mint_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth-keys"])
+
+
+def _admin_or_own_app(api_key: ApiKey, target_app_id: UUID) -> None:
+    """Raise AuthorizationError if *api_key* is not admin and not in the target app."""
+    if SCOPE_ADMIN in api_key.scopes:
+        return
+    if api_key.application_id != target_app_id:
+        raise AuthorizationError(detail="Cannot operate on another application's keys")
+
 
 # ── API Key management ───────────────────────────────────────────────────────
 
@@ -54,47 +63,56 @@ async def create_api_key(
 
     The raw key is returned only once — it is never stored in plaintext.
     """
-    # Validate scopes.
+    # 1. Every requested scope must be a known scope.
     for scope in body.scopes:
         if scope not in ALL_SCOPES:
             raise AuthorizationError(detail=f"Invalid scope: {scope}")
 
-    # Verify application exists.
-    app_result = await db.execute(select(Application).where(Application.id == body.application_id))
+    # 2. D2 Constraint A — caller may only grant scopes it holds.
+    if not set(body.scopes).issubset(set(api_key.scopes)):
+        raise AuthorizationError(detail="Cannot grant scopes you do not hold")
+
+    # 3. D2 Constraint B — granting keys scope requires admin.
+    if SCOPE_KEYS in body.scopes and SCOPE_ADMIN not in api_key.scopes:
+        raise AuthorizationError(detail="admin scope required to grant keys scope")
+
+    # 4. D3 — cross-application issuance requires admin.
+    is_cross_app = body.application_id != api_key.application_id
+    if is_cross_app and SCOPE_ADMIN not in api_key.scopes:
+        raise AuthorizationError(detail="Cannot issue keys for another application")
+
+    # 5. Application must exist and be active.
+    app_result = await db.execute(
+        select(Application).where(Application.id == body.application_id)
+    )
     application = app_result.scalar_one_or_none()
     if application is None:
         raise NotFoundError(detail="Application not found")
+    if not application.is_active:
+        raise AuthorizationError(detail="Application is deactivated")
 
-    # Generate key with prefix collision retry (max 2 attempts).
-    for _attempt in range(2):
-        raw_key, hashed_key = generate_api_key()
-        prefix = raw_key[:8]
+    # Delegate to the single key-minting path.
+    row, raw_key = await mint_key(
+        db,
+        application_id=body.application_id,
+        scopes=body.scopes,
+        mode=body.mode,
+        issuer_key_id=api_key.id,
+        expires_at=body.expires_at,
+    )
 
-        # Check for prefix collision.
-        existing = await db.execute(select(ApiKey).where(ApiKey.prefix == prefix))
-        if existing.scalar_one_or_none() is not None:
-            if _attempt == 1:
-                raise ConflictError(detail="Key prefix collision — retry")
-            continue
+    # Log issuance exactly once — never log the raw key.
+    logger.info(
+        "Key issued: issuer_key_id=%s target_application_id=%s scopes=%s prefix=%s",
+        api_key.id,
+        body.application_id,
+        body.scopes,
+        row.prefix,
+    )
 
-        row = ApiKey(
-            application_id=body.application_id,
-            prefix=prefix,
-            hashed_key=hashed_key,
-            scopes=body.scopes,
-            mode=body.mode,
-            expires_at=body.expires_at,
-        )
-        db.add(row)
-        await db.commit()
-        await db.refresh(row)
-
-        # DO NOT LOG raw_key — returned to caller exactly once.
-        response = ApiKeyCreateResponse.model_validate(row)
-        response.raw_key = raw_key
-        return response
-
-    raise ConflictError(detail="Key prefix collision — retry exhausted")
+    response = ApiKeyCreateResponse.model_validate(row)
+    response.raw_key = raw_key
+    return response
 
 
 @router.get("/v1/keys", response_model=list[ApiKeyResponse])
@@ -119,23 +137,25 @@ async def revoke_api_key(
     api_key: ApiKey = Depends(require_scope(SCOPE_KEYS)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke an API key belonging to the caller's application.
+    """Revoke an API key.
 
-    A key cannot revoke itself.
+    A key cannot revoke itself.  A keys-only caller is confined to its own
+    application; an admin may revoke across applications.
     """
     # Prevent self-revocation.
     if key_id == api_key.id:
-        raise AuthorizationError(detail="Cannot revoke the key used to authenticate this request")
+        raise AuthorizationError(
+            detail="Cannot revoke the key used to authenticate this request"
+        )
 
-    stmt = select(ApiKey).where(
-        ApiKey.id == key_id,
-        ApiKey.application_id == api_key.application_id,
-    )
-    result = await db.execute(stmt)
+    # Load the target key.
+    result = await db.execute(select(ApiKey).where(ApiKey.id == key_id))
     row = result.scalar_one_or_none()
-
     if row is None:
         raise NotFoundError(detail="API key not found")
+
+    # D3 — cross-application revocation requires admin.
+    _admin_or_own_app(api_key, row.application_id)
 
     row.revoked_at = datetime.now(UTC)
     row.is_active = False
