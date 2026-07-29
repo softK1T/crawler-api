@@ -16,9 +16,20 @@ class TenantResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TenantListResponse(BaseModel):
+    items: list[TenantResponse]
+    total: int
+
+
 class ApplicationCreate(BaseModel):
     tenant_id: UUID
     name: str = Field(..., min_length=2, max_length=128)
+
+
+class ApplicationUpdate(BaseModel):
+    name: str | None = Field(None, min_length=2, max_length=128)
+    owner_label: str | None = None
+    is_active: bool | None = None
 
 
 class ApplicationResponse(BaseModel):
@@ -27,4 +38,10 @@ class ApplicationResponse(BaseModel):
     name: str
     is_active: bool
     created_at: datetime
+    owner_label: str | None = None
     model_config = ConfigDict(from_attributes=True)
+
+
+class ApplicationListResponse(BaseModel):
+    items: list[ApplicationResponse]
+    total: int

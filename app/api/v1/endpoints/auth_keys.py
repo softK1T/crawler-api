@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,8 +32,11 @@ from app.schemas.api_key import (
 )
 from app.schemas.tenant import (
     ApplicationCreate,
+    ApplicationListResponse,
     ApplicationResponse,
+    ApplicationUpdate,
     TenantCreate,
+    TenantListResponse,
     TenantResponse,
 )
 from app.services.key_service import create_api_key as mint_key
@@ -256,6 +259,133 @@ async def create_application(
 
     row = Application(tenant_id=body.tenant_id, name=body.name)
     db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+# ── Read endpoints ────────────────────────────────────────────────────────────
+
+
+@router.get("/v1/tenants", response_model=TenantListResponse)
+async def list_tenants(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all tenants (admin only)."""
+    count_result = await db.execute(select(Tenant))
+    total = len(count_result.scalars().all())
+
+    stmt = (
+        select(Tenant)
+        .order_by(Tenant.created_at.desc(), Tenant.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    return TenantListResponse(
+        items=list(result.scalars().all()),
+        total=total,
+    )
+
+
+@router.get("/v1/tenants/{tenant_id}", response_model=TenantResponse)
+async def get_tenant(
+    tenant_id: UUID,
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single tenant by ID (admin only)."""
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(detail="Tenant not found")
+    return row
+
+
+@router.get("/v1/applications", response_model=ApplicationListResponse)
+async def list_applications(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    api_key: ApiKey = Depends(resolve_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """List applications — admin sees all, keys sees own only."""
+    base = select(Application)
+
+    if SCOPE_ADMIN not in api_key.scopes:
+        # Keys-only caller confined to own application.
+        base = base.where(Application.id == api_key.application_id)
+
+    count_result = await db.execute(base)
+    rows = count_result.scalars().all()
+    total = len(rows)
+
+    stmt = (
+        base.order_by(Application.created_at.desc(), Application.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    return ApplicationListResponse(
+        items=list(result.scalars().all()),
+        total=total,
+    )
+
+
+@router.get("/v1/applications/{app_id}", response_model=ApplicationResponse)
+async def get_application(
+    app_id: UUID,
+    api_key: ApiKey = Depends(resolve_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single application — admin or own app."""
+    result = await db.execute(select(Application).where(Application.id == app_id))
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(detail="Application not found")
+
+    # Non-admin confined to own application; return 404 on cross-tenant access.
+    if SCOPE_ADMIN not in api_key.scopes and row.id != api_key.application_id:
+        raise NotFoundError(detail="Application not found")
+
+    return row
+
+
+@router.patch("/v1/applications/{app_id}", response_model=ApplicationResponse)
+async def update_application(
+    app_id: UUID,
+    body: ApplicationUpdate,
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update an application (admin only). Mutable fields: name, owner_label, is_active."""
+    result = await db.execute(select(Application).where(Application.id == app_id))
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(detail="Application not found")
+
+    if body.name is not None:
+        # Check for duplicate name within the same tenant.
+        existing = await db.execute(
+            select(Application).where(
+                Application.tenant_id == row.tenant_id,
+                Application.name == body.name,
+                Application.id != app_id,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise ConflictError(detail="Application name already exists for this tenant")
+        row.name = body.name
+
+    if body.owner_label is not None:
+        row.owner_label = body.owner_label
+
+    if body.is_active is not None:
+        row.is_active = body.is_active
+
     await db.commit()
     await db.refresh(row)
     return row
