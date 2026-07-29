@@ -23,11 +23,11 @@ Celery and all its infrastructure were deleted:
 
 The sole job-status contract is now `GET /v1/jobs/{job_id}` from Stage 8.
 
-`SmartProxyPool` and `ProxyRateLimiter` were moved into `app/services/geo_proxy_pool.py`
-because `proxy_singleton.py` (used by the startup Webshare sync in `main.py`)
-still imports them.  This is **known debt** — `ProxyManager` (ADR-006) is the
-modern proxy-selection path.  Removal target: when `_startup_proxy_sync()` in
-`main.py` is retired in favour of the arq cron sync.
+`SmartProxyPool` and `ProxyRateLimiter` were initially moved into
+`app/services/geo_proxy_pool.py`, then deleted outright later in Stage 14 together
+with `proxy_singleton.py` and `_startup_proxy_sync()`.  `ProxyManager` (ADR-006)
+and `sync_proxies` (arq cron) are the sole remaining paths.
+(Updated 2026-07-29.)
 
 ### 2. Webshare Proxy Sync (arq cron)
 `sync_proxies` in `app/worker/tasks/proxy_sync.py` runs every 30 minutes via
@@ -64,8 +64,11 @@ Stage 15 should implement the pool when browser-mode request rate exceeds 1
 req/s (the ADR-007 threshold).
 
 ### 6. Deferred / Rejected Alternatives
-- **geo_proxy_pool.py full removal**: blocked by `proxy_singleton.py` dependency.
-  Will be addressed when the startup proxy sync is retired.
-- **ProxyRateLimiter removal**: it is a per-proxy cooldown mechanism, not a
-  duplicate of the Lua rate limiter (which implements API-level key/app/domain/proxy
-  sliding windows).  These operate at different layers.
+- **geo_proxy_pool.py**: deleted later in Stage 14 together with
+  `proxy_singleton.py` and `_startup_proxy_sync()`.  `sync_proxies` with
+  `run_at_startup=True` is now the sole owner of proxy reconciliation.
+  (Updated 2026-07-29.)
+- **ProxyRateLimiter**: removed along with the legacy pool classes.  The
+  per-proxy cooldown observed in Stage 14 was never a duplicate of the Lua
+  rate limiter (which operates at the API level); cooldown logic now lives
+  in `ProxyManager` (ADR-006).

@@ -57,6 +57,16 @@ docker compose exec api python3 scripts/bootstrap_dev.py  # prints API key
 
 For operations, see [docs/runbook.md](docs/runbook.md).
 
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [`docs/PROJECT-HISTORY.md`](docs/PROJECT-HISTORY.md) | 15-stage rebuild narrative, architecture, bugs found, deferred items |
+| [`docs/AI-ASSISTED-DEVELOPMENT.md`](docs/AI-ASSISTED-DEVELOPMENT.md) | Working method, agent failure modes, transferable rules |
+| [`docs/runbook.md`](docs/runbook.md) | Operations: proxy sync cron, DLQ inspection, browser mode |
+| [`docs/decisions/`](docs/decisions/) | Architecture Decision Records (ADR-001 through ADR-015) |
+| [`docs/SESSION-SUMMARY.md`](docs/SESSION-SUMMARY.md) | Quick reference pointer |
+
 ## API Examples
 
 ```bash
