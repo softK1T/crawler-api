@@ -17,7 +17,8 @@ from app.core.logging_config import bind_context
 from app.core.observability import RATE_LIMIT_HITS_TOTAL, REQUEST_LATENCY_MS
 from app.models.api_key import ApiKey
 from app.schemas.job import JobCreate, JobResponse, JobStatus
-from app.schemas.responses import CrawlResult, JobStatusResponse
+
+# Legacy Celery compat schemas removed in Stage 14.
 from app.services.policy_resolver import normalize_domain
 
 router = APIRouter(prefix="")
@@ -182,48 +183,3 @@ async def get_job(
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
     job_svc = JobService(redis_client)
     return await job_svc.get_result(job_id)
-
-
-# ── Legacy endpoints (Celery compat) ─────────────────────────────────────────
-
-
-@router.post("/v1/jobs/", response_model=JobResponse, status_code=202)
-async def create_crawl_job_legacy(
-    request: dict,
-    req: Request,
-    api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
-):
-    """Legacy POST /v1/jobs — delegates to /v1/fetch endpoint."""
-    body = JobCreate(
-        url=request.get("url", ""),
-        mode=request.get("mode", "static"),
-        options=request.get("options", {}),
-    )
-    return await create_fetch(body, req, api_key)
-
-
-@router.get("/v1/jobs/{job_id}/status", response_model=JobStatusResponse)
-async def get_job_status_legacy(
-    job_id: str,
-    _api_key: ApiKey = Depends(resolve_api_key),
-):
-    """Legacy status endpoint."""
-    return JobStatusResponse(job_id=job_id, state="PENDING", created_at=None)
-
-
-@router.get("/v1/jobs/{job_id}/result", response_model=CrawlResult)
-async def get_job_result_legacy(
-    job_id: str,
-    _api_key: ApiKey = Depends(resolve_api_key),
-):
-    """Legacy result endpoint."""
-    import redis.asyncio as aioredis
-
-    from app.services.job_service import JobService
-
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    job_svc = JobService(redis_client)
-    job_result = await job_svc.get_result(job_id)
-    if job_result.result:
-        return job_result.result
-    raise HTTPException(status_code=404, detail="Result not found")

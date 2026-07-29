@@ -110,6 +110,14 @@ async def fetch_task(
             # 8. Usage counter upsert.
             await _upsert_usage(db, application_id, len(result.body))
 
+            # 8b. Cost metric — only for proxied fetches.
+            if result.proxy_id is not None:
+                from app.core.observability import PROXY_COST_EUR_TOTAL
+
+                PROXY_COST_EUR_TOTAL.labels(provider="webshare").inc(
+                    _bytes_to_eur_cost(len(result.body))
+                )
+
             # 9. Latency metric.
             _record_latency("completed", started)
 
@@ -213,6 +221,13 @@ def _schedule_callback(
 
 # ── Usage counter + metrics helpers ───────────────────────────────────────────
 
+_COST_EUR_PER_GB = 3.50  # €3.50/GB — single source of truth for cost calculation.
+
+
+def _bytes_to_eur_cost(body_bytes: int) -> float:
+    """Return EUR cost for the given bytes at the standard rate."""
+    return (body_bytes / (1024**3)) * _COST_EUR_PER_GB
+
 
 async def _upsert_usage(db, application_id: str, body_bytes: int) -> None:
     """Upsert usage_counter row for the current month."""
@@ -223,7 +238,7 @@ async def _upsert_usage(db, application_id: str, body_bytes: int) -> None:
 
         app_id = UUID(application_id)
         month_start = datetime.now(UTC).date().replace(day=1)
-        cost_cents = math.ceil((body_bytes / (1024**3)) * 350)  # €3.50/GB
+        cost_cents = math.ceil(_bytes_to_eur_cost(body_bytes) * 100)
 
         await db.execute(
             text(
@@ -287,12 +302,30 @@ async def startup(ctx: dict) -> None:
 
 
 async def shutdown(ctx: dict) -> None:
-    """arq worker shutdown — flush WARC and close Redis."""
+    """arq worker shutdown — drain browser pool, flush WARC, close Redis."""
+    # Drain browser pool.
+    if ctx.get("browser_pool"):
+        try:
+            await ctx["browser_pool"].shutdown()
+        except Exception:
+            logger.warning("Browser pool shutdown failed", exc_info=True)
+
+    # Flush WARC.
     try:
         if ctx.get("warc_storage"):
             await ctx["warc_storage"].shutdown_flush()
     except Exception:
         logger.warning("WARC shutdown flush failed", exc_info=True)
+
+    # Shut down curl executor.
+    try:
+        from app.services.fetchers.curl_fetcher import _shutdown_executor
+
+        _shutdown_executor()
+    except Exception:
+        pass
+
+    # Close Redis.
     try:
         if ctx.get("redis"):
             await ctx["redis"].aclose()

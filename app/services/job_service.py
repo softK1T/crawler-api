@@ -1,13 +1,9 @@
-"""Job service — arq-backed enqueue, status polling, idempotency.
-
-Celery compat shim: ``submit_crawl`` delegates for backward compatibility
-with legacy worker code.
-"""
+"""Job service — arq-backed enqueue, status polling, idempotency."""
 
 import json
 import logging
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.core.config import settings
 
@@ -24,17 +20,8 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
-# ── Stage-8 compat shim — celery dependency scheduled for removal ────────────
-# When the legacy Celery worker (app/worker/tasks/crawl.py) is retired,
-# delete these imports and drop ``celery`` from project dependencies.
-# ruff: noqa: E402
-from app.schemas.responses import CrawlResult, JobStatusResponse  # noqa: F401
-from app.services.storage import storage  # noqa: F401
-from app.worker.tasks.crawl import crawl_page  # noqa: F401
-
-
 class JobService:
-    """arq-backed job service with legacy Celery compat."""
+    """arq-backed job service."""
 
     def __init__(self, redis_client, settings_obj=None) -> None:
         self._redis = redis_client
@@ -163,15 +150,3 @@ class JobService:
             job_id,
             ex=self._settings.job_result_ttl_s,
         )
-
-
-# ── Celery compat shim ───────────────────────────────────────────────────────
-
-
-def submit_crawl(url: str, mode: str = "static", **kwargs) -> str:
-    """Legacy compat — returns a synthetic job_id.
-
-    DEPRECATED: new code should use ``JobService.enqueue`` directly.
-    This shim exists to prevent import errors in legacy worker modules.
-    """
-    return str(uuid4())
