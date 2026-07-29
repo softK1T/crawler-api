@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 # Use the project venv if it exists.
 if [ -f .venv/bin/python3 ]; then
     export PATH="$(pwd)/.venv/bin:$PATH"
+elif GIT_DIR="$(git rev-parse --git-common-dir 2>/dev/null)" && [ -f "$GIT_DIR/../.venv/bin/python3" ]; then
+    export PATH="$(cd "$GIT_DIR/.." && pwd)/.venv/bin:$PATH"
 fi
 
 export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://crawler:crawler@localhost:5432/crawlerdb}"
