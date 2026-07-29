@@ -91,3 +91,8 @@ development and testing — WARC data is simply not persisted.
 - **Negative:** S3 upload failure discards data. A dead-letter queue or
   local backup is recommended for production deployments where archival
   completeness matters.
+
+## Stage 15 update (ADR-015)
+
+Superseded by ADR-015 (Stage 15): rotation flag, dead-letter queue,
+streaming archive endpoint, and DLQ retry cron.

@@ -66,6 +66,21 @@ RATE_LIMIT_HITS_TOTAL = Counter(
     ["layer"],
 )
 
+BROWSER_POOL_SIZE = Gauge(
+    "crawler_browser_pool_size",
+    "Browsers launched in pool",
+)
+
+BROWSER_POOL_IN_USE = Gauge(
+    "crawler_browser_pool_in_use",
+    "Browsers checked out",
+)
+
+WARC_DLQ_ENTRIES = Gauge(
+    "crawler_warc_dlq_entries",
+    "WARC files pending re-upload",
+)
+
 # ── DEDUP_RATIO tracking ─────────────────────────────────────────────────────
 _total_records: int = 0
 _revisit_records: int = 0

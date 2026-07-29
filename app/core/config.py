@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     curl_executor_max_workers: int = 8
     browser_pool_size: int = 2
     browser_idle_timeout_s: int = 300
+    browser_acquire_timeout_s: float = 30.0
 
     # WARC / S3 archival settings
     s3_endpoint_url: str | None = None  # None = AWS S3; set for MinIO
@@ -74,7 +75,12 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     warc_max_size_bytes: int = 1_000_000_000  # 1 GB rotation threshold
     warc_max_age_s: int = 3600  # 1 hour rotation threshold
+    warc_force_rotate_each_write: bool = False  # dev/verification only
     warc_prefix: str = "warc"
+
+    # WARC dead-letter queue
+    warc_dlq_dir: str = "/var/lib/crawler/warc-dlq"
+    warc_dlq_max_bytes: int = 5_368_709_120  # 5 GB cap
 
     # arq worker settings
     arq_redis_url: str = ""  # defaults to redis_url if empty

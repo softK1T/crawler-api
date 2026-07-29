@@ -104,3 +104,9 @@ addressed in ADR-014 (Stage 14):
 - Shared executor: implemented (module-level ThreadPoolExecutor, max_workers=8)
 - Browser pool: re-deferred to Stage 15 with context-isolation invariant
   (pool reuses browsers, never contexts — ADR-014 §5)
+
+## Stage 15 update (ADR-015)
+
+Browser pool implemented (Stage 15): bounded asyncio.Queue, context-per-fetch
+invariant. Camoufox native support remains permanently deferred pending
+residential proxy integration. httpx per-call client unchanged; revisit
