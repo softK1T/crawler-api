@@ -483,12 +483,19 @@ async def test_create_api_key_returns_non_empty_raw_key(db_session, application_
 
 
 @pytest.mark.integration
-async def test_post_keys_response_boundary(app, application_factory, api_key_factory):
+async def test_post_keys_response_boundary(app, db_session, application_factory, api_key_factory):
     """HTTP POST /v1/keys via ASGI transport — raw_key present, hashed_key absent."""
     from httpx import ASGITransport, AsyncClient
 
+    from app.core.db import get_db
+
     app_obj = await application_factory()
     raw_op, _row = await api_key_factory(application=app_obj, scopes=["admin", "keys", "fetch"])
+
+    # Override get_db to use the SAME session/engine as the test fixtures,
+    # so the ASGI request borrows from the shared pool instead of creating
+    # a second engine that would exhaust the testcontainer's connections.
+    app.dependency_overrides[get_db] = lambda: db_session
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:

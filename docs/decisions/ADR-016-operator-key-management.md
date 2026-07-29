@@ -366,6 +366,7 @@ Test name: `test_log_redaction_covers_generated_key_format`. The test: generates
 10. Stage B must write all named tests from D2, D4, D5, D9, and D10.
 11. Stage B verify.sh uses `sleep 2` between fetch steps with different URLs to avoid domain-level rate limiting (default 1 RPS per domain). Trigger for revisiting: when the default domain policy is relaxed or verify.sh uses a dedicated test domain with a higher or disabled rate limit.
 12. The raw-key leak check uses `grep -Eq 'crw[lt][A-Za-z0-9_-]{30,}'` — matching only full key bodies (~38+ chars), not the 8-char prefix. The prefix (`raw_key[:8]`) is a cleartext column returned in API responses and is not a secret.
+13. Endpoint-layer authorization checks (D2 escalation, D3 tenancy, 404-on-cross-tenant-rotate) are currently verified only by `verify.sh`, not by HTTP-level tests. The `test_post_keys_response_boundary` async client fixture (`ASGITransport` + `app.dependency_overrides[get_db]` sharing the test `db_session`) is the mechanism to close this gap. Trigger for adding HTTP-level auth tests: any change to authorization logic in `auth_keys.py`.
 
 ## Deferred
 
