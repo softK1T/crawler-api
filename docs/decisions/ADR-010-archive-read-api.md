@@ -31,3 +31,8 @@ The original (non-revisit) record's (warc_filename, offset, length) is used for 
 
 ### Deferred: chunked streaming
 Base64-encoding large bodies in JSON is suboptimal for >10MB responses. A chunked streaming endpoint (Transfer-Encoding: chunked with raw WARC bytes) is deferred post-Stage 13. For now, all responses fit in the JSON envelope.
+
+## Stage 15 update (ADR-015)
+
+Superseded by ADR-015 (Stage 15): rotation flag, dead-letter queue,
+streaming archive endpoint, and DLQ retry cron.

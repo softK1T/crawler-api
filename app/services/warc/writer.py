@@ -170,6 +170,10 @@ class WarcWriter:
         return self._buf.getvalue()
 
     def needs_rotation(self) -> bool:
+        from app.core.config import settings
+
+        if settings.warc_force_rotate_each_write and self._buf.tell() > 0:
+            return True
         return (
             self._buf.tell() >= self._max_size_bytes
             or (datetime.now(UTC) - self._created_at).total_seconds() >= self._max_age_s
