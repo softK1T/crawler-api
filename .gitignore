@@ -38,6 +38,8 @@ ENV/
 .env.local
 .env.*.local
 *.log
+.ruff_cache/
+.mypy_cache/
 .pytest_cache/
 .coverage
 htmlcov/
@@ -55,3 +57,4 @@ temp/
 celerybeat-schedule
 celerybeat.pid
 proxies.txt
+.claude/worktrees/

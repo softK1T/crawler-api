@@ -1,17 +1,17 @@
 import base64
 import gzip
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import perf_counter
-from typing import Dict, Any, Optional
+from typing import Any
 
 from app.core.config import settings
-from app.services.storage import storage
-from app.services.crawler import Crawler, html_to_markdown, extract_with_selectors
+from app.services.crawler import Crawler, extract_with_selectors, html_to_markdown
 from app.services.events import publish_event
-from app.services.proxy_singleton import get_proxy_pool
 from app.services.geo_proxy_pool import detect_country_from_url
+from app.services.proxy_singleton import get_proxy_pool
 from app.services.stealth_crawler import StealthCrawler
+from app.services.storage import storage
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -21,20 +21,20 @@ logger = logging.getLogger(__name__)
 def crawl_page(
     self,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
     timeout: int = 30,
     delay: float = 2.0,
     use_proxy: bool = True,
-    batch_id: Optional[str] = None,
-    project_id: Optional[str] = None,
-    extract: Optional[Dict[str, str]] = None,
+    batch_id: str | None = None,
+    project_id: str | None = None,
+    extract: dict[str, str] | None = None,
     mode: str = "static",
-    proxy_country: Optional[str] = None,
-    wait_for: Optional[str] = None,
-    session_key: Optional[str] = None,
-) -> Dict[str, Any]:
+    proxy_country: str | None = None,
+    wait_for: str | None = None,
+    session_key: str | None = None,
+) -> dict[str, Any]:
     started = perf_counter()
-    started_iso = datetime.now(timezone.utc).isoformat()
+    started_iso = datetime.now(UTC).isoformat()
     job_id = self.request.id
 
     resolved_country = proxy_country or detect_country_from_url(url)
@@ -69,36 +69,53 @@ def crawl_page(
 
         elif mode == "browser":
             import asyncio
+
             from app.services.stealth_crawler import crawl_playwright_stealth
+
             proxy_url = _pick_proxy_url(pool, resolved_country)
-            raw = asyncio.run(crawl_playwright_stealth(
-                url=url,
-                timeout=timeout,
-                proxy_url=proxy_url,
-                wait_for=wait_for,
-            ))
+            raw = asyncio.run(
+                crawl_playwright_stealth(
+                    url=url,
+                    timeout=timeout,
+                    proxy_url=proxy_url,
+                    wait_for=wait_for,
+                )
+            )
 
         elif mode == "camoufox":
             import asyncio
+
             from app.services.stealth_crawler import crawl_camoufox
+
             proxy_url = _pick_proxy_url(pool, resolved_country)
-            raw = asyncio.run(crawl_camoufox(
-                url=url,
-                timeout=timeout,
-                proxy_url=proxy_url,
-                wait_for=wait_for,
-                session_key=session_key,
-            ))
+            raw = asyncio.run(
+                crawl_camoufox(
+                    url=url,
+                    timeout=timeout,
+                    proxy_url=proxy_url,
+                    wait_for=wait_for,
+                    session_key=session_key,
+                )
+            )
 
         elapsed_ms = int((perf_counter() - started) * 1000)
 
         if raw is None:
-            error_result = _make_error(job_id, project_id, batch_id, url, elapsed_ms, started_iso, mode)
+            error_result = _make_error(
+                job_id, project_id, batch_id, url, elapsed_ms, started_iso, mode
+            )
             storage.save_job_result(job_id, error_result)
-            publish_event("crawl", "crawl.failed", {
-                "job_id": job_id, "url": url, "project_id": project_id,
-                "proxy_country": resolved_country, "mode": mode,
-            })
+            publish_event(
+                "crawl",
+                "crawl.failed",
+                {
+                    "job_id": job_id,
+                    "url": url,
+                    "project_id": project_id,
+                    "proxy_country": resolved_country,
+                    "mode": mode,
+                },
+            )
             raise RuntimeError(f"Crawling failed after all retries (mode={mode})")
 
         body_bytes, status_code, content_type, response_headers = raw
@@ -126,39 +143,77 @@ def crawl_page(
             "created_at": started_iso,
         }
         storage.save_job_result(job_id, success_result)
-        publish_event("crawl", "crawl.completed", {
-            "job_id": job_id, "url": url, "project_id": project_id,
-            "status_code": status_code, "response_time_ms": elapsed_ms,
-            "proxy_country": resolved_country, "mode": mode,
-        })
-        logger.info("Crawled %s in %dms (HTTP %d) mode=%s country=%s", url, elapsed_ms, status_code, mode, resolved_country)
-        return {"job_id": job_id, "url": url, "status_code": status_code, "response_time_ms": elapsed_ms, "mode": mode}
+        publish_event(
+            "crawl",
+            "crawl.completed",
+            {
+                "job_id": job_id,
+                "url": url,
+                "project_id": project_id,
+                "status_code": status_code,
+                "response_time_ms": elapsed_ms,
+                "proxy_country": resolved_country,
+                "mode": mode,
+            },
+        )
+        logger.info(
+            "Crawled %s in %dms (HTTP %d) mode=%s country=%s",
+            url,
+            elapsed_ms,
+            status_code,
+            mode,
+            resolved_country,
+        )
+        return {
+            "job_id": job_id,
+            "url": url,
+            "status_code": status_code,
+            "response_time_ms": elapsed_ms,
+            "mode": mode,
+        }
 
     except Exception as e:
         elapsed_ms = int((perf_counter() - started) * 1000)
         error_result = {
-            "job_id": job_id, "project_id": project_id, "batch_id": batch_id,
-            "url": url, "status_code": None, "content_type": None,
-            "response_time_ms": elapsed_ms, "headers_trunc": {},
-            "body_encoding": None, "body": None, "markdown": None,
+            "job_id": job_id,
+            "project_id": project_id,
+            "batch_id": batch_id,
+            "url": url,
+            "status_code": None,
+            "content_type": None,
+            "response_time_ms": elapsed_ms,
+            "headers_trunc": {},
+            "body_encoding": None,
+            "body": None,
+            "markdown": None,
             "extracted": None,
-            "error_type": e.__class__.__name__, "error_message": str(e),
+            "error_type": e.__class__.__name__,
+            "error_message": str(e),
             "created_at": started_iso,
         }
         storage.save_job_result(job_id, error_result)
-        publish_event("crawl", "crawl.failed", {
-            "job_id": job_id, "url": url, "project_id": project_id,
-            "error": str(e), "proxy_country": resolved_country, "mode": mode,
-        })
+        publish_event(
+            "crawl",
+            "crawl.failed",
+            {
+                "job_id": job_id,
+                "url": url,
+                "project_id": project_id,
+                "error": str(e),
+                "proxy_country": resolved_country,
+                "mode": mode,
+            },
+        )
         logger.error("Failed to crawl %s (mode=%s): %s", url, mode, e)
         raise
 
 
-def _pick_proxy_url(pool, resolved_country: Optional[str]) -> Optional[str]:
+def _pick_proxy_url(pool, resolved_country: str | None) -> str | None:
     if not pool:
         return None
-    from app.services.geo_proxy_pool import GeoProxyPool
     from app.services.crawler import auth_line_to_proxy_url
+    from app.services.geo_proxy_pool import GeoProxyPool
+
     if isinstance(pool, GeoProxyPool) and resolved_country:
         line = pool.pick_proxy_for_country(resolved_country)
     else:
@@ -168,10 +223,18 @@ def _pick_proxy_url(pool, resolved_country: Optional[str]) -> Optional[str]:
 
 def _make_error(job_id, project_id, batch_id, url, elapsed_ms, started_iso, mode):
     return {
-        "job_id": job_id, "project_id": project_id, "batch_id": batch_id,
-        "url": url, "status_code": None, "content_type": None,
-        "response_time_ms": elapsed_ms, "headers_trunc": {},
-        "body_encoding": None, "body": None, "markdown": None, "extracted": None,
+        "job_id": job_id,
+        "project_id": project_id,
+        "batch_id": batch_id,
+        "url": url,
+        "status_code": None,
+        "content_type": None,
+        "response_time_ms": elapsed_ms,
+        "headers_trunc": {},
+        "body_encoding": None,
+        "body": None,
+        "markdown": None,
+        "extracted": None,
         "error_type": "CrawlError",
         "error_message": f"Failed to crawl URL after all retries (mode={mode})",
         "created_at": started_iso,

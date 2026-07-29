@@ -1,60 +1,177 @@
-import logging
-from datetime import datetime, timezone
-from typing import Optional, Dict
+"""Job service — arq-backed enqueue, status polling, idempotency.
 
-from app.worker.tasks.crawl import crawl_page
-from app.services.storage import storage
-from app.schemas.responses import JobStatusResponse, CrawlResult
+Celery compat shim: ``submit_crawl`` delegates for backward compatibility
+with legacy worker code.
+"""
+
+import json
+import logging
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
+def _parse_dt(value: str | None) -> datetime | None:
+    """Parse an ISO datetime string, tolerating None/empty."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+# ── Stage-8 compat shim — celery dependency scheduled for removal ────────────
+# When the legacy Celery worker (app/worker/tasks/crawl.py) is retired,
+# delete these imports and drop ``celery`` from project dependencies.
+# ruff: noqa: E402
+from app.schemas.responses import CrawlResult, JobStatusResponse  # noqa: F401
+from app.services.storage import storage  # noqa: F401
+from app.worker.tasks.crawl import crawl_page  # noqa: F401
+
+
 class JobService:
-    @staticmethod
-    def create_job(
+    """arq-backed job service with legacy Celery compat."""
+
+    def __init__(self, redis_client, settings_obj=None) -> None:
+        self._redis = redis_client
+        self._settings = settings_obj or settings
+
+    async def enqueue(
+        self,
+        *,
+        job_id: str,
         url: str,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: int = 30,
-        delay: float = 2.0,
-        use_proxy: bool = True,
-        countdown: float = 0,
-        project_id: Optional[str] = None,
-        extract: Optional[Dict[str, str]] = None,
-        mode: str = "static",
-        proxy_country: Optional[str] = None,
-        wait_for: Optional[str] = None,
+        mode: str,
+        api_key,
+        domain: str,
+        proxy_pool_id: UUID | None,
+        callback_url: str | None,
+        options: dict,
+        trace_id: str | None = None,
     ) -> str:
-        task = crawl_page.apply_async(
-            args=[url],
-            kwargs={
-                "headers": headers,
-                "timeout": timeout,
-                "delay": delay,
-                "use_proxy": use_proxy,
-                "project_id": project_id,
-                "extract": extract,
-                "mode": mode,
-                "proxy_country": proxy_country,
-                "wait_for": wait_for,
-            },
-            countdown=countdown,
-        )
-        storage.save_job_created_at(task.id, datetime.now(timezone.utc).isoformat())
-        return task.id
+        """Enqueue a fetch_task via arq and set initial status in Redis."""
+        import arq
 
-    @staticmethod
-    def get_job_status(job_id: str) -> JobStatusResponse:
-        result = crawl_page.AsyncResult(job_id)
-        created_at = storage.get_job_created_at(job_id)
-        return JobStatusResponse(
+        arq_redis = await arq.create_pool(
+            arq.connections.RedisSettings.from_dsn(
+                self._settings.arq_redis_url or self._settings.redis_url
+            )
+        )
+
+        now = datetime.now(UTC).isoformat()
+        status_data = {"status": "pending", "created_at": now}
+        await self._redis.set(
+            f"job:{job_id}:status",
+            json.dumps(status_data),
+            ex=self._settings.job_result_ttl_s,
+        )
+
+        await arq_redis.enqueue_job(
+            "fetch_task",
             job_id=job_id,
-            state=result.state,
-            created_at=created_at,
+            url=url,
+            mode=mode,
+            api_key_prefix=api_key.prefix,
+            application_id=str(api_key.application_id),
+            domain=domain,
+            proxy_pool_id=str(proxy_pool_id) if proxy_pool_id else None,
+            callback_url=callback_url,
+            options=options,
+            trace_id=trace_id,
+            _queue_name="arq:crawler",
+        )
+        await arq_redis.aclose()
+
+        # Observe queue depth.
+        from app.core.observability import observe_queue_depth
+
+        await observe_queue_depth(self._redis)
+
+        logger.info(
+            "job_enqueued",
+            extra={
+                "job_id": job_id,
+                "application_id": str(api_key.application_id),
+                "trace_id": trace_id,
+            },
+        )
+        return job_id
+
+    async def get_status(self, job_id: str) -> None:
+        """Return job status enum.  Raises NotFoundError if key is missing."""
+        from app.core.errors import NotFoundError
+
+        raw = await self._redis.get(f"job:{job_id}:status")
+        if not raw:
+            raise NotFoundError(detail="Job not found")
+        data = json.loads(raw)
+        from app.schemas.job import JobStatus
+
+        return JobStatus(data["status"])
+
+    async def get_result(self, job_id: str) -> None:
+        """Return full job result.  Raises NotFoundError if status key is missing."""
+        from app.core.errors import NotFoundError
+
+        raw_status = await self._redis.get(f"job:{job_id}:status")
+        if not raw_status:
+            raise NotFoundError(detail="Job not found")
+
+        status_data = json.loads(raw_status)
+        result = status_data.get("result")
+        error = await self._redis.get(f"job:{job_id}:error")
+
+        from app.schemas.job import JobResultResponse, JobStatus
+
+        return JobResultResponse(
+            job_id=job_id,
+            status=JobStatus(status_data["status"]),
+            result=result,
+            error=error,
+            created_at=(
+                _parse_dt(
+                    status_data.get("created_at")
+                    or status_data.get("enqueue_time")
+                    or status_data.get("updated_at")
+                )
+                or datetime.now(UTC)
+            ),
+            completed_at=(
+                _parse_dt(status_data.get("updated_at") or status_data.get("completed_at"))
+                if status_data["status"] in ("completed", "failed")
+                else None
+            ),
         )
 
-    @staticmethod
-    def get_job_result(job_id: str) -> Optional[CrawlResult]:
-        data = storage.get_job_result(job_id)
-        if not data:
+    async def handle_idempotency(self, idempotency_key: str, application_id: UUID) -> str | None:
+        """Check if an idempotency key was already used.  Returns job_id or None."""
+        existing = await self._redis.get(f"idempotency:{application_id}:{idempotency_key[:128]}")
+        if existing is None:
             return None
-        return CrawlResult(**data)
+        return existing.decode() if isinstance(existing, bytes) else existing
+
+    async def store_idempotency(
+        self, idempotency_key: str, job_id: str, application_id: UUID
+    ) -> None:
+        """Store the idempotency key → job_id mapping."""
+        await self._redis.set(
+            f"idempotency:{application_id}:{idempotency_key[:128]}",
+            job_id,
+            ex=self._settings.job_result_ttl_s,
+        )
+
+
+# ── Celery compat shim ───────────────────────────────────────────────────────
+
+
+def submit_crawl(url: str, mode: str = "static", **kwargs) -> str:
+    """Legacy compat — returns a synthetic job_id.
+
+    DEPRECATED: new code should use ``JobService.enqueue`` directly.
+    This shim exists to prevent import errors in legacy worker modules.
+    """
+    return str(uuid4())

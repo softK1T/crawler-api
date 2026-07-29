@@ -1,7 +1,7 @@
 import logging
 import random
 import time
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -36,10 +36,10 @@ GENERIC_BAN_INDICATORS = [
 logger = logging.getLogger(__name__)
 
 # Type alias: (body_bytes, status_code, content_type, response_headers)
-CrawlRaw = Tuple[bytes, int, str, Dict[str, str]]
+CrawlRaw = tuple[bytes, int, str, dict[str, str]]
 
 
-def build_headers(url: str, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def build_headers(url: str, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
     parsed = urlparse(url)
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -64,6 +64,7 @@ def html_to_markdown(html: str) -> str:
     """Convert HTML to clean Markdown."""
     try:
         import html2text
+
         h = html2text.HTML2Text()
         h.ignore_links = False
         h.ignore_images = True
@@ -74,10 +75,10 @@ def html_to_markdown(html: str) -> str:
         return soup.get_text(separator="\n", strip=True)
 
 
-def extract_with_selectors(html: str, selectors: Dict[str, str]) -> Dict[str, Any]:
+def extract_with_selectors(html: str, selectors: dict[str, str]) -> dict[str, Any]:
     """Extract data from HTML using CSS selectors map."""
     soup = BeautifulSoup(html, "html.parser")
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for field, selector in selectors.items():
         elements = soup.select(selector)
         if not elements:
@@ -89,7 +90,7 @@ def extract_with_selectors(html: str, selectors: Dict[str, str]) -> Dict[str, An
     return result
 
 
-def auth_line_to_proxy_url(line: str) -> Optional[str]:
+def auth_line_to_proxy_url(line: str) -> str | None:
     """
     Parse a proxy line into an httpx-compatible URL.
     Supported formats:
@@ -131,7 +132,7 @@ class ProxyRateLimiter:
         key = f"{self.KEY_PREFIX}{proxy}"
         return self._redis.set(key, "1", nx=True, px=self._delay_ms) is not None
 
-    def wait_and_acquire(self, proxies: List[str], timeout: float = 60) -> Optional[str]:
+    def wait_and_acquire(self, proxies: list[str], timeout: float = 60) -> str | None:
         deadline = time.time() + timeout
         candidates = list(proxies)
         while time.time() < deadline:
@@ -148,16 +149,17 @@ class ProxyRateLimiter:
 
 
 class SmartProxyPool:
-    def __init__(self, proxy_list: List[str], per_proxy_delay: float = 5.0,
-                 redis_url: Optional[str] = None):
+    def __init__(
+        self, proxy_list: list[str], per_proxy_delay: float = 5.0, redis_url: str | None = None
+    ):
         self.proxies = proxy_list
         self.per_proxy_delay = per_proxy_delay
 
         self.bad_proxies: set = set()
         self.blocked_proxies: set = set()
-        self.proxy_total_requests: Dict[str, int] = {}
-        self.proxy_successful_requests: Dict[str, int] = {}
-        self.proxy_success_rate: Dict[str, float] = {}
+        self.proxy_total_requests: dict[str, int] = {}
+        self.proxy_successful_requests: dict[str, int] = {}
+        self.proxy_success_rate: dict[str, float] = {}
 
         self.max_requests_per_proxy = 15
         self.min_success_rate = 0.3
@@ -191,10 +193,10 @@ class SmartProxyPool:
                 return False
         return True
 
-    def get_healthy_proxies(self) -> List[str]:
+    def get_healthy_proxies(self) -> list[str]:
         return [p for p in self.proxies if self._is_healthy(p)]
 
-    def pick_proxy_line(self, timeout: float = 60) -> Optional[str]:
+    def pick_proxy_line(self, timeout: float = 60) -> str | None:
         healthy = self.get_healthy_proxies()
         if not healthy:
             logger.error("No healthy proxies available")
@@ -228,7 +230,7 @@ class SmartProxyPool:
         for proxy in self.proxies:
             self.reset_proxy(proxy)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         healthy = len(self.get_healthy_proxies())
         return {
             "total_proxies": len(self.proxies),
@@ -241,17 +243,17 @@ class SmartProxyPool:
 
 class Crawler:
     def __init__(
-            self,
-            proxy_pool=None,          # accepts GeoProxyPool / SmartProxyPool singleton
-            proxy_file: Optional[str] = None,   # legacy: load from file if no pool given
-            max_retries: int = 3,
-            timeout: float = 15.0,
-            delay: float = 1.0,
-            headers: Optional[Dict[str, str]] = None,
-            use_http2: bool = True,
-            ban_indicators: Optional[List[str]] = None,
-            min_content_length: int = 500,
-            proxy_country: Optional[str] = None,
+        self,
+        proxy_pool=None,  # accepts GeoProxyPool / SmartProxyPool singleton
+        proxy_file: str | None = None,  # legacy: load from file if no pool given
+        max_retries: int = 3,
+        timeout: float = 15.0,
+        delay: float = 1.0,
+        headers: dict[str, str] | None = None,
+        use_http2: bool = True,
+        ban_indicators: list[str] | None = None,
+        min_content_length: int = 500,
+        proxy_country: str | None = None,
     ):
         self.max_retries = max_retries
         self.timeout = timeout
@@ -268,9 +270,10 @@ class Crawler:
         elif proxy_file:
             # Legacy: build pool from file (stats lost between tasks)
             try:
-                with open(proxy_file, "r") as f:
+                with open(proxy_file) as f:
                     proxies = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
                 from app.services.geo_proxy_pool import GeoProxyPool
+
                 self.proxy_pool = GeoProxyPool(proxy_list=proxies, per_proxy_delay=delay)
                 logger.info("Loaded %d proxies from %s (legacy mode)", len(proxies), proxy_file)
             except FileNotFoundError:
@@ -292,22 +295,62 @@ class Crawler:
         content_lower = content.lower()
         return any(indicator in content_lower for indicator in self.ban_indicators)
 
-    def _build_client(self, proxy_url: Optional[str] = None) -> httpx.Client:
-        kwargs: Dict[str, Any] = {
+    def _build_client(self, proxy_url: str | None = None) -> httpx.Client:
+        kwargs: dict[str, Any] = {
             "http2": self.use_http2,
             "timeout": httpx.Timeout(connect=10, read=self.timeout, write=10, pool=5),
-            "follow_redirects": True,
+            # Redirects are followed manually so every hop passes url_guard.
+            "follow_redirects": False,
         }
         if proxy_url:
             kwargs["proxy"] = proxy_url
         return httpx.Client(**kwargs)
 
-    def _do_request(self, url: str, proxy_line: Optional[str] = None) -> Optional[CrawlRaw]:
+    def _get_guarded(
+        self, client: httpx.Client, url: str, headers: dict[str, str]
+    ) -> httpx.Response:
+        """GET with per-hop URL validation and a hard body-size cap."""
+        from app.core.url_guard import (
+            MAX_BODY_BYTES,
+            MAX_REDIRECTS,
+            BodyTooLarge,
+            UrlNotAllowed,
+            validate_url_sync,
+        )
+
+        current = url
+        for hop in range(MAX_REDIRECTS + 1):
+            validate_url_sync(current)
+            with client.stream("GET", current, headers=headers) as res:
+                if res.is_redirect:
+                    location = res.headers.get("location")
+                    if not location:
+                        raise UrlNotAllowed(f"Redirect from {current} without Location header.")
+                    current = str(res.url.join(location))
+                    continue
+
+                declared = res.headers.get("content-length")
+                if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+                    raise BodyTooLarge(f"Content-Length {declared} exceeds {MAX_BODY_BYTES}.")
+
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in res.iter_bytes():
+                    total += len(chunk)
+                    if total > MAX_BODY_BYTES:
+                        raise BodyTooLarge(f"Body exceeded {MAX_BODY_BYTES} bytes while streaming.")
+                    chunks.append(chunk)
+                res._content = b"".join(chunks)
+                return res
+
+        raise UrlNotAllowed(f"Exceeded {MAX_REDIRECTS} redirects starting from {url}.")
+
+    def _do_request(self, url: str, proxy_line: str | None = None) -> CrawlRaw | None:
         proxy_url = auth_line_to_proxy_url(proxy_line) if proxy_line else None
         request_headers = build_headers(url, self.extra_headers)
 
         with self._build_client(proxy_url) as client:
-            res = client.get(url, headers=request_headers)
+            res = self._get_guarded(client, url, request_headers)
             self._request_count += 1
 
             content_type = res.headers.get("content-type", "")
@@ -331,16 +374,16 @@ class Crawler:
                     response=res,
                 )
 
-    def crawl_raw(self, url: str) -> Optional[CrawlRaw]:
+    def crawl_raw(self, url: str) -> CrawlRaw | None:
         if self.proxy_pool:
             return self._crawl_with_proxies(url)
         return self._crawl_direct(url)
 
-    def crawl_bytes(self, url: str) -> Optional[bytes]:
+    def crawl_bytes(self, url: str) -> bytes | None:
         result = self.crawl_raw(url)
         return result[0] if result else None
 
-    def _crawl_direct(self, url: str) -> Optional[CrawlRaw]:
+    def _crawl_direct(self, url: str) -> CrawlRaw | None:
         for attempt in range(1, self.max_retries + 1):
             try:
                 logger.info("Crawling %s (direct, attempt %d)", url, attempt)
@@ -355,21 +398,27 @@ class Crawler:
                 time.sleep(self.delay * attempt)
         return None
 
-    def _pick_proxy(self) -> Optional[str]:
+    def _pick_proxy(self) -> str | None:
         """Pick proxy — geo-aware if pool supports it and country is set."""
         from app.services.geo_proxy_pool import GeoProxyPool
+
         if isinstance(self.proxy_pool, GeoProxyPool) and self.proxy_country:
             return self.proxy_pool.pick_proxy_for_country(self.proxy_country)
         return self.proxy_pool.pick_proxy_line()
 
-    def _crawl_with_proxies(self, url: str) -> Optional[CrawlRaw]:
+    def _crawl_with_proxies(self, url: str) -> CrawlRaw | None:
         for attempt in range(1, self.max_retries + 1):
             proxy_line = self._pick_proxy()
             if not proxy_line:
                 logger.error("No proxies available")
                 break
             try:
-                logger.info("Crawling %s via proxy country=%s (attempt %d)", url, self.proxy_country, attempt)
+                logger.info(
+                    "Crawling %s via proxy country=%s (attempt %d)",
+                    url,
+                    self.proxy_country,
+                    attempt,
+                )
                 result = self._do_request(url, proxy_line)
                 self.proxy_pool.report_request_result(proxy_line, True)
                 return result
@@ -383,11 +432,11 @@ class Crawler:
                 self._failed_requests += 1
         return None
 
-    def crawl(self, url: str) -> Optional[str]:
+    def crawl(self, url: str) -> str | None:
         data = self.crawl_bytes(url)
         return data.decode("utf-8", "replace") if data else None
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         total = self._request_count or 1
         return {
             "total_requests": self._request_count,
@@ -399,7 +448,9 @@ class Crawler:
         }
 
 
-async def crawl_browser(url: str, timeout: int = 15, wait_for: Optional[str] = None) -> Optional[CrawlRaw]:
+async def crawl_browser(
+    url: str, timeout: int = 15, wait_for: str | None = None
+) -> CrawlRaw | None:
     """
     Browser-based crawl using Playwright (handles JS-rendered pages).
     Requires: pip install playwright && playwright install chromium
@@ -407,7 +458,9 @@ async def crawl_browser(url: str, timeout: int = 15, wait_for: Optional[str] = N
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        logger.error("Playwright not installed. Run: pip install playwright && playwright install chromium")
+        logger.error(
+            "Playwright not installed. Run: pip install playwright && playwright install chromium"
+        )
         return None
     try:
         async with async_playwright() as p:

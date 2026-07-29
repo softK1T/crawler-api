@@ -1,4 +1,3 @@
-from typing import Type
 from app.services.adapters.base import SiteAdapter
 
 # Registry: domain -> SiteAdapter subclass
@@ -6,12 +5,13 @@ from app.services.adapters.base import SiteAdapter
 # Example:
 #   from app.services.adapters.mysite import MySiteAdapter
 #   ADAPTERS["mysite.com"] = MySiteAdapter
-ADAPTERS: dict[str, Type[SiteAdapter]] = {}
+ADAPTERS: dict[str, type[SiteAdapter]] = {}
 
 
 def get_adapter(url: str) -> SiteAdapter:
     from urllib.parse import urlparse
-    domain = urlparse(url).netloc.lstrip("www.")
+
+    domain = urlparse(url).netloc.removeprefix("www.")
     cls = ADAPTERS.get(domain)
     if not cls:
         raise ValueError(

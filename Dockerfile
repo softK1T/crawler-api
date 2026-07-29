@@ -1,40 +1,46 @@
-FROM python:3.11-slim
+# Stage 1: builder — compile Python dependencies.
+FROM python:3.12-slim AS builder
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive \
-    DISPLAY=:99
+WORKDIR /build
 
-WORKDIR /app
-
-# System deps for Camoufox (Firefox) + Xvfb virtual display
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Core Firefox/XPCOM deps
-    libgtk-3-0 \
-    libx11-xcb1 \
-    libasound2 \
-    # Extra deps for headless stability
-    libgbm1 \
-    libnss3 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libxkbcommon0 \
-    # Xvfb virtual display (recommended by camoufox for headless)
-    xvfb \
-    fonts-liberation \
-    ca-certificates \
-    curl \
+    build-essential gcc libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir --upgrade pip
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+# Install core + browser (worker needs Playwright/Camoufox; API shares the image).
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir ".[browser]"
 
-# Pre-fetch Camoufox Firefox build at image build time
-RUN python -m camoufox fetch
+# Stage 2: runtime — minimal production image.
+FROM python:3.12-slim
 
-COPY app app
+RUN groupadd -r crawler && useradd -r -g crawler crawler \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/crawler-api
+
+# Copy installed packages from builder.
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application code.
+COPY app/ ./app/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
+COPY scripts/ ./scripts/
+COPY pyproject.toml .
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Drop privileges.
+USER crawler
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/healthz || exit 1
 
 EXPOSE 8000
 

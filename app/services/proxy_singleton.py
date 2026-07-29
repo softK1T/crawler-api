@@ -1,15 +1,14 @@
 import logging
-from typing import Optional
 
 from app.core.config import settings
 from app.services.geo_proxy_pool import GeoProxyPool
 
 logger = logging.getLogger(__name__)
 
-_pool: Optional[GeoProxyPool] = None
+_pool: GeoProxyPool | None = None
 
 
-def get_proxy_pool() -> Optional[GeoProxyPool]:
+def get_proxy_pool() -> GeoProxyPool | None:
     """
     Return the global GeoProxyPool singleton.
     Initialised lazily on first call.
@@ -25,7 +24,7 @@ def get_proxy_pool() -> Optional[GeoProxyPool]:
         return None
 
     try:
-        with open(proxy_file, "r") as f:
+        with open(proxy_file) as f:
             lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
     except FileNotFoundError:
         logger.error("Proxy file not found: %s", proxy_file)

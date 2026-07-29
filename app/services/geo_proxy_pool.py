@@ -1,12 +1,11 @@
 import logging
-from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 from app.services.crawler import SmartProxyPool
 
 logger = logging.getLogger(__name__)
 
-TLD_COUNTRY_MAP: Dict[str, str] = {
+TLD_COUNTRY_MAP: dict[str, str] = {
     ".com.br": "BR",
     ".com.au": "AU",
     ".co.uk": "GB",
@@ -88,10 +87,10 @@ class GeoProxyPool(SmartProxyPool):
     Standard 2-part and 4-part formats still supported (no country tag).
     """
 
-    def __init__(self, proxy_list: List[str], **kwargs):
+    def __init__(self, proxy_list: list[str], **kwargs):
         # geo_index: country -> list of clean proxy lines (without country tag)
-        self.geo_index: Dict[str, List[str]] = {}
-        clean_proxies: List[str] = []
+        self.geo_index: dict[str, list[str]] = {}
+        clean_proxies: list[str] = []
 
         for line in proxy_list:
             stripped = line.strip()
@@ -114,7 +113,7 @@ class GeoProxyPool(SmartProxyPool):
             {k: len(v) for k, v in self.geo_index.items()},
         )
 
-    def pick_proxy_for_country(self, country: str, timeout: float = 60) -> Optional[str]:
+    def pick_proxy_for_country(self, country: str, timeout: float = 60) -> str | None:
         """
         Pick the healthiest available proxy for the given country.
         Falls back to any healthy proxy if no geo match found.
@@ -139,7 +138,7 @@ class GeoProxyPool(SmartProxyPool):
         logger.info("All %s proxies on cooldown, waiting...", country)
         return self.rate_limiter.wait_and_acquire(healthy, timeout=timeout)
 
-    def get_geo_stats(self) -> Dict[str, Dict]:
+    def get_geo_stats(self) -> dict[str, dict]:
         """Return per-country proxy counts and health breakdown."""
         stats = {}
         for country, proxies in self.geo_index.items():

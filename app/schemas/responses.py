@@ -1,10 +1,11 @@
-from pydantic import BaseModel
-from typing import List, Optional, Any, Dict
-from enum import Enum
 from datetime import datetime
+from enum import StrEnum
+from typing import Any
+
+from pydantic import BaseModel
 
 
-class TaskState(str, Enum):
+class TaskState(StrEnum):
     PENDING = "PENDING"
     STARTED = "STARTED"
     SUCCESS = "SUCCESS"
@@ -19,14 +20,14 @@ class JobResponse(BaseModel):
 
 class BatchResponse(BaseModel):
     batch_id: str
-    job_ids: List[str]
+    job_ids: list[str]
     total_count: int
 
 
 class JobStatusResponse(BaseModel):
     job_id: str
     state: TaskState
-    created_at: Optional[str] = None
+    created_at: str | None = None
 
 
 class BatchStatusResponse(BaseModel):
@@ -34,25 +35,25 @@ class BatchStatusResponse(BaseModel):
     total: int
     completed: int
     progress: float
-    jobs: List[JobStatusResponse]
+    jobs: list[JobStatusResponse]
 
 
 class CrawlResult(BaseModel):
     job_id: str
-    project_id: Optional[str] = None
+    project_id: str | None = None
     url: str
-    status_code: Optional[int] = None
+    status_code: int | None = None
     response_time_ms: int
-    body: Optional[str] = None
-    body_encoding: Optional[str] = None
-    markdown: Optional[str] = None          # HTML converted to Markdown
-    extracted: Optional[Dict[str, Any]] = None  # CSS-extracted structured data
-    batch_id: Optional[str] = None
-    content_type: Optional[str] = None
-    headers_trunc: Optional[dict] = None
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
-    crawled_at: Optional[str] = None
+    body: str | None = None
+    body_encoding: str | None = None
+    markdown: str | None = None  # HTML converted to Markdown
+    extracted: dict[str, Any] | None = None  # CSS-extracted structured data
+    batch_id: str | None = None
+    content_type: str | None = None
+    headers_trunc: dict | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    crawled_at: str | None = None
 
 
 class ProjectResponse(BaseModel):
