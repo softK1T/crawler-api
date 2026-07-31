@@ -20,6 +20,23 @@ RUN groupadd -r crawler && useradd -r -g crawler crawler \
     curl ca-certificates libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Chromium for Playwright mode=browser (~400 MB).
+# Install to /opt/playwright-browsers so both root (build) and crawler (runtime)
+# can access.  System deps installed manually because playwright install-deps
+# fails on Bookworm (renamed ttf-* font packages).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN pip install --no-cache-dir --no-deps playwright==1.49.0 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libnss3 libnspr4 libdbus-1-3 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+        libcups2t64 libdrm2 libgbm1 libxkbcommon0 libxcomposite1 \
+        libxdamage1 libxfixes3 libxrandr2 libpango-1.0-0 libcairo2 \
+        libasound2t64 libx11-6 libxcb1 libxext6 libxrender1 \
+        fonts-liberation \
+    && playwright install chromium \
+    && chmod -R 755 /opt/playwright-browsers \
+    && rm -rf /var/lib/apt/lists/* /root/.cache/pip /root/.cache/ms-playwright
+
 WORKDIR /opt/crawler-api
 
 # Copy installed packages from builder.
