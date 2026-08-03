@@ -13,6 +13,7 @@ class CrawlRequest(BaseModel):
     project_id: str | None = None
     extract: dict[str, str] | None = None
     proxy_country: str | None = None
+    proxy_type: Literal["residential", "datacenter"] | None = None
     wait_for: str | None = None
     session_key: str | None = None
     callback_url: HttpUrl | None = None

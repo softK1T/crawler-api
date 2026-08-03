@@ -99,6 +99,7 @@ class ProxyManager:
         proxy_sticky_ttl_s: int = 1800,
         exclude_ids: set[UUID] | None = None,
         country: str | None = None,
+        proxy_type: str | None = None,
     ) -> None:
         """Select a proxy by weighted health score.
 
@@ -110,6 +111,7 @@ class ProxyManager:
         *tenant_id* is an alias for *pool_id* (maps to ProxyPool).
         *exclude_ids* removes proxies already tried (rotation).
         *country* filters to proxies matching an ISO 3166-1 alpha-2 code.
+        *proxy_type* filters to 'residential' or 'datacenter' proxies.
         """
         from app.models.proxy import Proxy
         from app.services.proxy_health import is_on_cooldown
@@ -140,6 +142,8 @@ class ProxyManager:
                 stmt = stmt.where(Proxy.pool_id == effective_pool)
             if country is not None:
                 stmt = stmt.where(Proxy.country == country.upper()[:2])
+            if proxy_type is not None:
+                stmt = stmt.where(Proxy.proxy_type == proxy_type)
             result = await db.execute(stmt)
             all_proxies = result.scalars().all()
 
