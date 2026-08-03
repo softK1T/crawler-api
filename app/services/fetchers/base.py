@@ -96,6 +96,7 @@ async def fetch_with_retry(
     trace_id: str | None = None,
     use_proxy: bool | None = None,
     proxy_country: str | None = None,
+    proxy_type: str | None = None,
 ) -> FetchResult:
     """Retry loop with proxy selection, health reporting, and jittered backoff.
 
@@ -144,6 +145,7 @@ async def fetch_with_retry(
                     sticky_key=sticky_key if attempt == 0 else None,
                     exclude_ids=failed_proxy_ids,
                     country=effective_country,
+                    proxy_type=proxy_type,
                 )
 
                 # Fail-fast: caller requested proxy but none is available.

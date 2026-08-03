@@ -11,7 +11,7 @@ WEBSHARE_LIST_URL = "https://proxy.webshare.io/api/v2/proxy/list/"
 def fetch_webshare_proxies(api_key: str, page_size: int = 100) -> list[str]:
     """
     Fetch all proxies from Webshare API v2.
-    Returns list of strings in format: host:port:user:pass:COUNTRY
+    Returns list of strings in format: host:port:user:pass:COUNTRY:PROXY_TYPE
     """
     lines: list[str] = []
     page = 1
@@ -30,9 +30,10 @@ def fetch_webshare_proxies(api_key: str, page_size: int = 100) -> list[str]:
                 username = proxy.get("username", "")
                 password = proxy.get("password", "")
                 country = proxy.get("country_code", "US").upper()
+                proxy_type = proxy.get("type", "datacenter").lower()
 
                 if host and port and username and password:
-                    lines.append(f"{host}:{port}:{username}:{password}:{country}")
+                    lines.append(f"{host}:{port}:{username}:{password}:{country}:{proxy_type}")
 
             logger.info("Webshare sync: fetched page %d (%d proxies so far)", page, len(lines))
 

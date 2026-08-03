@@ -19,6 +19,7 @@ class JobCreate(BaseModel):
     idempotency_key: str | None = Field(None, max_length=128)
     use_proxy: bool | None = None
     proxy_country: str | None = Field(None, min_length=2, max_length=2)
+    proxy_type: Literal["residential", "datacenter"] | None = None
     options: dict[str, Any] = {}
 
 

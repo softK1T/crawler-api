@@ -55,7 +55,13 @@ async def sync_proxies(ctx: dict) -> None:
                 user = parts[2] if len(parts) > 2 else ""
                 pwd = parts[3] if len(parts) > 3 else ""
                 country = parts[4] if len(parts) > 4 else "unknown"
-                new_proxies[url] = {"user": user, "password": pwd, "country": country}
+                proxy_type = parts[5] if len(parts) > 5 else "datacenter"
+                new_proxies[url] = {
+                    "user": user,
+                    "password": pwd,
+                    "country": country,
+                    "proxy_type": proxy_type,
+                }
     except OSError as exc:
         logger.error("sync_proxies: cannot read proxy file: %s", exc)
         return
@@ -77,9 +83,9 @@ async def sync_proxies(ctx: dict) -> None:
                 await db.execute(
                     text(
                         "INSERT INTO proxies (id, pool_id, url, username, password, "
-                        "country, is_active, health_score, created_at, updated_at) "
+                        "country, proxy_type, is_active, health_score, created_at, updated_at) "
                         "VALUES (:id, :pool_id, :url, :user, :pwd, :country, "
-                        "true, 1.0, :now, :now)"
+                        ":proxy_type, true, 1.0, :now, :now)"
                     ),
                     {
                         "id": str(uuid4()),
@@ -88,6 +94,7 @@ async def sync_proxies(ctx: dict) -> None:
                         "user": data["user"],
                         "pwd": data["password"],
                         "country": data["country"],
+                        "proxy_type": data["proxy_type"],
                         "now": now,
                     },
                 )
