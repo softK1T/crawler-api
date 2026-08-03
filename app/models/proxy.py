@@ -1,11 +1,18 @@
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, String, func
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+
+
+class ProxyType(StrEnum):
+    residential = "residential"
+    datacenter = "datacenter"
 
 
 class Proxy(Base):
@@ -26,6 +33,11 @@ class Proxy(Base):
     )
     url: Mapped[str] = mapped_column(String(1024), nullable=False)
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    proxy_type: Mapped[str] = mapped_column(
+        SAEnum(ProxyType, name="proxy_type_enum"),
+        nullable=False,
+        server_default="datacenter",
+    )
     health_score: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     consecutive_failures: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -42,4 +54,4 @@ class Proxy(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Proxy id={self.id} country={self.country!r} score={self.health_score}>"
+        return f"<Proxy id={self.id} country={self.country!r} type={self.proxy_type} score={self.health_score}>"

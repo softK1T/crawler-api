@@ -64,6 +64,7 @@ async def fetch_task(
             # request > domain_policy > defaults).
             req_use_proxy = options["use_proxy"] if "use_proxy" in options else None
             req_proxy_country = options["proxy_country"] if "proxy_country" in options else None
+            req_proxy_type = options.get("proxy_type")  # "residential" | "datacenter" | None
 
             result = await fetch_with_retry(
                 fetcher=fetcher,
@@ -75,6 +76,7 @@ async def fetch_task(
                 trace_id=job_id,
                 use_proxy=req_use_proxy,
                 proxy_country=req_proxy_country,
+                proxy_type=req_proxy_type,
             )
 
             # 5. Block detection metric.
