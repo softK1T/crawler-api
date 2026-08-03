@@ -55,7 +55,7 @@ async def fetch_task(
             engine = (
                 policy.engine if policy and policy.engine else _MODE_TO_ENGINE.get(mode, "httpx")
             )
-            fetcher = get_fetcher(engine)
+            fetcher = get_fetcher(engine, browser_pool=ctx.get("browser_pool"))
 
             # 4. Execute fetch with retry.
             from app.services.fetchers.base import fetch_with_retry
@@ -88,26 +88,21 @@ async def fetch_task(
                 ).inc()
 
             # 6. Normalize API response body (server-side decompression, ADR-018).
-            from app.services.content_decoder import (
-                compute_integrity_fields,
-                decode_body,
-                normalize_response_headers,
-            )
+            from app.services.content_decoder import decode_body, integrity, normalize_headers
 
-            # Use raw transport bytes if available; otherwise fall back to body.
             raw_for_decode = result.raw_body or result.body
             content_encoding = (result.raw_headers or result.headers).get("content-encoding")
             try:
-                api_body, detected_encoding = decode_body(raw_for_decode, content_encoding)
+                api_body, original_encoding = decode_body(raw_for_decode, content_encoding)
             except Exception:
                 api_body = result.body
-                detected_encoding = content_encoding
+                original_encoding = content_encoding
 
-            # Normalize headers for API consumers: drop content-encoding + content-length.
-            result.headers = normalize_response_headers(result.headers, detected_encoding)
+            result.headers = normalize_headers(result.headers, len(api_body))
             result.body = api_body
 
-            integrity = compute_integrity_fields(api_body, detected_encoding)
+            ing = integrity(api_body)
+            ing["original_content_encoding"] = original_encoding
 
             # 7. Archive if not blocked (WARC gets raw transport bytes).
             warc_index = None
@@ -130,7 +125,7 @@ async def fetch_task(
             # 8. Serialize and store result.
             from app.schemas.fetch import FetchResultSchema
 
-            schema = FetchResultSchema.from_result(result, integrity=integrity)
+            schema = FetchResultSchema.from_result(result, integrity_fields=ing)
 
             await _set_status(
                 redis_client,
@@ -343,10 +338,10 @@ async def startup(ctx: dict) -> None:
     from app.core.logging_config import configure_logging
     from app.services.proxy_manager import ProxyManager
     from app.services.warc.storage import create_warc_storage
+    from app.worker.browser_pool import ChromiumMissingError, browser_pool, verify_chromium
 
     configure_logging(settings.log_level)
     ctx["settings"] = settings
-    # Status keys must be on the same Redis DB the API reads from.
     ctx["redis"] = aioredis.from_url(settings.redis_url, decode_responses=False)
     ctx["db_factory"] = AsyncSessionLocal
     ctx["proxy_manager"] = ProxyManager(
@@ -355,9 +350,18 @@ async def startup(ctx: dict) -> None:
     )
     ctx["warc_storage"] = await create_warc_storage(settings)
 
-    # Fail startup if Chromium is missing — browser-mode jobs must not
-    # silently degrade to httpx.
-    await _verify_chromium()
+    # Verify Chromium can actually launch (not just exist on disk).
+    # Fail startup if missing — browser-mode jobs must not silently degrade.
+    try:
+        version = await verify_chromium()
+        await browser_pool.start()
+        ctx["browser_pool"] = browser_pool
+        ctx["browser_ready"] = True
+        logger.info("chromium_selfcheck_passed version=%s", version)
+    except ChromiumMissingError:
+        ctx["browser_ready"] = False
+        logger.error("browser_selfcheck_failed error=PLAYWRIGHT_CHROMIUM_MISSING")
+        raise
 
     logger.info("arq worker startup complete")
 
@@ -367,7 +371,7 @@ async def shutdown(ctx: dict) -> None:
     # Drain browser pool.
     if ctx.get("browser_pool"):
         try:
-            await ctx["browser_pool"].shutdown()
+            await ctx["browser_pool"].stop()
         except Exception:
             logger.warning("Browser pool shutdown failed", exc_info=True)
 

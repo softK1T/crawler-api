@@ -4,7 +4,7 @@ Revision ID: 0003
 Revises: 0002
 Create Date: 2026-08-03 10:00:00.000000
 
-use_proxy controls whether a proxy is selected for this domain (default True).
+use_proxy controls whether a proxy is selected for this domain (default False — opt-in to avoid breaking existing domains with PROXY_POOL_EMPTY).
 proxy_country is an optional ISO 3166-1 alpha-2 code to pin proxy geography.
 """
 
@@ -24,7 +24,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         "domain_policies",
-        sa.Column("use_proxy", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("use_proxy", sa.Boolean(), nullable=False, server_default=sa.text("false")),
     )
     op.add_column(
         "domain_policies",

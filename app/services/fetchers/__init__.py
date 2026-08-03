@@ -7,11 +7,12 @@ from app.services.fetchers.base import FetcherProtocol, FetchError, FetchResult,
 logger = logging.getLogger(__name__)
 
 
-def get_fetcher(engine: str) -> FetcherProtocol:
+def get_fetcher(engine: str, *, browser_pool=None) -> FetcherProtocol:
     """Return a fetcher instance for *engine*.
 
     Supported engines: ``"httpx"``, ``"curl_cffi"``, ``"playwright"``.
     ``"camoufox"`` is mapped to ``PlaywrightFetcher`` (native support deferred).
+    *browser_pool* is injected into PlaywrightFetcher for browser reuse.
     """
     if engine == "httpx":
         from app.services.fetchers.httpx_fetcher import HttpxFetcher
@@ -26,7 +27,7 @@ def get_fetcher(engine: str) -> FetcherProtocol:
             logger.warning("camoufox engine mapped to playwright; native camoufox support deferred")
         from app.services.fetchers.playwright_fetcher import PlaywrightFetcher
 
-        return PlaywrightFetcher()
+        return PlaywrightFetcher(browser_pool=browser_pool)
     raise ValueError(f"Unknown engine: {engine!r}")
 
 
