@@ -2,6 +2,20 @@
 
 All notable changes to crawler-api are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Prevented legacy or unknown block-reason values from failing completed jobs.
+- Removed broad bot-keyword matching that falsely blocked normal HTML pages.
+- Prevented repeated direct-IP attempts after a detected IP or WAF block.
+- Enforced fail-fast proxy behavior when `use_proxy=true` and the eligible
+  proxy pool is empty or exhausted.
+- Preserved explicit `use_proxy=false` through API-to-worker option handling.
+- Added a writable runtime home/cache for the non-root `crawler` user.
+- Disabled runtime Public Suffix List downloads by using tldextract's bundled
+  snapshot.
+
 ## [0.2.0] — 2026-08-03
 
 ### Added

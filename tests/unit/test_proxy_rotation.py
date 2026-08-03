@@ -210,3 +210,33 @@ async def test_sticky_cleared_on_first_retry():
 
     assert proxy_mgr.get_proxy.call_args_list[0].kwargs["sticky_key"] == "job-123"
     assert proxy_mgr.get_proxy.call_args_list[1].kwargs["sticky_key"] is None
+
+
+@pytest.mark.asyncio
+async def test_required_proxy_never_falls_back_to_direct():
+    """When use_proxy=True and pool is empty, fail-fast without calling the fetcher."""
+    from app.core.errors import ProxyPoolUnavailableError
+    from app.services.fetchers.base import FetchResult, fetch_with_retry
+
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = FetchResult(
+        url="https://example.com",
+        status_code=200,
+        body=b"ok",
+        engine="httpx",
+    )
+
+    proxy_mgr = AsyncMock()
+    proxy_mgr.get_proxy.return_value = None  # pool empty
+
+    with pytest.raises(ProxyPoolUnavailableError, match="PROXY_POOL_EMPTY"):
+        await fetch_with_retry(
+            fetcher=fetcher,
+            url="https://www.mediaexpert.pl/",
+            policy=_Policy(),
+            proxy_manager=proxy_mgr,
+            use_proxy=True,
+            proxy_country="PL",
+        )
+
+    fetcher.fetch.assert_not_called()

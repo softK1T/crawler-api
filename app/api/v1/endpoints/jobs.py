@@ -109,7 +109,7 @@ async def create_fetch(
     if body.use_proxy is not None:
         merged_options["use_proxy"] = body.use_proxy
     if body.proxy_country is not None:
-        merged_options["proxy_country"] = body.proxy_country
+        merged_options["proxy_country"] = body.proxy_country.upper()
 
     # 5. Enqueue.
     job_id = str(uuid4())
