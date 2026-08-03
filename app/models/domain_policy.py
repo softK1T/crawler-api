@@ -28,7 +28,7 @@ class DomainPolicy(Base):
     respect_robots: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     header_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     sticky_session: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    use_proxy: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    use_proxy: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     proxy_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(

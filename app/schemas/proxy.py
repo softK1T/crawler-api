@@ -43,3 +43,22 @@ class ProxyHealthUpdate(BaseModel):
     success: bool
     reason: Literal["http_error", "timeout", "blocked", "captcha"] | None = None
     domain: str
+
+
+class ProxyImportItem(BaseModel):
+    """Single proxy entry for bulk import: host:port:user:pass:country fields."""
+
+    host: str
+    port: int
+    username: str
+    password: str
+    country: str  # ISO 3166-1 alpha-2
+
+
+class ProxyBulkImport(BaseModel):
+    tenant_id: UUID
+    proxies: list[ProxyImportItem]
+
+
+class ProxyImportResponse(BaseModel):
+    imported: int

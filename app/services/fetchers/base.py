@@ -159,7 +159,7 @@ async def fetch_with_retry(
 
     # ── Resolve effective proxy policy ──────────────────────────────────────
     effective_use_proxy = (
-        use_proxy if use_proxy is not None else (policy.use_proxy if policy else True)
+        use_proxy if use_proxy is not None else (policy.use_proxy if policy else False)
     )
     effective_country = (
         proxy_country if proxy_country is not None else (policy.proxy_country if policy else None)

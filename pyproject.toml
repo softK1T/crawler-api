@@ -94,6 +94,7 @@ ignore = [
 "app/services/fetchers/playwright_fetcher.py" = ["S110"]  # intentional try-except-pass on browser cleanup
 "app/worker/tasks/fetch_task.py" = ["S110", "ASYNC240"]  # intentional try-except-pass on Redis close during shutdown; pathlib in startup check is intentional
 "app/worker/arq_worker.py" = ["RUF012"]  # mutable class attribute required by arq WorkerSettings
+"app/worker/browser_pool.py" = ["ASYNC240", "S311"]  # pathlib in startup check is intentional; random for viewport (non-crypto)
 "app/api/v1/endpoints/jobs.py" = ["S110"]  # intentional try-except-pass on OTel span trace_id
 "app/services/warc/dlq.py" = ["S110", "ASYNC230", "ASYNC240"]  # disk I/O inherent to DLQ
 

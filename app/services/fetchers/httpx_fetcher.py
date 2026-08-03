@@ -1,4 +1,4 @@
-"""httpx-based fetcher with per-hop SSRF validation and raw transport capture."""
+"""httpx-based fetcher — raw transport capture via stream, per-hop SSRF validation."""
 
 import logging
 import time
@@ -62,22 +62,18 @@ class HttpxFetcher:
                 except URLGuardError as exc:
                     raise FetchError(str(exc), blocked=False) from exc
 
-                # Use stream() to capture raw transport bytes before httpx
-                # applies content decoding (see ADR-018).
+                # Stream to capture raw transport bytes before httpx
+                # applies content decoding (ADR-018).
                 async with client.stream("GET", current_url, headers=headers or {}) as response:
                     raw_body = b"".join([chunk async for chunk in response.aiter_raw()])
                     raw_headers = dict(response.headers)
 
-                    # Decode body for API consumers.
-                    from app.services.content_decoder import decode_body
+                    from app.services.content_decoder import decode_body, normalize_headers
 
                     content_encoding = raw_headers.get("content-encoding")
                     try:
-                        decoded_body, _detected = decode_body(raw_body, content_encoding)
+                        decoded_body, _original_encoding = decode_body(raw_body, content_encoding)
                     except Exception:
-                        # If decoding fails, pass raw bytes through — the
-                        # job will complete but body_b64 reflects raw bytes
-                        # and original_content_encoding is preserved.
                         decoded_body = raw_body
 
                     status_code = response.status_code
@@ -103,7 +99,7 @@ class HttpxFetcher:
                 return FetchResult(
                     url=current_url,
                     status_code=status_code,
-                    headers=dict(raw_headers),
+                    headers=normalize_headers(raw_headers, len(decoded_body)),
                     body=decoded_body,
                     encoding="utf-8",
                     elapsed_ms=elapsed_ms,
@@ -113,14 +109,11 @@ class HttpxFetcher:
                     block_reason=reason,
                     retries_used=0,
                     raw_body=raw_body,
-                    raw_headers=dict(raw_headers),
+                    raw_headers=raw_headers,
                 )
 
             # Exhausted redirect budget.
             raise FetchError(f"Too many redirects from {url}")
-
-    # Prevent httpx.TimeoutException and ProxyError from leaking.
-    # They are caught in fetch_with_retry as generic exceptions.
 
     async def fetch_with_timeout(self, *args, **kwargs) -> FetchResult:
         try:

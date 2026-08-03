@@ -6,139 +6,114 @@ preserving raw transport bytes for WARC archival.
 Supported encodings: gzip, deflate (zlib + raw), brotli, zstandard.
 """
 
+from __future__ import annotations
+
 import gzip
-import logging
+import hashlib
 import zlib
 
-logger = logging.getLogger(__name__)
+import brotli
+import zstandard
 
-# ── Magic bytes ────────────────────────────────────────────────────────────────
-
-_GZIP_MAGIC = b"\x1f\x8b"
-_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+_SUPPORTED = {"br", "gzip", "x-gzip", "deflate", "zstd", "identity", ""}
 
 
 class UnsupportedContentEncoding(ValueError):
-    """Raised when the Content-Encoding value is not supported or decoding fails."""
+    """Raised when the Content-Encoding value is not in the supported set."""
 
 
-def _sniff_encoding(raw: bytes) -> str | None:
-    """Guess the content encoding from magic bytes in *raw*.
+class ContentDecodingFailed(ValueError):
+    """Raised when decoding fails for a declared encoding (broken payload)."""
 
-    Returns the encoding name or ``None`` if identity.
-    """
-    if raw[:2] == _GZIP_MAGIC:
+
+def sniff(raw: bytes) -> str | None:
+    """Guess content encoding from magic bytes."""
+    if raw[:2] == b"\x1f\x8b":
         return "gzip"
-    if raw[:4] == _ZSTD_MAGIC:
+    if raw[:4] == b"\x28\xb5\x2f\xfd":
         return "zstd"
-    # Try zlib-wrapped deflate (RFC 1950).
-    try:
-        zlib.decompress(raw)
+    # zlib header check (RFC 1950): CMF byte & 0x0F == 8, (CMF<<8|FLG) % 31 == 0.
+    if len(raw) >= 2 and raw[0] & 0x0F == 8 and (raw[0] << 8 | raw[1]) % 31 == 0:
         return "deflate"
-    except zlib.error:
-        pass
-    # Try raw deflate (RFC 1951, no header).
-    try:
-        zlib.decompress(raw, -zlib.MAX_WBITS)
-        return "deflate"
-    except zlib.error:
-        pass
     return None
 
 
-def decode_body(
-    raw: bytes,
-    encoding: str | None,
-    *,
-    strict: bool = True,
-) -> tuple[bytes, str | None]:
+def _looks_like_text(b: bytes) -> bool:
+    """Heuristic: does *b* look like plain text (HTML, JSON, XML)?"""
+    head = b[:512].lstrip().lower()
+    return head.startswith((b"<!doctype", b"<html", b"<?xml", b"{", b"[")) or (
+        b"\x00" not in b[:512]
+    )
+
+
+def decode_body(raw: bytes, encoding: str | None) -> tuple[bytes, str | None]:
     """Decode *raw* bytes according to *encoding*.
 
-    Args:
-        raw: Raw transport bytes (as received from the wire).
-        encoding: ``Content-Encoding`` header value (case-insensitive).
-        strict: If ``True``, raise on unsupported encoding.  If ``False``,
-            return *raw* unchanged (identity fallback).
-
-    Returns:
-        ``(decoded_bytes, detected_encoding)`` where *detected_encoding* is
-        the encoding that was actually applied (``None`` for identity).
+    Returns ``(decoded_bytes, detected_encoding)``.
     """
-    normalized = (encoding or "").strip().lower()
+    enc = (encoding or "").strip().lower().split(",")[0].strip()
 
-    # Map common aliases.
-    if normalized in ("", "identity", "none"):
-        normalized = ""
+    if enc not in _SUPPORTED:
+        raise UnsupportedContentEncoding(f"UNSUPPORTED_CONTENT_ENCODING: {enc}")
 
-    if not normalized:
-        sniffed = _sniff_encoding(raw)
-        if sniffed is not None:
-            logger.debug("Sniffed encoding=%s for %d bytes", sniffed, len(raw))
-            return decode_body(raw, sniffed, strict=strict)
-        return raw, None
+    if enc in ("", "identity"):
+        sniffed = sniff(raw)
+        if sniffed is None:
+            # Brotli has no reliable magic — try it as fallback for non-text bytes.
+            if not _looks_like_text(raw):
+                try:
+                    return brotli.decompress(raw), "br"
+                except brotli.error:
+                    pass
+            return raw, None
+        enc = sniffed
 
     try:
-        if normalized == "br":
-            import brotli
-
+        if enc == "br":
             return brotli.decompress(raw), "br"
-        if normalized in ("gzip", "x-gzip"):
-            return gzip.decompress(raw), normalized
-        if normalized == "deflate":
+        if enc in ("gzip", "x-gzip"):
+            return gzip.decompress(raw), enc
+        if enc == "deflate":
             try:
                 return zlib.decompress(raw), "deflate"
             except zlib.error:
                 return zlib.decompress(raw, -zlib.MAX_WBITS), "deflate"
-        if normalized in ("zstd", "zstandard"):
-            import zstandard
-
-            return zstandard.ZstdDecompressor().decompress(raw), normalized
+        if enc == "zstd":
+            return zstandard.ZstdDecompressor().decompress(raw), "zstd"
     except Exception as exc:
-        if strict:
-            raise UnsupportedContentEncoding(
-                f"CONTENT_DECODING_FAILED: {normalized} — {exc}"
-            ) from exc
-        logger.warning("Content decoding failed for %s: %s", normalized, exc)
-        return raw, normalized
+        raise ContentDecodingFailed(f"CONTENT_DECODING_FAILED: encoding={enc}: {exc}") from exc
 
-    if strict:
-        raise UnsupportedContentEncoding(f"UNSUPPORTED_CONTENT_ENCODING: {normalized!r}")
-    logger.warning("Unsupported content encoding: %r — returning identity", normalized)
-    return raw, normalized
+    return raw, None
 
 
-def normalize_response_headers(
-    headers: dict[str, str],
-    original_encoding: str | None,
-) -> dict[str, str]:
+def normalize_headers(headers: dict[str, str], body_len: int) -> dict[str, str]:
     """Return headers safe for API consumers.
 
-    Removes ``content-encoding`` (already decompressed) and
-    ``content-length`` (refers to compressed representation).
-    All other headers pass through unchanged.
+    Drops ``content-encoding`` and old ``content-length`` (refers to
+    compressed representation).  Sets ``content-length`` to *body_len*.
     """
-    drop = {"content-encoding", "content-length"}
-    return {k: v for k, v in headers.items() if k.lower() not in drop}
+    out = {
+        k.lower(): v
+        for k, v in headers.items()
+        if k.lower() not in ("content-encoding", "content-length")
+    }
+    out["content-length"] = str(body_len)
+    return out
 
 
-def compute_integrity_fields(decoded_body: bytes, original_encoding: str | None) -> dict:
-    """Return api_version=2 integrity fields for a decoded body."""
-    import base64
-    import hashlib
-
+def integrity(body: bytes) -> dict:
+    """Return sha256 hash and byte count for *body*."""
     return {
-        "api_version": "2",
-        "body_b64": base64.b64encode(decoded_body).decode("ascii"),
-        "body_is_compressed": False,
-        "body_bytes": len(decoded_body),
-        "content_sha256": hashlib.sha256(decoded_body).hexdigest(),
-        "original_content_encoding": original_encoding,
+        "body_bytes": len(body),
+        "content_sha256": hashlib.sha256(body).hexdigest(),
     }
 
 
 __all__ = [
+    "ContentDecodingFailed",
     "UnsupportedContentEncoding",
-    "compute_integrity_fields",
     "decode_body",
-    "normalize_response_headers",
+    "integrity",
+    "normalize_headers",
+    "sniff",
 ]

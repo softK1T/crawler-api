@@ -72,7 +72,7 @@ def get_policy_defaults() -> dict:
         "max_retries": 3,
         "respect_robots": True,
         "sticky_session": False,
-        "use_proxy": True,
+        "use_proxy": False,
         "proxy_country": None,
         "header_profile": None,
         "proxy_pool_id": None,

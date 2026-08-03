@@ -61,7 +61,10 @@ reach the worker unchanged.
 
 Two new columns:
 
-- `use_proxy` — `Boolean`, default `True`, non-nullable.
+- `use_proxy` — `Boolean`, default `False`, non-nullable.
+  Default is opt-in: existing domains without a pool configured
+  would fail with `PROXY_POOL_EMPTY` on every request if defaulted
+  to `True`. Operators enable proxying explicitly per domain.
 - `proxy_country` — `String(2)`, nullable, ISO 3166-1 alpha-2.
 
 Alembic migration `0003` adds both.
