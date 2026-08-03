@@ -227,3 +227,62 @@ async def test_policy_country_used_when_request_none():
     )
     call_kwargs = proxy_mgr.get_proxy.call_args.kwargs
     assert call_kwargs["country"] == "DE"
+
+
+# ── Truthiness + country normalization ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_explicit_false_overrides_true_policy():
+    """Explicit use_proxy=False must override policy.use_proxy=True (no truthiness trap)."""
+    policy = FakePolicy(use_proxy=True, proxy_country="PL")
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = FetchResult(
+        url="https://example.com",
+        status_code=200,
+        body=b"ok",
+        engine="httpx",
+    )
+    proxy_mgr = AsyncMock()
+
+    from app.services.fetchers.base import fetch_with_retry
+
+    result = await fetch_with_retry(
+        fetcher=fetcher,
+        url="https://example.com",
+        policy=policy,
+        proxy_manager=proxy_mgr,
+        use_proxy=False,
+        proxy_country=None,
+    )
+    assert result is not None
+    proxy_mgr.get_proxy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explicit_true_overrides_false_policy():
+    """Explicit use_proxy=True + lowercase country normalized to upper."""
+    policy = FakePolicy(use_proxy=False, proxy_country=None)
+    fetcher = AsyncMock()
+    fetcher.fetch.return_value = FetchResult(
+        url="https://example.com",
+        status_code=200,
+        body=b"ok",
+        engine="httpx",
+    )
+    proxy_mgr = AsyncMock()
+    proxy_mgr.get_proxy.return_value = MagicMock(id="proxy-pl")
+
+    from app.services.fetchers.base import fetch_with_retry
+
+    result = await fetch_with_retry(
+        fetcher=fetcher,
+        url="https://example.com",
+        policy=policy,
+        proxy_manager=proxy_mgr,
+        use_proxy=True,
+        proxy_country="pl",  # lowercase
+    )
+    assert result is not None
+    call_kwargs = proxy_mgr.get_proxy.call_args.kwargs
+    assert call_kwargs["country"] == "PL"

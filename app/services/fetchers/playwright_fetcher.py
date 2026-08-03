@@ -7,7 +7,8 @@ single Chromium process with a semaphore to cap concurrent contexts.
 import logging
 import time
 
-from app.services.fetchers.base import FetchError, FetchResult, _detect_block
+from app.services.block_detector import detect_block_reason
+from app.services.fetchers.base import FetchError, FetchResult
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,8 @@ class PlaywrightFetcher:
 
                 body = (await page.content()).encode("utf-8")
 
-                blocked, reason = _detect_block(status_code, body)
+                block_reason = detect_block_reason(status_code, {}, body)
+                blocked = block_reason is not None
 
                 elapsed_ms = int((time.perf_counter() - start) * 1000)
 
@@ -96,7 +98,7 @@ class PlaywrightFetcher:
                     proxy_id=proxy_id,
                     engine="playwright",
                     blocked=blocked,
-                    block_reason=reason,
+                    block_reason=block_reason,
                     retries_used=0,
                     raw_body=body,  # Rendered DOM — no raw transport bytes in browser mode.
                     raw_headers={},

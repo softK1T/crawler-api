@@ -62,8 +62,8 @@ async def fetch_task(
 
             # Extract proxy overrides from request options (three-level resolution:
             # request > domain_policy > defaults).
-            req_use_proxy: bool | None = options.get("use_proxy")
-            req_proxy_country: str | None = options.get("proxy_country")
+            req_use_proxy = options["use_proxy"] if "use_proxy" in options else None
+            req_proxy_country = options["proxy_country"] if "proxy_country" in options else None
 
             result = await fetch_with_retry(
                 fetcher=fetcher,

@@ -2,6 +2,7 @@
 
 import base64
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -14,6 +15,31 @@ class BlockReason(StrEnum):
     RATE_LIMITED = "rate_limited"
     WAF = "waf"
     OTHER = "other"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "BlockReason":
+        """Keep the public contract stable for legacy/unknown detector values."""
+        if isinstance(value, str):
+            legacy = {
+                "bot_detection": cls.OTHER,
+                "bot_detected": cls.OTHER,
+                "forbidden": cls.IP_BAN,
+                "access_denied": cls.IP_BAN,
+                "too_many_requests": cls.RATE_LIMITED,
+                "cf_challenge": cls.CLOUDFLARE,
+            }
+            mapped = legacy.get(value.strip().lower())
+            if mapped is not None:
+                return mapped
+        return cls.OTHER
+
+
+def normalize_block_reason(value: Any) -> BlockReason | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, BlockReason):
+        return value
+    return BlockReason(str(value).strip().lower())
 
 
 class FetchResultSchema(BaseModel):
@@ -55,7 +81,7 @@ class FetchResultSchema(BaseModel):
             proxy_country=getattr(r, "proxy_country", None),
             engine=r.engine,
             blocked=r.blocked,
-            block_reason=BlockReason(r.block_reason) if r.block_reason else None,
+            block_reason=normalize_block_reason(r.block_reason),
             retries_used=r.retries_used,
             trace_id=r.trace_id,
         )
