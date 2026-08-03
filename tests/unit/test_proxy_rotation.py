@@ -42,12 +42,19 @@ async def test_blocked_proxy_is_excluded_on_retry():
         call_count += 1
         if call_count == 1:
             return FetchResult(
-                url=url, status_code=403, body=b"blocked", engine="httpx",
-                blocked=True, block_reason="ip_ban",
+                url=url,
+                status_code=403,
+                body=b"blocked",
+                engine="httpx",
+                blocked=True,
+                block_reason="ip_ban",
                 proxy_id=banned.id if proxy else None,
             )
         return FetchResult(
-            url=url, status_code=200, body=b"ok", engine="httpx",
+            url=url,
+            status_code=200,
+            body=b"ok",
+            engine="httpx",
             proxy_id=healthy.id if proxy else None,
         )
 
@@ -55,8 +62,11 @@ async def test_blocked_proxy_is_excluded_on_retry():
     fetcher.fetch.side_effect = _fetch
 
     result = await fetch_with_retry(
-        fetcher=fetcher, url="https://example.com",
-        policy=_Policy(), proxy_manager=proxy_mgr, use_proxy=True,
+        fetcher=fetcher,
+        url="https://example.com",
+        policy=_Policy(),
+        proxy_manager=proxy_mgr,
+        use_proxy=True,
     )
 
     assert call_count == 2
@@ -93,8 +103,12 @@ async def test_rotation_exhaustion_raises_proxy_pool_exhausted():
 
     async def _fetch(url, *, proxy, headers, timeout_s):
         return FetchResult(
-            url=url, status_code=403, body=b"blocked", engine="httpx",
-            blocked=True, block_reason="ip_ban",
+            url=url,
+            status_code=403,
+            body=b"blocked",
+            engine="httpx",
+            blocked=True,
+            block_reason="ip_ban",
             proxy_id=proxy.id if proxy else None,
         )
 
@@ -103,8 +117,11 @@ async def test_rotation_exhaustion_raises_proxy_pool_exhausted():
 
     with pytest.raises(ProxyPoolExhaustedError, match="PROXY_POOL_EXHAUSTED"):
         await fetch_with_retry(
-            fetcher=fetcher, url="https://example.com",
-            policy=ExhaustPolicy(), proxy_manager=proxy_mgr, use_proxy=True,
+            fetcher=fetcher,
+            url="https://example.com",
+            policy=ExhaustPolicy(),
+            proxy_manager=proxy_mgr,
+            use_proxy=True,
         )
 
     assert proxy_mgr.report_result.call_count == 3
@@ -122,13 +139,19 @@ async def test_success_reports_proxy_health():
 
     fetcher = AsyncMock()
     fetcher.fetch.return_value = FetchResult(
-        url="https://example.com", status_code=200, body=b"ok",
-        engine="httpx", proxy_id=proxy.id,
+        url="https://example.com",
+        status_code=200,
+        body=b"ok",
+        engine="httpx",
+        proxy_id=proxy.id,
     )
 
     result = await fetch_with_retry(
-        fetcher=fetcher, url="https://example.com",
-        policy=_Policy(), proxy_manager=proxy_mgr, use_proxy=True,
+        fetcher=fetcher,
+        url="https://example.com",
+        policy=_Policy(),
+        proxy_manager=proxy_mgr,
+        use_proxy=True,
     )
 
     assert result is not None
@@ -157,12 +180,19 @@ async def test_sticky_cleared_on_first_retry():
         call_count += 1
         if call_count == 1:
             return FetchResult(
-                url=url, status_code=403, body=b"blocked", engine="httpx",
-                blocked=True, block_reason="ip_ban",
+                url=url,
+                status_code=403,
+                body=b"blocked",
+                engine="httpx",
+                blocked=True,
+                block_reason="ip_ban",
                 proxy_id=proxy.id if proxy else None,
             )
         return FetchResult(
-            url=url, status_code=200, body=b"ok", engine="httpx",
+            url=url,
+            status_code=200,
+            body=b"ok",
+            engine="httpx",
             proxy_id=proxy.id if proxy else None,
         )
 
@@ -170,9 +200,12 @@ async def test_sticky_cleared_on_first_retry():
     fetcher.fetch.side_effect = _fetch
 
     await fetch_with_retry(
-        fetcher=fetcher, url="https://example.com",
-        policy=_Policy(), proxy_manager=proxy_mgr,
-        sticky_key="job-123", use_proxy=True,
+        fetcher=fetcher,
+        url="https://example.com",
+        policy=_Policy(),
+        proxy_manager=proxy_mgr,
+        sticky_key="job-123",
+        use_proxy=True,
     )
 
     assert proxy_mgr.get_proxy.call_args_list[0].kwargs["sticky_key"] == "job-123"
