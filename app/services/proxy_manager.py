@@ -9,7 +9,7 @@ import logging
 import random
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,8 @@ class ProxyManager:
     async def get_proxy(
         self,
         *,
-        pool_id: UUID | None,
+        pool_id: UUID | None = None,
+        tenant_id: UUID | None = None,
         domain: str,
         sticky_key: str | None,
         proxy_sticky_ttl_s: int = 1800,
@@ -106,6 +107,7 @@ class ProxyManager:
         3. Weighted random selection over all eligible proxies.
         4. Pin sticky session if *sticky_key* provided.
 
+        *tenant_id* is an alias for *pool_id* (maps to ProxyPool).
         *exclude_ids* removes proxies already tried (rotation).
         *country* filters to proxies matching an ISO 3166-1 alpha-2 code.
         """
@@ -113,6 +115,7 @@ class ProxyManager:
         from app.services.proxy_health import is_on_cooldown
 
         _excluded = exclude_ids or set()
+        effective_pool = tenant_id or pool_id
 
         # 1. Circuit breaker.
         if await self._is_circuit_open(domain):
@@ -132,11 +135,11 @@ class ProxyManager:
 
         # 3. Load eligible proxies.
         async with self._db_factory() as db:
-            stmt = select(Proxy)
-            if pool_id is not None:
-                stmt = stmt.where(Proxy.pool_id == pool_id)
+            stmt = select(Proxy).order_by(Proxy.health_score.desc(), func.random())
+            if effective_pool is not None:
+                stmt = stmt.where(Proxy.pool_id == effective_pool)
             if country is not None:
-                stmt = stmt.where(Proxy.country == country)
+                stmt = stmt.where(Proxy.country == country.upper()[:2])
             result = await db.execute(stmt)
             all_proxies = result.scalars().all()
 
@@ -145,7 +148,7 @@ class ProxyManager:
             if not eligible:
                 logger.warning(
                     "No eligible proxies for pool=%s domain=%s country=%s excluded=%d",
-                    pool_id,
+                    effective_pool,
                     domain,
                     country,
                     len(_excluded),

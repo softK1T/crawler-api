@@ -14,7 +14,9 @@ from app.models.proxy import Proxy
 from app.models.proxy_pool import ProxyPool
 from app.schemas.proxy import (
     PoolStatsResponse,
+    ProxyBulkImport,
     ProxyHealthUpdate,
+    ProxyImportResponse,
     ProxyPoolResponse,
     ProxyResponse,
 )
@@ -120,3 +122,52 @@ async def reset_circuit_breaker(
     domain_norm = normalize_domain(domain)
     await proxy_manager._reset_circuit_breaker(domain_norm)
     return {"status": "reset", "domain": domain_norm}
+
+
+# ── Admin: bulk import ────────────────────────────────────────────────────────
+
+
+@router.post("/admin/proxies", status_code=201, response_model=ProxyImportResponse)
+async def import_proxies(
+    payload: ProxyBulkImport,
+    db: AsyncSession = Depends(get_db),
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+):
+    """Bulk import proxies in host:port:user:pass:country format.
+
+    Each proxy is upserted by its URL.  Existing proxies (matched by URL)
+    are reactivated; new proxies are inserted into the tenant's pool.
+    """
+    from uuid import uuid4
+
+    from sqlalchemy.dialects.postgresql import insert
+
+    pool_id = uuid4()
+    created = 0
+
+    for item in payload.proxies:
+        proxy_url = f"http://{item.username}:{item.password}@{item.host}:{item.port}"
+        stmt = (
+            insert(Proxy)
+            .values(
+                pool_id=pool_id,
+                url=proxy_url,
+                country=item.country.upper()[:2],
+                health_score=1.0,
+                consecutive_failures=0,
+            )
+            .on_conflict_do_update(
+                index_elements=["url"],
+                set_={
+                    "country": item.country.upper()[:2],
+                    "health_score": 1.0,
+                    "consecutive_failures": 0,
+                    "cooldown_until": None,
+                },
+            )
+        )
+        await db.execute(stmt)
+        created += 1
+
+    await db.commit()
+    return {"imported": created}

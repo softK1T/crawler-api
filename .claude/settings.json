@@ -1,33 +1,25 @@
 {
   "permissions": {
+    "defaultMode": "acceptEdits",
     "allow": [
-      "Read(**)",
-      "Write(**)",
-      "Edit(**)",
-      "Bash(git *)",
-      "Bash(uv *)",
-      "Bash(pip *)",
-      "Bash(python *)",
-      "Bash(pytest *)",
-      "Bash(ruff *)",
-      "Bash(mypy *)",
-      "Bash(alembic *)",
-      "Bash(docker *)",
-      "Bash(docker compose *)",
-      "Bash(ls *)",
-      "Bash(cat *)",
-      "Bash(mkdir *)",
-      "Bash(mv *)",
-      "Bash(grep *)",
-      "Bash(rg *)",
-      "Bash(find *)"
+      "Read(**)", "Edit(**)", "Glob", "Grep",
+      "Bash(git*)", "Bash(uv*)", "Bash(pip*)",
+      "Bash(python*)", "Bash(pytest*)",
+      "Bash(ruff*)", "Bash(mypy*)", "Bash(alembic*)",
+      "Bash(docker*)",
+      "Bash(ls*)", "Bash(cat*)", "Bash(mkdir*)",
+      "Bash(mv*)", "Bash(grep*)", "Bash(rg*)", "Bash(find*)"
+    ],
+    "ask": [
+      "Bash(git push*)",
+      "Bash(alembic downgrade*)",
+      "Bash(docker system prune*)"
     ],
     "deny": [
-      "Bash(rm -rf *)",
-      "Bash(git push --force*)",
-      "Bash(curl *)",
-      "Bash(wget *)",
-      "Bash(sudo *)"
+      "Read(./.env)", "Read(./.env.*)",
+      "Read(./secrets/**)", "Read(**/*.pem)",
+      "Bash(rm -rf*)", "Bash(rm -fr*)",
+      "Bash(sudo*)", "Bash(chmod 777*)"
     ]
   }
 }

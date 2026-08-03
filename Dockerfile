@@ -30,9 +30,15 @@ WORKDIR /opt/crawler-api
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Install Chromium for Playwright (headless shell — no X11 deps).
-# Must run after PLAYWRIGHT_BROWSERS_PATH is set so the binary lands there.
-RUN python -m playwright install --with-deps --only-shell chromium \
+# Install Chromium runtime deps manually — avoids ttf-unifont/ttf-ubuntu-font-family
+# missing on Debian Trixie arm64 (Mac M-series). Works on both amd64 and arm64.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libxkbcommon0 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 \
+    libpango-1.0-0 libcairo2 libatspi2.0-0 \
+    fonts-liberation fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m playwright install --only-shell chromium \
     && chmod -R a+rx /ms-playwright
 
 # Copy application code.
