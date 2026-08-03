@@ -1,13 +1,14 @@
 """Unit tests for proxy rotation: different IDs on retry, health score decay, excluded-ID accumulation."""
 
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
 
 class _FakeProxy:
     def __init__(self, proxy_id: str, health: float = 1.0):
-        self.id = proxy_id
+        self.id: UUID = UUID(int=abs(hash(proxy_id)) % (2**128))
         self.health_score = health
 
 
