@@ -9,43 +9,6 @@ from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
-# ── Block detection keywords (case-insensitive substring match on first 64KB) ──
-_BLOCK_KEYWORDS: dict[str, str] = {
-    "captcha": "captcha",
-    "verify you are human": "captcha",
-    "cf-challenge": "bot_detection",
-    "robot": "bot_detection",
-    "automated": "bot_detection",
-    "bot detected": "bot_detection",
-    "access denied": "ip_ban",
-    "has been blocked": "ip_ban",
-}
-
-
-def _detect_block(status_code: int, body: bytes) -> tuple[bool, str | None]:
-    """Detect whether a response indicates blocking / CAPTCHA.
-
-    Returns ``(blocked, reason)`` where *reason* is one of:
-    ``"captcha"``, ``"bot_detection"``, ``"ip_ban"``, ``"rate_limited"``,
-    or ``None`` if not blocked.
-    """
-    # HTTP-level signals.
-    if status_code == 429:
-        return True, "rate_limited"
-    if status_code in (403, 503):
-        if status_code == 403:
-            return True, "ip_ban"
-        return True, "ip_ban"
-
-    # Content-level signals (first 64KB only).
-    if status_code == 200 and body:
-        snippet = body[:65536].decode("utf-8", "replace").lower()
-        for keyword, reason in _BLOCK_KEYWORDS.items():
-            if keyword in snippet:
-                return True, reason
-
-    return False, None
-
 
 # ── FetchResult dataclass ────────────────────────────────────────────────────
 
@@ -159,11 +122,13 @@ async def fetch_with_retry(
 
     # ── Resolve effective proxy policy ──────────────────────────────────────
     effective_use_proxy = (
-        use_proxy if use_proxy is not None else (policy.use_proxy if policy else False)
+        use_proxy if use_proxy is not None else bool(policy.use_proxy if policy else False)
     )
     effective_country = (
         proxy_country if proxy_country is not None else (policy.proxy_country if policy else None)
     )
+    if effective_country is not None:
+        effective_country = effective_country.strip().upper()
 
     last_error: Exception | None = None
     failed_proxy_ids: set[UUID] = set()
@@ -212,7 +177,12 @@ async def fetch_with_retry(
 
             # 4. Check for block.
             if result.blocked:
-                if proxy_manager is not None and proxy is not None:
+                # Direct retries use the same IP and cannot resolve an IP/WAF block.
+                # Return the structured blocked result instead of burning attempts.
+                if proxy is None:
+                    return result
+
+                if proxy_manager is not None:
                     await proxy_manager.report_result(
                         proxy_id=proxy.id,
                         domain=domain,

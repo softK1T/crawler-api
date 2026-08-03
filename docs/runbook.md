@@ -124,3 +124,49 @@ fresh browser and a fresh context (never reused).  This caps throughput at
 roughly 1 req/s per worker.  A bounded browser pool is deferred — see ADR-015
 for the trigger condition (>1 req/s sustained in browser mode) and the
 invariant (reuse browsers, never contexts).
+
+## Block detection
+
+Public `block_reason` values are:
+
+- `ip_ban`
+- `captcha`
+- `cloudflare`
+- `rate_limited`
+- `waf`
+- `other`
+
+Legacy or unknown detector values are returned as `other`; they must never
+cause result-schema validation to fail.
+
+## Empty proxy pool
+
+When a request explicitly sets `use_proxy=true`, crawler-api never falls back
+to the machine's direct IP.
+
+- `PROXY_POOL_EMPTY`: no eligible healthy proxy was available.
+- `PROXY_POOL_EXHAUSTED`: eligible proxies existed, but all were rejected
+  during the current job.
+
+Import residential proxies:
+
+```bash
+python scripts/import_proxies.py proxies.txt --tenant-id <UUID>
+```
+
+Each input line uses:
+
+```text
+host:port:user:pass:country
+```
+
+For MediaExpert, use residential `PL` proxies and submit:
+
+```json
+{
+  "url": "https://www.mediaexpert.pl/",
+  "mode": "browser",
+  "use_proxy": true,
+  "proxy_country": "PL"
+}
+```

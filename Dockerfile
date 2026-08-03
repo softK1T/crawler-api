@@ -16,10 +16,15 @@ RUN pip install --no-cache-dir --upgrade pip \
 FROM python:3.12-slim
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    HOME=/home/crawler \
+    XDG_CACHE_HOME=/home/crawler/.cache \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-RUN groupadd -r crawler && useradd -r -g crawler crawler \
+RUN groupadd -r crawler \
+    && useradd -r -g crawler -m -d /home/crawler crawler \
+    && mkdir -p /home/crawler/.cache/python-tldextract \
+    && chown -R crawler:crawler /home/crawler \
     && apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates libpq5 \
     && rm -rf /var/lib/apt/lists/*

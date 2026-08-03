@@ -1,35 +1,35 @@
 """Unit tests for fetchers — block detection, redirect validation, headers."""
 
-from app.services.fetchers.base import _detect_block
+from app.services.block_detector import detect_block_reason
 
 
 def test_detect_captcha():
-    blocked, reason = _detect_block(200, b"<html>captcha</html>")
-    assert blocked is True
+    reason = detect_block_reason(200, {}, b"<html><div class='g-recaptcha'></div></html>")
+    assert reason is not None
     assert reason == "captcha"
 
 
-def test_detect_bot_detection():
-    blocked, reason = _detect_block(200, b"cf-challenge detected")
-    assert blocked is True
-    assert reason == "bot_detection"
+def test_detect_cloudflare_by_header():
+    blocked = detect_block_reason(403, {"cf-ray": "abc-WAW"}, b"")
+    assert blocked is not None
+    assert blocked == "cloudflare"
 
 
 def test_detect_ip_ban():
-    blocked, reason = _detect_block(403, b"")
-    assert blocked is True
-    assert reason == "ip_ban"
+    blocked = detect_block_reason(403, {}, b"")
+    assert blocked is not None
+    assert blocked == "ip_ban"
 
 
 def test_detect_rate_limited():
-    blocked, reason = _detect_block(429, b"")
-    assert blocked is True
-    assert reason == "rate_limited"
+    blocked = detect_block_reason(429, {}, b"")
+    assert blocked is not None
+    assert blocked == "rate_limited"
 
 
 def test_detect_non_blocked():
-    blocked, _reason = _detect_block(200, b"<html>normal page</html>")
-    assert blocked is False
+    blocked = detect_block_reason(200, {}, b"<html>normal page</html>")
+    assert blocked is None
 
 
 def test_get_fetcher_camoufox_maps_to_playwright():

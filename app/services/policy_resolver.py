@@ -1,17 +1,23 @@
 """Domain policy resolution with tldextract-based normalization.
 
-``tldextract`` downloads the Public Suffix List on first import and caches it
-locally (~/.cache/tldextract by default). No extra configuration is needed.
+``tldextract`` uses its bundled Public Suffix List snapshot — no runtime
+network calls. The extractor is created once at module level.
 """
 
 import logging
 from urllib.parse import urlparse
 
+import tldextract
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+_extract_domain = tldextract.TLDExtract(
+    cache_dir=None,
+    suffix_list_urls=(),
+)
 
 
 def normalize_domain(hostname: str) -> str:
@@ -25,10 +31,8 @@ def normalize_domain(hostname: str) -> str:
     This is the single source of truth for domain normalization — callers in
     ``policy_resolver`` and ``rate_limiter`` both use this helper.
     """
-    import tldextract
-
     stripped = hostname.lower().removeprefix("www.")
-    extracted = tldextract.extract(stripped)
+    extracted = _extract_domain(stripped)
     return extracted.registered_domain or stripped
 
 

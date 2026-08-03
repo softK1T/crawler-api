@@ -8,7 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import UUID
 
 from app.core.config import settings
-from app.services.fetchers.base import FetchError, FetchResult, _detect_block
+from app.services.block_detector import detect_block_reason
+from app.services.fetchers.base import FetchError, FetchResult
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,8 @@ class CurlFetcher:
             raise FetchError(f"curl_cffi fetch failed: {exc}") from exc
 
         # 3. Detect block.
-        blocked, reason = _detect_block(status_code, body if is_success else b"")
+        block_reason = detect_block_reason(status_code, resp_headers, body if is_success else b"")
+        blocked = block_reason is not None
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
@@ -141,7 +143,7 @@ class CurlFetcher:
             proxy_id=proxy_id,
             engine="curl_cffi",
             blocked=blocked,
-            block_reason=reason,
+            block_reason=block_reason,
             retries_used=0,
             raw_body=body,  # curl_cffi auto-decodes; raw ≈ decoded for now.
             raw_headers=resp_headers,
