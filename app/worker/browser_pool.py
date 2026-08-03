@@ -48,7 +48,7 @@ async def verify_chromium() -> str:
         browser = await p.chromium.launch()
         version = browser.version
         await browser.close()
-    return version
+    return str(version)
 
 
 class BrowserPool:
