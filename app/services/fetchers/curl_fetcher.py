@@ -143,4 +143,6 @@ class CurlFetcher:
             blocked=blocked,
             block_reason=reason,
             retries_used=0,
+            raw_body=body,  # curl_cffi auto-decodes; raw ≈ decoded for now.
+            raw_headers=resp_headers,
         )

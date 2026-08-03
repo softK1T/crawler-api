@@ -109,6 +109,8 @@ class PlaywrightFetcher:
                 blocked=blocked,
                 block_reason=reason,
                 retries_used=0,
+                raw_body=body,  # Rendered DOM — no raw transport bytes in browser mode.
+                raw_headers={},
             )
 
         except Exception as exc:

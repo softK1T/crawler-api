@@ -38,6 +38,8 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.47b0",
     "opentelemetry-instrumentation-httpx>=0.47b0",
     "greenlet>=3.0.0",
+    "brotli>=1.1.0",
+    "zstandard>=0.22.0",
 ]
 
 [project.optional-dependencies]
@@ -83,14 +85,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S105", "S106"]  # asserts and dummy credentials are expected
+"tests/*" = ["S101", "S105", "S106", "ASYNC240"]  # asserts, dummy credentials, and pathlib in tests are expected
 "__init__.py" = ["F401"]
 "app/core/logging_config.py" = ["S110"]  # intentional try-except-pass in redaction filter
 "app/services/proxy_manager.py" = ["S311", "S110"]  # random for weighted selection (non-crypto); intentional try-except-pass on sticky delete
 "app/services/fetchers/base.py" = ["S311"]  # random.uniform for jittered delay (non-crypto)
 "app/services/fetchers/headers.py" = ["S311"]  # random.choice for UA rotation (non-crypto)
 "app/services/fetchers/playwright_fetcher.py" = ["S110"]  # intentional try-except-pass on browser cleanup
-"app/worker/tasks/fetch_task.py" = ["S110"]  # intentional try-except-pass on Redis close during shutdown
+"app/worker/tasks/fetch_task.py" = ["S110", "ASYNC240"]  # intentional try-except-pass on Redis close during shutdown; pathlib in startup check is intentional
 "app/worker/arq_worker.py" = ["RUF012"]  # mutable class attribute required by arq WorkerSettings
 "app/api/v1/endpoints/jobs.py" = ["S110"]  # intentional try-except-pass on OTel span trace_id
 "app/services/warc/dlq.py" = ["S110", "ASYNC230", "ASYNC240"]  # disk I/O inherent to DLQ
@@ -134,6 +136,8 @@ module = [
     "structlog.*",
     "prometheus_client.*",
     "opentelemetry.*",
+    "brotli",
+    "zstandard",
 ]
 ignore_missing_imports = true
 

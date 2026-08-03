@@ -17,6 +17,8 @@ class JobCreate(BaseModel):
     mode: Literal["static", "stealth", "browser", "camoufox"] = "static"
     callback_url: str | None = None
     idempotency_key: str | None = Field(None, max_length=128)
+    use_proxy: bool | None = None
+    proxy_country: str | None = Field(None, min_length=2, max_length=2)
     options: dict[str, Any] = {}
 
 

@@ -15,6 +15,10 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Stage 2: runtime — minimal production image.
 FROM python:3.12-slim
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 RUN groupadd -r crawler && useradd -r -g crawler crawler \
     && apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates libpq5 \
@@ -26,15 +30,17 @@ WORKDIR /opt/crawler-api
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
+# Install Chromium for Playwright (headless shell — no X11 deps).
+# Must run after PLAYWRIGHT_BROWSERS_PATH is set so the binary lands there.
+RUN python -m playwright install --with-deps --only-shell chromium \
+    && chmod -R a+rx /ms-playwright
+
 # Copy application code.
 COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
 COPY scripts/ ./scripts/
 COPY pyproject.toml .
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
 
 # Drop privileges.
 USER crawler

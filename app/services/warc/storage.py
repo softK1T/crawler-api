@@ -28,11 +28,18 @@ class WarcStorage:
         fetch_result,
         request_log_id: UUID | None,
         db,
+        warc_body: bytes | None = None,
     ) -> None:
-        """Archive a successful fetch: dedup → write → maybe rotate → index."""
+        """Archive a successful fetch: dedup → write → maybe rotate → index.
+
+        *warc_body* overrides ``fetch_result.body`` for the WARC payload.
+        When set, it should be the raw transport bytes (pre-decompression)
+        so the WARC faithfully records what was received from the server.
+        """
         from app.services.warc.dedup import check_duplicate, index_record
 
-        sha256_digest = hashlib.sha256(fetch_result.body).hexdigest()
+        body = warc_body if warc_body is not None else fetch_result.body
+        sha256_digest = hashlib.sha256(body).hexdigest()
         content_type = fetch_result.headers.get("content-type", "application/octet-stream")
 
         # 1. Dedup check.
@@ -49,7 +56,7 @@ class WarcStorage:
                 url=fetch_result.url,
                 status_code=fetch_result.status_code,
                 http_headers=fetch_result.headers,
-                body=fetch_result.body,
+                body=body,
                 content_type=content_type,
             )
 

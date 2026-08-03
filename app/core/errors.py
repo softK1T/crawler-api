@@ -55,3 +55,30 @@ class ConflictError(CrawlerAPIError):
     status_code = 409
     error_code = "conflict"
     detail = "Resource already exists"
+
+
+# ── Proxy errors ─────────────────────────────────────────────────────────────
+
+
+class ProxyPoolUnavailableError(CrawlerAPIError):
+    """Raised when ``use_proxy=True`` but no healthy proxy is available for selection.
+
+    This is a hard failure — the job must NOT silently fall back to a direct
+    connection when the caller explicitly requested a proxy.
+    """
+
+    status_code = 502
+    error_code = "proxy_pool_unavailable"
+    detail = "No healthy proxy available for the requested parameters"
+
+
+class ProxyPoolExhaustedError(CrawlerAPIError):
+    """Raised when all eligible proxies were tried and blocked/failed.
+
+    Differs from :class:`ProxyPoolUnavailableError`: the pool *had* proxies
+    but every one of them was exhausted during retry rotation.
+    """
+
+    status_code = 502
+    error_code = "proxy_pool_exhausted"
+    detail = "All eligible proxies were blocked or unhealthy"

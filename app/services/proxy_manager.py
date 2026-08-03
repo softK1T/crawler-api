@@ -96,6 +96,8 @@ class ProxyManager:
         domain: str,
         sticky_key: str | None,
         proxy_sticky_ttl_s: int = 1800,
+        exclude_ids: set[UUID] | None = None,
+        country: str | None = None,
     ) -> None:
         """Select a proxy by weighted health score.
 
@@ -103,9 +105,14 @@ class ProxyManager:
         2. Try sticky session — return pinned proxy if still healthy.
         3. Weighted random selection over all eligible proxies.
         4. Pin sticky session if *sticky_key* provided.
+
+        *exclude_ids* removes proxies already tried (rotation).
+        *country* filters to proxies matching an ISO 3166-1 alpha-2 code.
         """
         from app.models.proxy import Proxy
         from app.services.proxy_health import is_on_cooldown
+
+        _excluded = exclude_ids or set()
 
         # 1. Circuit breaker.
         if await self._is_circuit_open(domain):
@@ -115,7 +122,7 @@ class ProxyManager:
         # 2. Sticky session.
         if sticky_key is not None:
             sticky_id = await self._get_sticky(domain, sticky_key)
-            if sticky_id is not None:
+            if sticky_id is not None and sticky_id not in _excluded:
                 async with self._db_factory() as db:
                     sticky_proxy = await db.get(Proxy, sticky_id)
                     if sticky_proxy is not None and not is_on_cooldown(sticky_proxy):
@@ -128,13 +135,21 @@ class ProxyManager:
             stmt = select(Proxy)
             if pool_id is not None:
                 stmt = stmt.where(Proxy.pool_id == pool_id)
+            if country is not None:
+                stmt = stmt.where(Proxy.country == country)
             result = await db.execute(stmt)
             all_proxies = result.scalars().all()
 
-            # Filter out proxies on cooldown.
-            eligible = [p for p in all_proxies if not is_on_cooldown(p)]
+            # Filter out proxies on cooldown and already excluded.
+            eligible = [p for p in all_proxies if not is_on_cooldown(p) and p.id not in _excluded]
             if not eligible:
-                logger.warning("No eligible proxies for pool=%s domain=%s", pool_id, domain)
+                logger.warning(
+                    "No eligible proxies for pool=%s domain=%s country=%s excluded=%d",
+                    pool_id,
+                    domain,
+                    country,
+                    len(_excluded),
+                )
                 return None
 
             # 4. Weighted random selection using health_score.
@@ -160,6 +175,7 @@ class ProxyManager:
         db,
     ) -> None:
         """Record a proxy request outcome and update circuit breaker state."""
+        from app.models.proxy import Proxy
         from app.services.proxy_health import record_failure, record_success
 
         if success:
@@ -169,6 +185,13 @@ class ProxyManager:
             reason_literal = reason if reason is not None else "http_error"
             await record_failure(proxy_id, db, reason_literal)  # type: ignore[arg-type]
             await self._increment_circuit_breaker(domain)
+
+        # Emit health metric after every mutation.
+        proxy = await db.get(Proxy, proxy_id)
+        if proxy is not None:
+            from app.core.observability import update_proxy_health_metric
+
+            update_proxy_health_metric(proxy)
 
     # ── Pool statistics ───────────────────────────────────────────────────────
 

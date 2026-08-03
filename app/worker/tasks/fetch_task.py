@@ -60,6 +60,11 @@ async def fetch_task(
             # 4. Execute fetch with retry.
             from app.services.fetchers.base import fetch_with_retry
 
+            # Extract proxy overrides from request options (three-level resolution:
+            # request > domain_policy > defaults).
+            req_use_proxy: bool | None = options.get("use_proxy")
+            req_proxy_country: str | None = options.get("proxy_country")
+
             result = await fetch_with_retry(
                 fetcher=fetcher,
                 url=url,
@@ -68,6 +73,8 @@ async def fetch_task(
                 db=db,
                 sticky_key=job_id,
                 trace_id=job_id,
+                use_proxy=req_use_proxy,
+                proxy_country=req_proxy_country,
             )
 
             # 5. Block detection metric.
@@ -80,24 +87,50 @@ async def fetch_task(
                     reason=result.block_reason or "unknown",
                 ).inc()
 
-            # 6. Archive if not blocked.
+            # 6. Normalize API response body (server-side decompression, ADR-018).
+            from app.services.content_decoder import (
+                compute_integrity_fields,
+                decode_body,
+                normalize_response_headers,
+            )
+
+            # Use raw transport bytes if available; otherwise fall back to body.
+            raw_for_decode = result.raw_body or result.body
+            content_encoding = (result.raw_headers or result.headers).get("content-encoding")
+            try:
+                api_body, detected_encoding = decode_body(raw_for_decode, content_encoding)
+            except Exception:
+                api_body = result.body
+                detected_encoding = content_encoding
+
+            # Normalize headers for API consumers: drop content-encoding + content-length.
+            result.headers = normalize_response_headers(result.headers, detected_encoding)
+            result.body = api_body
+
+            integrity = compute_integrity_fields(api_body, detected_encoding)
+
+            # 7. Archive if not blocked (WARC gets raw transport bytes).
             warc_index = None
+            warc_body = result.raw_body or result.body
             if not result.blocked and ctx.get("warc_storage"):
                 warc_index = await ctx["warc_storage"].archive(
-                    fetch_result=result, request_log_id=None, db=db
+                    fetch_result=result,
+                    request_log_id=None,
+                    db=db,
+                    warc_body=warc_body,
                 )
                 if warc_index is not None:
                     from app.core.observability import record_archive_metrics
 
                     record_archive_metrics(
-                        bytes_written=len(result.body),
+                        bytes_written=len(warc_body),
                         is_revisit=getattr(warc_index, "is_revisit", False),
                     )
 
-            # 7. Serialize and store result.
+            # 8. Serialize and store result.
             from app.schemas.fetch import FetchResultSchema
 
-            schema = FetchResultSchema.from_result(result)
+            schema = FetchResultSchema.from_result(result, integrity=integrity)
 
             await _set_status(
                 redis_client,
@@ -278,6 +311,29 @@ def _record_latency(status: str, started: float) -> None:
 # ── Worker lifecycle ─────────────────────────────────────────────────────────
 
 
+async def _verify_chromium() -> None:
+    """Check that the Playwright Chromium executable exists on disk.
+
+    Called at worker startup before accepting jobs.  If the binary is
+    missing the worker must fail fast — readiness stays negative and no
+    browser-mode jobs are silently degraded to httpx.
+    """
+    from pathlib import Path
+
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        executable = Path(playwright.chromium.executable_path)
+
+    if not executable.is_file():
+        raise RuntimeError(
+            "PLAYWRIGHT_CHROMIUM_MISSING: "
+            f"expected executable at {executable}; "
+            "rebuild the worker image with Playwright Chromium installed"
+        )
+    logger.info("Chromium verified at %s", executable)
+
+
 async def startup(ctx: dict) -> None:
     """arq worker startup — initialize shared resources."""
     import redis.asyncio as aioredis
@@ -298,6 +354,11 @@ async def startup(ctx: dict) -> None:
         redis_client=ctx["redis"],
     )
     ctx["warc_storage"] = await create_warc_storage(settings)
+
+    # Fail startup if Chromium is missing — browser-mode jobs must not
+    # silently degrade to httpx.
+    await _verify_chromium()
+
     logger.info("arq worker startup complete")
 
 

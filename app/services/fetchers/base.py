@@ -1,5 +1,6 @@
 """Core types for fetcher implementations: FetchResult, FetcherProtocol, retry logic."""
 
+import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
@@ -63,6 +64,9 @@ class FetchResult:
     block_reason: str | None = None
     retries_used: int = 0
     trace_id: str | None = None
+    # Raw transport bytes and headers for WARC archival (not normalized).
+    raw_body: bytes = b""
+    raw_headers: dict[str, str] = field(default_factory=dict)
 
 
 # ── FetchError ────────────────────────────────────────────────────────────────
@@ -127,29 +131,69 @@ async def fetch_with_retry(
     db=None,
     sticky_key: str | None = None,
     trace_id: str | None = None,
+    use_proxy: bool | None = None,
+    proxy_country: str | None = None,
 ) -> FetchResult:
     """Retry loop with proxy selection, health reporting, and jittered backoff.
 
     Up to ``policy.max_retries`` (default 3) attempts.  On each failure the
     proxy is reported via ``proxy_manager.report_result`` and a jittered
     delay is inserted before the next attempt.
-    """
-    import asyncio
 
+    Proxy policy (three-level resolution):
+    1. Explicit *use_proxy* argument (from request options) — highest priority.
+    2. ``policy.use_proxy`` (from DomainPolicy row).
+    3. Defaults to ``True`` if no policy row exists.
+
+    When ``use_proxy=True`` and no healthy proxy is available the function
+    raises :class:`ProxyPoolUnavailableError` rather than silently falling
+    back to a direct connection.  Blocked proxies are tracked in
+    ``failed_proxy_ids`` and excluded from subsequent retry picks — when all
+    eligible proxies are exhausted the function raises
+    :class:`ProxyPoolExhaustedError`.
+    """
+    from app.core.errors import ProxyPoolExhaustedError, ProxyPoolUnavailableError
+
+    domain = _normalize_domain_from_url(url)
     max_retries = policy.max_retries if policy else 3
+
+    # ── Resolve effective proxy policy ──────────────────────────────────────
+    effective_use_proxy = (
+        use_proxy if use_proxy is not None else (policy.use_proxy if policy else True)
+    )
+    effective_country = (
+        proxy_country if proxy_country is not None else (policy.proxy_country if policy else None)
+    )
+
     last_error: Exception | None = None
+    failed_proxy_ids: set[UUID] = set()
 
     for attempt in range(max_retries):
         proxy = None
         try:
             # 1. Pick proxy.
-            if proxy_manager is not None and policy is not None:
-                domain = _normalize_domain_from_url(url)
+            if effective_use_proxy and proxy_manager is not None:
                 proxy = await proxy_manager.get_proxy(
-                    pool_id=policy.proxy_pool_id,
+                    pool_id=policy.proxy_pool_id if policy else None,
                     domain=domain,
-                    sticky_key=sticky_key,
+                    sticky_key=sticky_key if attempt == 0 else None,
+                    exclude_ids=failed_proxy_ids,
+                    country=effective_country,
                 )
+
+                # Fail-fast: caller requested proxy but none is available.
+                if proxy is None:
+                    if failed_proxy_ids:
+                        raise ProxyPoolExhaustedError(
+                            f"PROXY_POOL_EXHAUSTED: all eligible "
+                            f"{effective_country or 'ANY'} proxies were "
+                            f"blocked or unhealthy for domain={domain}"
+                        )
+                    raise ProxyPoolUnavailableError(
+                        f"PROXY_POOL_EMPTY: no healthy proxy for "
+                        f"domain={domain}, "
+                        f"country={effective_country or 'ANY'}"
+                    )
 
             # 2. Build headers.
             from app.services.fetchers.headers import headers_for_domain
@@ -171,11 +215,13 @@ async def fetch_with_retry(
                 if proxy_manager is not None and proxy is not None:
                     await proxy_manager.report_result(
                         proxy_id=proxy.id,
-                        domain=_normalize_domain_from_url(url),
+                        domain=domain,
                         success=False,
                         reason=result.block_reason or "http_error",
                         db=db,
                     )
+                    # Rotate: exclude this proxy and try another.
+                    failed_proxy_ids.add(proxy.id)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(_jittered_delay(policy))
                     continue
@@ -185,23 +231,28 @@ async def fetch_with_retry(
             if proxy_manager is not None and proxy is not None:
                 await proxy_manager.report_result(
                     proxy_id=proxy.id,
-                    domain=_normalize_domain_from_url(url),
+                    domain=domain,
                     success=True,
                     reason=None,
                     db=db,
                 )
             return result
 
+        except (ProxyPoolUnavailableError, ProxyPoolExhaustedError):
+            # These are hard failures — do not retry.
+            raise
+
         except FetchError as exc:
             last_error = exc
             if proxy_manager is not None and proxy is not None:
                 await proxy_manager.report_result(
                     proxy_id=proxy.id,
-                    domain=_normalize_domain_from_url(url),
+                    domain=domain,
                     success=False,
                     reason="http_error",
                     db=db,
                 )
+                failed_proxy_ids.add(proxy.id)
             if attempt < max_retries - 1:
                 await asyncio.sleep(_jittered_delay(policy))
                 continue
@@ -209,6 +260,8 @@ async def fetch_with_retry(
 
         except Exception as exc:
             last_error = exc
+            if proxy is not None and proxy_manager is not None:
+                failed_proxy_ids.add(proxy.id)
             if attempt < max_retries - 1:
                 await asyncio.sleep(_jittered_delay(policy))
                 continue

@@ -70,6 +70,7 @@ services:
 
   worker:
     build: .
+    ipc: host
     depends_on:
       db:
         condition: service_healthy
@@ -90,6 +91,8 @@ services:
       CALLBACK_HMAC_SECRET: dev-secret-change-in-prod
       API_KEYS_RAW: crw_live_local_dev_key_abcdefghijkl
       ENABLE_TRACING: "false"
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      MAX_CONCURRENT_BROWSERS: ${MAX_CONCURRENT_BROWSERS:-4}
     command: arq app.worker.arq_worker.WorkerSettings
     healthcheck:
       test: ["CMD-SHELL", "python3 -c 'import redis; r=redis.from_url(\"redis://redis:6379/0\"); r.ping()'"]

@@ -104,7 +104,14 @@ async def create_fetch(
             response.headers["Idempotency-Key-Status"] = "replayed"
             return response
 
-    # 4. Enqueue.
+    # 4. Merge request-level proxy overrides into options so they reach the worker.
+    merged_options = dict(body.options)
+    if body.use_proxy is not None:
+        merged_options["use_proxy"] = body.use_proxy
+    if body.proxy_country is not None:
+        merged_options["proxy_country"] = body.proxy_country
+
+    # 5. Enqueue.
     job_id = str(uuid4())
     proxy_pool_id = None
 
@@ -116,15 +123,15 @@ async def create_fetch(
         domain=domain,
         proxy_pool_id=proxy_pool_id,
         callback_url=body.callback_url,
-        options=body.options,
+        options=merged_options,
         trace_id=trace_id,
     )
 
     if body.idempotency_key:
         await job_svc.store_idempotency(body.idempotency_key, job_id, api_key.application_id)
 
-    # 5. Sync mode: poll up to 30s.
-    if body.options.get("sync") is True:
+    # 6. Sync mode: poll up to 30s.
+    if merged_options.get("sync") is True:
         for _ in range(300):
             status = await job_svc.get_status(job_id)
             if status in (JobStatus.COMPLETED, JobStatus.FAILED):
@@ -145,7 +152,7 @@ async def create_fetch(
             ).model_dump(mode="json"),
         )
 
-    # 6. Async mode — 202 Accepted.
+    # 7. Async mode — 202 Accepted.
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     REQUEST_LATENCY_MS.labels(
         component="api", endpoint="/v1/fetch", method="POST", status_code="202"

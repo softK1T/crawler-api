@@ -4,9 +4,32 @@ These require a real Playwright installation and are marked ``integration``.
 Run with: pytest -m slow tests/integration/test_playwright_fetcher.py
 """
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("playwright", reason="Playwright not installed")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_chromium_executable_exists():
+    """Verify that Playwright's Chromium executable is on disk and has the
+    execute bit set — guards against images where packages are installed
+    but ``playwright install`` was never run.
+    """
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        executable = Path(playwright.chromium.executable_path)
+
+    assert executable.is_file(), (
+        f"PLAYWRIGHT_CHROMIUM_MISSING: expected executable at {executable}; "
+        "rebuild the worker image with Playwright Chromium installed"
+    )
+    assert executable.stat().st_mode & 0o111, (
+        f"Chromium executable at {executable} is not executable"
+    )
 
 
 @pytest.mark.integration

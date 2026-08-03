@@ -1,4 +1,4 @@
-"""httpx-based fetcher with per-hop SSRF validation."""
+"""httpx-based fetcher with per-hop SSRF validation and raw transport capture."""
 
 import logging
 import time
@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 class HttpxFetcher:
     """Implements FetcherProtocol using httpx.AsyncClient.
+
+    Uses ``client.stream()`` + ``aiter_raw()`` to capture raw transport
+    bytes for WARC archival.  The body is separately decoded via the
+    content-decoder module for API consumers.
 
     A new client is created per-fetch — connection pool sharing is
     sacrificed for proxy isolation between requests (see ADR-007).
@@ -58,40 +62,58 @@ class HttpxFetcher:
                 except URLGuardError as exc:
                     raise FetchError(str(exc), blocked=False) from exc
 
-                response = await client.get(current_url, headers=headers or {})
+                # Use stream() to capture raw transport bytes before httpx
+                # applies content decoding (see ADR-018).
+                async with client.stream("GET", current_url, headers=headers or {}) as response:
+                    raw_body = b"".join([chunk async for chunk in response.aiter_raw()])
+                    raw_headers = dict(response.headers)
+
+                    # Decode body for API consumers.
+                    from app.services.content_decoder import decode_body
+
+                    content_encoding = raw_headers.get("content-encoding")
+                    try:
+                        decoded_body, _detected = decode_body(raw_body, content_encoding)
+                    except Exception:
+                        # If decoding fails, pass raw bytes through — the
+                        # job will complete but body_b64 reflects raw bytes
+                        # and original_content_encoding is preserved.
+                        decoded_body = raw_body
+
+                    status_code = response.status_code
 
                 # Manual redirect follow.
-                if response.status_code in (301, 302, 303, 307, 308) and follow_redirects:
-                    location = response.headers.get("location")
+                if status_code in (301, 302, 303, 307, 308) and follow_redirects:
+                    location = raw_headers.get("location")
                     if not location:
-                        raise FetchError(
-                            f"Redirect ({response.status_code}) with no Location header"
-                        )
+                        raise FetchError(f"Redirect ({status_code}) with no Location header")
                     from urllib.parse import urljoin
 
                     current_url = urljoin(current_url, location)
                     continue
 
-                # 3. Detect block.
+                # 3. Detect block (use decoded body for content inspection).
                 blocked, reason = _detect_block(
-                    response.status_code,
-                    response.content if response.status_code == 200 else b"",
+                    status_code,
+                    decoded_body if status_code == 200 else b"",
                 )
 
                 elapsed_ms = int((time.perf_counter() - start) * 1000)
 
                 return FetchResult(
                     url=current_url,
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    body=response.content,
-                    encoding=response.encoding or "utf-8",
+                    status_code=status_code,
+                    headers=dict(raw_headers),
+                    body=decoded_body,
+                    encoding="utf-8",
                     elapsed_ms=elapsed_ms,
                     proxy_id=getattr(proxy, "id", None) if proxy else None,
                     engine="httpx",
                     blocked=blocked,
                     block_reason=reason,
                     retries_used=0,
+                    raw_body=raw_body,
+                    raw_headers=dict(raw_headers),
                 )
 
             # Exhausted redirect budget.
