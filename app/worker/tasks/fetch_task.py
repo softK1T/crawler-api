@@ -77,6 +77,7 @@ async def fetch_task(
                 use_proxy=req_use_proxy,
                 proxy_country=req_proxy_country,
                 proxy_type=req_proxy_type,
+                browser_pool=ctx.get("browser_pool"),
             )
 
             # 5. Block detection metric.

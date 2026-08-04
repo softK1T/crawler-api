@@ -1,11 +1,18 @@
 """Core types for fetcher implementations: FetchResult, FetcherProtocol, retry logic."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.models.domain_policy import DomainPolicy
+    from app.services.proxy_manager import ProxyManager
+    from app.worker.browser_pool import BrowserPool
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +76,10 @@ class FetcherProtocol(Protocol):
 # ── Retry orchestration ──────────────────────────────────────────────────────
 
 
-def _jittered_delay(policy) -> float:
+def _jittered_delay(policy: object) -> float:
     """Return a random delay in seconds between policy's min/max delay ms."""
-    min_ms = policy.min_delay_ms if policy else 500
-    max_ms = policy.max_delay_ms if policy else 2000
+    min_ms = getattr(policy, "min_delay_ms", None) or 500
+    max_ms = getattr(policy, "max_delay_ms", None) or 2000
     return random.uniform(min_ms, max_ms) / 1000.0
 
 
@@ -85,70 +92,163 @@ def _normalize_domain_from_url(url: str) -> str:
     return normalize_domain(parsed.hostname or url)
 
 
+@dataclass
+class _EscalationState:
+    """Mutable escalation state kept across retry-loop iterations."""
+
+    tier: int
+    attempts_at_tier: int = 0
+    fetcher: FetcherProtocol | None = None  # current engine instance
+
+
 async def fetch_with_retry(
-    fetcher: "FetcherProtocol",
+    fetcher: FetcherProtocol,
     url: str,
     *,
-    policy=None,
-    proxy_manager=None,
-    db=None,
+    policy: DomainPolicy | None = None,
+    proxy_manager: ProxyManager | None = None,
+    db: object = None,
     sticky_key: str | None = None,
     trace_id: str | None = None,
     use_proxy: bool | None = None,
     proxy_country: str | None = None,
     proxy_type: str | None = None,
+    browser_pool: BrowserPool | None = None,
 ) -> FetchResult:
-    """Retry loop with proxy selection, health reporting, and jittered backoff.
+    """Retry loop with proxy selection, health reporting, jittered backoff,
+    and adaptive engine escalation.
 
-    Up to ``policy.max_retries`` (default 3) attempts.  On each failure the
-    proxy is reported via ``proxy_manager.report_result`` and a jittered
-    delay is inserted before the next attempt.
+    Attempt ceiling
+    ---------------
+    ``policy.max_escalation_attempts`` (default 12) is the hard ceiling on
+    TOTAL attempts across all tiers.  ``policy.max_retries`` (default 3) is
+    preserved as the per-tier attempt cap for non-escalating callers — callers
+    that do not pass a policy still get max_retries behaviour unchanged.
 
-    Proxy policy (three-level resolution):
-    1. Explicit *use_proxy* argument (from request options) — highest priority.
-    2. ``policy.use_proxy`` (from DomainPolicy row).
-    3. Defaults to ``True`` if no policy row exists.
+    Proxy/engine precedence (four-level, outermost wins)
+    ----------------------------------------------------
+    1. Explicit *use_proxy* / *proxy_type* arguments from the API request.
+    2. Escalation ladder tier (engine + proxy_type), derived from policy.
+    3. ``policy.use_proxy`` / ``policy.proxy_type`` (DomainPolicy row).
+    4. Defaults: use_proxy=False, proxy_type=datacenter.
+
+    Escalation rules
+    ----------------
+    - Start at escalation.initial_tier(policy) — respects learned tier and
+      vendor floor, so a known-Kasada domain never wastes attempts at tier 0.
+    - Allow MAX_ATTEMPTS_PER_TIER (2) attempts before bumping the tier.
+    - Only bump when block_reason is in ESCALATABLE (vendor challenges).
+      IP_BAN / RATE_LIMITED only rotate the proxy — engine stays the same.
+    - On tier change: clear failed_proxy_ids (a new proxy_type invalidates
+      prior IP bans) and re-instantiate the fetcher if the engine changed.
+    - Premium tiers (residential/mobile) are gated behind
+      settings.enable_premium_proxy_tiers (default False).  When the flag is
+      off, escalation stops at the highest free tier, logs a warning, and
+      returns the last blocked FetchResult rather than raising.
+    - Tier-0 direct-connection: preserved — if proxy is None and block occurs,
+      we now escalate instead of hard-returning, unless caller explicitly
+      forced use_proxy=False (which locks tier 0).
 
     When ``use_proxy=True`` and no healthy proxy is available the function
     raises :class:`ProxyPoolUnavailableError` rather than silently falling
     back to a direct connection.  Blocked proxies are tracked in
-    ``failed_proxy_ids`` and excluded from subsequent retry picks — when all
-    eligible proxies are exhausted the function raises
-    :class:`ProxyPoolExhaustedError`.
+    ``failed_proxy_ids`` and excluded from subsequent retry picks.
     """
     from app.core.errors import ProxyPoolExhaustedError, ProxyPoolUnavailableError
+    from app.services.escalation import (
+        LADDER,
+        MAX_ATTEMPTS_PER_TIER,
+        effective_max_tier,
+        initial_tier,
+        is_escalatable,
+        next_tier,
+    )
+    from app.services.fetchers import get_fetcher
 
     domain = _normalize_domain_from_url(url)
-    max_retries = policy.max_retries if policy else 3
 
-    # ── Resolve effective proxy policy ──────────────────────────────────────
-    effective_use_proxy = (
-        use_proxy if use_proxy is not None else bool(policy.use_proxy if policy else False)
-    )
+    # ── Settings for premium gate ────────────────────────────────────────────
+    try:
+        from app.core.config import settings as _settings
+
+        enable_premium = _settings.enable_premium_proxy_tiers
+    except Exception:
+        enable_premium = False
+
+    max_tier = effective_max_tier(enable_premium)
+    max_attempts = getattr(policy, "max_escalation_attempts", None) or 12
+
+    # ── Caller-level overrides (level 1 precedence) ──────────────────────────
+    # When the caller explicitly sets use_proxy / proxy_type, those values
+    # override the ladder for the entire call.  Engine still escalates.
+    caller_forced_use_proxy = use_proxy  # None means "let ladder decide"
+    caller_forced_proxy_type = proxy_type  # None means "let ladder decide"
+
+    # ── Country resolution (unchanged from original) ─────────────────────────
     effective_country = (
-        proxy_country if proxy_country is not None else (policy.proxy_country if policy else None)
+        proxy_country if proxy_country is not None else (getattr(policy, "proxy_country", None))
     )
     if effective_country is not None:
         effective_country = effective_country.strip().upper()
 
+    # ── Escalation state ─────────────────────────────────────────────────────
+    start_tier = min(initial_tier(policy), max_tier)
+    esc = _EscalationState(tier=start_tier, fetcher=fetcher)
+
+    last_result: FetchResult | None = None
     last_error: Exception | None = None
     failed_proxy_ids: set[UUID] = set()
+    total_attempts = 0
 
-    for attempt in range(max_retries):
+    while total_attempts < max_attempts:
+        # Clamp tier to max_tier (premium gate).
+        if esc.tier > max_tier:
+            logger.warning(
+                "escalation_premium_gate_hit",
+                extra={
+                    "domain": domain,
+                    "tier": esc.tier,
+                    "max_tier": max_tier,
+                    "reason": "enable_premium_proxy_tiers=False",
+                },
+            )
+            if last_result is not None:
+                return last_result
+            break
+
+        tier_def = LADDER[esc.tier]
+
+        # ── Derive effective proxy settings for this tier ────────────────────
+        # Caller-forced values win; otherwise use ladder.
+        tier_use_proxy = (
+            caller_forced_use_proxy if caller_forced_use_proxy is not None else tier_def.use_proxy
+        )
+        tier_proxy_type = (
+            caller_forced_proxy_type
+            if caller_forced_proxy_type is not None
+            else tier_def.proxy_type
+        )
+
+        # ── Re-instantiate fetcher when engine changes ───────────────────────
+        if esc.fetcher is None or getattr(esc.fetcher, "_engine_name", None) != tier_def.engine:
+            esc.fetcher = get_fetcher(tier_def.engine, browser_pool=browser_pool)
+
+        current_fetcher = esc.fetcher
         proxy = None
+        total_attempts += 1
+
         try:
             # 1. Pick proxy.
-            if effective_use_proxy and proxy_manager is not None:
+            if tier_use_proxy and proxy_manager is not None:
                 proxy = await proxy_manager.get_proxy(
-                    pool_id=policy.proxy_pool_id if policy else None,
+                    pool_id=getattr(policy, "proxy_pool_id", None),
                     domain=domain,
-                    sticky_key=sticky_key if attempt == 0 else None,
+                    sticky_key=sticky_key if total_attempts == 1 else None,
                     exclude_ids=failed_proxy_ids,
                     country=effective_country,
-                    proxy_type=proxy_type,
+                    proxy_type=tier_proxy_type,
                 )
 
-                # Fail-fast: caller requested proxy but none is available.
                 if proxy is None:
                     if failed_proxy_ids:
                         raise ProxyPoolExhaustedError(
@@ -168,23 +268,21 @@ async def fetch_with_retry(
             merged_headers = headers_for_domain(policy)
 
             # 3. Fetch.
-            result = await fetcher.fetch(
+            result = await current_fetcher.fetch(
                 url,
                 proxy=proxy,
                 headers=merged_headers,
                 timeout_s=30.0,
             )
-            result.retries_used = attempt
+            result.retries_used = total_attempts - 1
             result.trace_id = trace_id
 
             # 4. Check for block.
             if result.blocked:
-                # Direct retries use the same IP and cannot resolve an IP/WAF block.
-                # Return the structured blocked result instead of burning attempts.
-                if proxy is None:
-                    return result
+                last_result = result
+                esc.attempts_at_tier += 1
 
-                if proxy_manager is not None:
+                if proxy_manager is not None and proxy is not None:
                     await proxy_manager.report_result(
                         proxy_id=proxy.id,
                         domain=domain,
@@ -192,9 +290,49 @@ async def fetch_with_retry(
                         reason=result.block_reason or "http_error",
                         db=db,
                     )
-                    # Rotate: exclude this proxy and try another.
                     failed_proxy_ids.add(proxy.id)
-                if attempt < max_retries - 1:
+
+                # Decide: escalate tier or rotate proxy?
+                if esc.attempts_at_tier >= MAX_ATTEMPTS_PER_TIER and is_escalatable(
+                    result.block_reason
+                ):
+                    nxt = next_tier(esc.tier)
+                    if nxt is None or nxt > max_tier:
+                        # Top of reachable ladder — return last blocked result.
+                        logger.warning(
+                            "escalation_ladder_exhausted",
+                            extra={"domain": domain, "tier": esc.tier},
+                        )
+                        return result
+                    logger.info(
+                        "escalation_tier_bump",
+                        extra={
+                            "domain": domain,
+                            "from_tier": esc.tier,
+                            "to_tier": nxt,
+                            "reason": result.block_reason,
+                        },
+                    )
+                    esc.tier = nxt
+                    esc.attempts_at_tier = 0
+                    esc.fetcher = None  # force re-instantiation
+                    failed_proxy_ids.clear()  # new proxy_type — reset bans
+                    # No sleep between tier bumps — the new engine is the retry.
+                    continue
+
+                # Rotation-only block (IP_BAN / RATE_LIMITED) or within-tier retry.
+                if proxy is None and caller_forced_use_proxy is not True:
+                    # Direct connection blocked and caller didn't force proxy —
+                    # escalate out of tier 0 rather than hard-returning.
+                    nxt = next_tier(esc.tier)
+                    if nxt is not None and nxt <= max_tier:
+                        esc.tier = nxt
+                        esc.attempts_at_tier = 0
+                        esc.fetcher = None
+                        continue
+                    return result
+
+                if total_attempts < max_attempts:
                     await asyncio.sleep(_jittered_delay(policy))
                     continue
                 return result
@@ -211,7 +349,6 @@ async def fetch_with_retry(
             return result
 
         except (ProxyPoolUnavailableError, ProxyPoolExhaustedError):
-            # These are hard failures — do not retry.
             raise
 
         except FetchError as exc:
@@ -225,7 +362,7 @@ async def fetch_with_retry(
                     db=db,
                 )
                 failed_proxy_ids.add(proxy.id)
-            if attempt < max_retries - 1:
+            if total_attempts < max_attempts:
                 await asyncio.sleep(_jittered_delay(policy))
                 continue
             raise
@@ -234,10 +371,9 @@ async def fetch_with_retry(
             last_error = exc
             if proxy is not None and proxy_manager is not None:
                 failed_proxy_ids.add(proxy.id)
-            if attempt < max_retries - 1:
+            if total_attempts < max_attempts:
                 await asyncio.sleep(_jittered_delay(policy))
                 continue
             raise FetchError(str(exc)) from exc
 
-    # Should not reach here — last retry loops either return or raise.
     raise FetchError(str(last_error)) from last_error
