@@ -22,12 +22,14 @@ def get_fetcher(engine: str, *, browser_pool=None) -> FetcherProtocol:
         from app.services.fetchers.curl_fetcher import CurlFetcher
 
         return CurlFetcher()
-    if engine in ("playwright", "camoufox"):
-        if engine == "camoufox":
-            logger.warning("camoufox engine mapped to playwright; native camoufox support deferred")
+    if engine == "playwright":
         from app.services.fetchers.playwright_fetcher import PlaywrightFetcher
 
         return PlaywrightFetcher(browser_pool=browser_pool)
+    if engine == "camoufox":
+        from app.services.fetchers.camoufox_fetcher import CamoufoxFetcher
+
+        return CamoufoxFetcher(browser_pool=browser_pool)
     raise ValueError(f"Unknown engine: {engine!r}")
 
 
