@@ -5,9 +5,15 @@ Legacy pools were removed in Stage 14.
 backward compatibility with existing Celery worker tasks.
 """
 
+from __future__ import annotations
+
 import logging
 import random
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.models.proxy import Proxy
 
 from sqlalchemy import func, select
 
@@ -100,7 +106,7 @@ class ProxyManager:
         exclude_ids: set[UUID] | None = None,
         country: str | None = None,
         proxy_type: str | None = None,
-    ) -> None:
+    ) -> Proxy | None:
         """Select a proxy by weighted health score.
 
         1. Check circuit breaker — return None if open for *domain*.
