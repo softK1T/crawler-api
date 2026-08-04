@@ -138,7 +138,8 @@ async def fetch_with_retry(
     ----------------
     - Start at escalation.initial_tier(policy) — respects learned tier and
       vendor floor, so a known-Kasada domain never wastes attempts at tier 0.
-    - Allow MAX_ATTEMPTS_PER_TIER (2) attempts before bumping the tier.
+    - Allow ``policy.max_retries`` attempts at each tier before bumping,
+      falling back to MAX_ATTEMPTS_PER_TIER (2) when the policy omits it.
     - Only bump when block_reason is in ESCALATABLE (vendor challenges).
       IP_BAN / RATE_LIMITED only rotate the proxy — engine stays the same.
     - On tier change: clear failed_proxy_ids (a new proxy_type invalidates
@@ -179,6 +180,15 @@ async def fetch_with_retry(
 
     max_tier = effective_max_tier(enable_premium)
     max_attempts = getattr(policy, "max_escalation_attempts", None) or 12
+
+    # policy.max_retries overrides the per-tier attempt cap (level 3 precedence).
+    # Falls back to MAX_ATTEMPTS_PER_TIER when unset so existing behaviour holds.
+    _policy_retries = getattr(policy, "max_retries", None)
+    attempts_per_tier = (
+        int(_policy_retries)
+        if isinstance(_policy_retries, int) and _policy_retries > 0
+        else MAX_ATTEMPTS_PER_TIER
+    )
 
     # ── Caller-level overrides (level 1 precedence) ──────────────────────────
     # When the caller explicitly sets use_proxy / proxy_type, those values
@@ -314,7 +324,7 @@ async def fetch_with_retry(
                     failed_proxy_ids.add(proxy.id)
 
                 # Decide: escalate tier or rotate proxy?
-                if esc.attempts_at_tier >= MAX_ATTEMPTS_PER_TIER and is_escalatable(
+                if esc.attempts_at_tier >= attempts_per_tier and is_escalatable(
                     result.block_reason
                 ):
                     nxt = next_tier(esc.tier)
