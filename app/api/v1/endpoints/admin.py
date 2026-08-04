@@ -112,6 +112,44 @@ async def delete_domain_policy(
     await db.commit()
 
 
+# ── Escalation tier pinning ──────────────────────────────────────────────────
+
+
+@router.post(
+    "/domain-policies/{policy_id}/pin-tier",
+    response_model=DomainPolicyResponse,
+    summary="Pin or unpin a domain's escalation tier",
+)
+async def pin_escalation_tier(
+    policy_id: UUID,
+    tier: int | None = None,
+    locked: bool = True,
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pin a domain to a specific escalation tier and lock auto-escalation.
+
+    - **tier**: target tier 0-6; if omitted, keeps the current tier.
+    - **locked**: set False to unlock (re-enable auto-escalation) without
+      changing the tier.
+
+    When *locked=True* the policy_learner will not auto-change the tier.
+    """
+    row = await db.get(DomainPolicy, policy_id)
+    if row is None:
+        raise NotFoundError(detail="Domain policy not found")
+    if tier is not None:
+        if not (0 <= tier <= 6):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=422, detail="tier must be 0-6")
+        row.escalation_tier = tier
+    row.tier_locked = locked
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
 # ── Proxy Pools ──────────────────────────────────────────────────────────────
 
 
