@@ -123,5 +123,11 @@ class Settings(BaseSettings):
             return self.webshare_proxy_file
         return self.proxy_file
 
+    # Anti-bot escalation: premium proxy tiers (residential, mobile).
+    # Tiers 3-6 in the escalation ladder require residential/mobile proxies.
+    # Keep False until proxies are purchased — the abstraction is fully built,
+    # only the spend is gated.
+    enable_premium_proxy_tiers: bool = False
+
 
 settings = Settings()
