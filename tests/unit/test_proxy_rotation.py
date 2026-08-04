@@ -1,9 +1,35 @@
 """Unit tests for proxy rotation: different IDs on retry, health score decay, excluded-ID accumulation."""
 
 from unittest.mock import AsyncMock
+
+from app.schemas.fetch import BlockReason
 from uuid import UUID
 
 import pytest
+from unittest.mock import AsyncMock as _AsyncMock, patch as _patch2
+
+
+@pytest.fixture(autouse=True)
+def route_get_fetcher(monkeypatch):
+    import app.services.fetchers as _f
+    import app.services.fetchers.base as _b
+
+    holder = type("H", (), {"target": None})()
+
+    class _Delegate:
+        async def fetch(self, url, **kw):
+            return await holder.target.fetch(url, **kw)
+
+    monkeypatch.setattr(_f, "get_fetcher", lambda engine, **kw: _Delegate(), raising=False)
+
+    _orig = _b.fetch_with_retry
+
+    async def _wrapped(*args, **kwargs):
+        holder.target = kwargs.get("fetcher") or (args[0] if args else None)
+        return await _orig(*args, **kwargs)
+
+    monkeypatch.setattr(_b, "fetch_with_retry", _wrapped)
+    monkeypatch.setattr(_b.asyncio, "sleep", _AsyncMock())
 
 
 class _FakeProxy:
@@ -13,6 +39,11 @@ class _FakeProxy:
 
 
 class _Policy:
+    escalation_tier = 0
+    tier_locked = False
+    antibot_type = None
+    proxy_type = None
+    max_escalation_attempts = 12
     use_proxy = True
     proxy_country = None
     proxy_pool_id = None
@@ -47,7 +78,7 @@ async def test_blocked_proxy_is_excluded_on_retry():
                 body=b"blocked",
                 engine="httpx",
                 blocked=True,
-                block_reason="ip_ban",
+                block_reason=BlockReason.IP_BAN,
                 proxy_id=banned.id if proxy else None,
             )
         return FetchResult(
@@ -83,6 +114,11 @@ async def test_rotation_exhaustion_raises_proxy_pool_exhausted():
     from app.services.fetchers.base import FetchResult, fetch_with_retry
 
     class ExhaustPolicy:
+        escalation_tier = 0
+        tier_locked = False
+        antibot_type = None
+        proxy_type = None
+        max_escalation_attempts = 12
         use_proxy = True
         proxy_country = None
         proxy_pool_id = None
@@ -108,7 +144,7 @@ async def test_rotation_exhaustion_raises_proxy_pool_exhausted():
             body=b"blocked",
             engine="httpx",
             blocked=True,
-            block_reason="ip_ban",
+            block_reason=BlockReason.IP_BAN,
             proxy_id=proxy.id if proxy else None,
         )
 
@@ -185,7 +221,7 @@ async def test_sticky_cleared_on_first_retry():
                 body=b"blocked",
                 engine="httpx",
                 blocked=True,
-                block_reason="ip_ban",
+                block_reason=BlockReason.IP_BAN,
                 proxy_id=proxy.id if proxy else None,
             )
         return FetchResult(

@@ -1,4 +1,4 @@
-"""Unit tests for app.services.policy_learner.
+"""Unit tests for app.services.policy_learner.record_outcome.
 
 All DB and time calls are mocked — no real DB required.
 """
@@ -6,18 +6,19 @@ All DB and time calls are mocked — no real DB required.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.policy_learner import learn_from_result
+from app.services.policy_learner import record_outcome
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_policy(**kwargs):
+def _make_row(**kwargs):
+    """Simulate a live DomainPolicy ORM row returned by db.execute()."""
     defaults = {
         "id": "uuid-1",
         "domain": "example.com",
@@ -32,16 +33,24 @@ def _make_policy(**kwargs):
     return SimpleNamespace(**defaults)
 
 
-def _make_result(*, blocked=False, tier=0, vendor=None, block_reason=None):
+def _make_result(*, blocked=False, status_code=200, block_reason=None):
     return SimpleNamespace(
         blocked=blocked,
-        engine=["httpx", "httpx", "curl_cffi", "curl_cffi", "playwright", "camoufox", "camoufox"][
-            tier
-        ],
+        status_code=status_code,
+        headers={},
+        body=b"<html>ok</html>",
         block_reason=block_reason,
-        _tier=tier,
-        _vendor=vendor,
+        id="uuid-1",
     )
+
+
+def _make_db(row):
+    """Mock AsyncSession that returns *row* from execute()."""
+    scalar_result = MagicMock()
+    scalar_result.scalar_one_or_none.return_value = row
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=scalar_result)
+    return db
 
 
 # ---------------------------------------------------------------------------
@@ -50,33 +59,41 @@ def _make_result(*, blocked=False, tier=0, vendor=None, block_reason=None):
 
 
 @pytest.mark.asyncio
-async def test_success_at_higher_tier_persists_tier():
-    """On success at tier 3, escalation_tier must be updated to 3."""
-    policy = _make_policy(escalation_tier=0)
-    db = AsyncMock()
+async def test_success_keeps_tier_at_same_level():
+    """Success at tier 3 when already at 3 — tier stays 3."""
+    row = _make_row(escalation_tier=3)
+    db = _make_db(row)
 
-    with patch("app.services.policy_learner._detect_vendor_from_result", return_value=None):
-        await learn_from_result(
-            policy=policy, fetch_tier=3, result=_make_result(blocked=False, tier=3), db=db
+    with patch("app.services.block_detector.detect_vendor", return_value=None):
+        await record_outcome(
+            result=_make_result(blocked=False),
+            policy=row,
+            db=db,
+            engine_used="curl_cffi",
+            tier_used=3,
         )
 
-    assert policy.escalation_tier == 3
-    assert policy.consecutive_blocks == 0
+    assert row.escalation_tier == 3
+    assert row.consecutive_blocks == 0
     db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_success_does_not_lower_tier():
-    """Success at tier 1 must not lower a policy already at tier 3."""
-    policy = _make_policy(escalation_tier=3)
-    db = AsyncMock()
+async def test_success_at_lower_tier_de_escalates():
+    """Success at tier 1 when policy is at tier 3 -> min(1,3)=1 (de-escalation)."""
+    row = _make_row(escalation_tier=3)
+    db = _make_db(row)
 
-    with patch("app.services.policy_learner._detect_vendor_from_result", return_value=None):
-        await learn_from_result(
-            policy=policy, fetch_tier=1, result=_make_result(blocked=False, tier=1), db=db
+    with patch("app.services.block_detector.detect_vendor", return_value=None):
+        await record_outcome(
+            result=_make_result(blocked=False),
+            policy=row,
+            db=db,
+            engine_used="httpx",
+            tier_used=1,
         )
 
-    assert policy.escalation_tier == 3  # unchanged
+    assert row.escalation_tier == 1  # min(1, 3) = 1
     db.commit.assert_awaited_once()
 
 
@@ -88,15 +105,19 @@ async def test_success_does_not_lower_tier():
 @pytest.mark.asyncio
 async def test_tier_locked_prevents_tier_change():
     """When tier_locked=True, escalation_tier must not be modified."""
-    policy = _make_policy(escalation_tier=2, tier_locked=True)
-    db = AsyncMock()
+    row = _make_row(escalation_tier=2, tier_locked=True)
+    db = _make_db(row)
 
-    with patch("app.services.policy_learner._detect_vendor_from_result", return_value=None):
-        await learn_from_result(
-            policy=policy, fetch_tier=5, result=_make_result(blocked=False, tier=5), db=db
+    with patch("app.services.block_detector.detect_vendor", return_value=None):
+        await record_outcome(
+            result=_make_result(blocked=False),
+            policy=row,
+            db=db,
+            engine_used="camoufox",
+            tier_used=5,
         )
 
-    assert policy.escalation_tier == 2  # locked — not updated
+    assert row.escalation_tier == 2  # locked — not updated
     db.commit.assert_awaited_once()
 
 
@@ -107,19 +128,20 @@ async def test_tier_locked_prevents_tier_change():
 
 @pytest.mark.asyncio
 async def test_block_increments_consecutive_blocks():
-    policy = _make_policy(escalation_tier=2, consecutive_blocks=1)
-    db = AsyncMock()
+    row = _make_row(escalation_tier=2, consecutive_blocks=1)
+    db = _make_db(row)
 
-    with patch("app.services.policy_learner._detect_vendor_from_result", return_value=None):
-        await learn_from_result(
-            policy=policy,
-            fetch_tier=2,
-            result=_make_result(blocked=True, tier=2, block_reason="WAF_BLOCK"),
+    with patch("app.services.block_detector.detect_vendor", return_value=None):
+        await record_outcome(
+            result=_make_result(blocked=True, status_code=403, block_reason="WAF_BLOCK"),
+            policy=row,
             db=db,
+            engine_used="curl_cffi",
+            tier_used=2,
         )
 
-    assert policy.consecutive_blocks == 2
-    assert policy.last_block_reason == "WAF_BLOCK"
+    assert row.consecutive_blocks == 2
+    assert row.last_block_reason == "WAF_BLOCK"
     db.commit.assert_awaited_once()
 
 
@@ -130,33 +152,36 @@ async def test_block_increments_consecutive_blocks():
 
 @pytest.mark.asyncio
 async def test_vendor_detected_persists_antibot_type():
-    policy = _make_policy(antibot_type=None)
-    db = AsyncMock()
+    row = _make_row(antibot_type=None)
+    db = _make_db(row)
 
-    with patch("app.services.policy_learner._detect_vendor_from_result", return_value="cloudflare"):
-        await learn_from_result(
-            policy=policy,
-            fetch_tier=0,
-            result=_make_result(blocked=False, tier=0),
+    with patch("app.services.block_detector.detect_vendor", return_value="cloudflare"):
+        await record_outcome(
+            result=_make_result(blocked=False),
+            policy=row,
             db=db,
+            engine_used="httpx",
+            tier_used=0,
         )
 
-    assert policy.antibot_type == "cloudflare"
+    assert row.antibot_type == "cloudflare"
     db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_existing_antibot_type_not_overwritten_by_none():
     """If vendor detection returns None, existing antibot_type must be kept."""
-    policy = _make_policy(antibot_type="akamai")
-    db = AsyncMock()
+    row = _make_row(antibot_type="akamai")
+    db = _make_db(row)
 
-    with patch("app.services.policy_learner._detect_vendor_from_result", return_value=None):
-        await learn_from_result(
-            policy=policy,
-            fetch_tier=0,
-            result=_make_result(blocked=False, tier=0),
+    with patch("app.services.block_detector.detect_vendor", return_value=None):
+        await record_outcome(
+            result=_make_result(blocked=False),
+            policy=row,
             db=db,
+            engine_used="httpx",
+            tier_used=0,
         )
 
-    assert policy.antibot_type == "akamai"  # unchanged
+    assert row.antibot_type == "akamai"  # unchanged
+    db.commit.assert_awaited_once()

@@ -11,6 +11,12 @@ import pytest
 from app.services.fetchers.base import FetchResult, _normalize_domain_from_url
 
 
+@pytest.fixture(autouse=True)
+def _auto_route_get_fetcher(route_get_fetcher):
+    """Force every test in this module through the conftest get_fetcher router."""
+    yield
+
+
 def test_normalize_domain_strips_www():
     assert _normalize_domain_from_url("https://www.example.com/page") == "example.com"
 
@@ -34,6 +40,12 @@ class FakePolicy:
         self.max_delay_ms = 1
         self.engine = "httpx"
         self.header_profile = None
+        self.escalation_tier = 0
+        self.tier_locked = False
+        self.antibot_type = None
+        self.proxy_type = None
+        self.max_escalation_attempts = 12
+        self.domain = "example.com"
 
 
 @pytest.mark.asyncio

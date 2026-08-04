@@ -222,14 +222,26 @@ async def fetch_with_retry(
 
         # ── Derive effective proxy settings for this tier ────────────────────
         # Caller-forced values win; otherwise use ladder.
-        tier_use_proxy = (
-            caller_forced_use_proxy if caller_forced_use_proxy is not None else tier_def.use_proxy
-        )
-        tier_proxy_type = (
-            caller_forced_proxy_type
-            if caller_forced_proxy_type is not None
-            else tier_def.proxy_type
-        )
+        # Level 3: DomainPolicy row, consulted only at the ladder's base tier —
+        # above tier 0 the ladder's own proxy requirement must not be weakened.
+        policy_use_proxy = getattr(policy, "use_proxy", None)
+        policy_proxy_type = getattr(policy, "proxy_type", None)
+
+        if caller_forced_use_proxy is not None:
+            tier_use_proxy = caller_forced_use_proxy
+        elif tier_def.use_proxy:
+            tier_use_proxy = True
+        elif policy_use_proxy is not None:
+            tier_use_proxy = bool(policy_use_proxy)
+        else:
+            tier_use_proxy = False
+
+        if caller_forced_proxy_type is not None:
+            tier_proxy_type = caller_forced_proxy_type
+        elif tier_def.proxy_type is not None:
+            tier_proxy_type = tier_def.proxy_type
+        else:
+            tier_proxy_type = policy_proxy_type
 
         # ── Re-instantiate fetcher when engine changes ───────────────────────
         if esc.fetcher is None or getattr(esc.fetcher, "_engine_name", None) != tier_def.engine:

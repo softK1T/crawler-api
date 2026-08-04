@@ -1,3 +1,17 @@
+
+import pytest
+from unittest.mock import AsyncMock, patch as _patch
+
+
+@pytest.fixture(autouse=True)
+def mock_url_guard():
+    """Bypass SSRF/URL guard DNS lookup in all tests."""
+    with _patch(
+        "app.core.url_guard.validate_url_async",
+        new=AsyncMock(return_value=None),
+    ):
+        yield
+
 """Shared fixtures: testcontainers for Postgres/Redis, FastAPI app, factories."""
 
 import os
@@ -160,3 +174,28 @@ async def api_key_factory(db_session, application_factory):
         return raw, row
 
     return _make
+
+
+@pytest.fixture
+def route_get_fetcher(monkeypatch):
+    """Route app.services.fetchers.get_fetcher to the fetcher passed into fetch_with_retry."""
+    import app.services.fetchers as _f
+    import app.services.fetchers.base as _b
+
+    holder = type("H", (), {"target": None})()
+
+    class _Delegate:
+        async def fetch(self, url, **kw):
+            return await holder.target.fetch(url, **kw)
+
+    monkeypatch.setattr(_f, "get_fetcher", lambda engine, **kw: _Delegate(), raising=False)
+
+    _orig = _b.fetch_with_retry
+
+    async def _wrapped(*args, **kwargs):
+        holder.target = kwargs.get("fetcher") or (args[0] if args else None)
+        return await _orig(*args, **kwargs)
+
+    monkeypatch.setattr(_b, "fetch_with_retry", _wrapped)
+    monkeypatch.setattr(_b.asyncio, "sleep", AsyncMock())
+    yield

@@ -32,12 +32,22 @@ def test_detect_non_blocked():
     assert blocked is None
 
 
-def test_get_fetcher_camoufox_maps_to_playwright():
+def test_get_fetcher_camoufox_returns_camoufox_fetcher():
     from app.services.fetchers import get_fetcher
-    from app.services.fetchers.playwright_fetcher import PlaywrightFetcher
+    from app.services.fetchers.camoufox_fetcher import CamoufoxFetcher
 
     fetcher = get_fetcher("camoufox")
-    assert isinstance(fetcher, PlaywrightFetcher)
+    assert isinstance(fetcher, CamoufoxFetcher)
+    assert hasattr(fetcher, "fetch")
+
+
+def test_get_fetcher_unknown_engine_raises():
+    import pytest as _pytest
+
+    from app.services.fetchers import get_fetcher
+
+    with _pytest.raises(ValueError, match="Unknown engine"):
+        get_fetcher("nope")
 
 
 def test_headers_for_domain_merges():

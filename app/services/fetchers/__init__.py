@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 def get_fetcher(engine: str, *, browser_pool=None) -> FetcherProtocol:
     """Return a fetcher instance for *engine*.
 
-    Supported engines: ``"httpx"``, ``"curl_cffi"``, ``"playwright"``.
-    ``"camoufox"`` is mapped to ``PlaywrightFetcher`` (native support deferred).
+    Supported engines: ``"httpx"``, ``"curl_cffi"``, ``"playwright"``,
+    ``"camoufox"`` (native CamoufoxFetcher).
     *browser_pool* is injected into PlaywrightFetcher for browser reuse.
     """
     if engine == "httpx":
