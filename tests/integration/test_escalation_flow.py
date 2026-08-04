@@ -9,6 +9,7 @@ Verifies:
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -159,3 +160,53 @@ async def test_max_retries_never_exceeded():
 
     assert attempt_count <= max_retries, f"Exceeded max_retries: {attempt_count} > {max_retries}"
     assert result.blocked is True
+
+
+@pytest.mark.asyncio
+async def test_policy_max_retries_controls_per_tier_attempts():
+    """policy.max_retries is the per-tier attempt cap before the tier is bumped.
+
+    Regression guard: max_retries was documented as the per-tier cap but was
+    never read, so the hardcoded MAX_ATTEMPTS_PER_TIER always won.
+    """
+    engines_used = []
+    fetch_calls = []
+
+    async def fake_fetch(url, *, proxy=None, headers=None, **kwargs):
+        engine = engines_used[-1] if engines_used else "httpx"
+        fetch_calls.append(engine)
+        return _blocked_result(engine, BlockReason.WAF)
+
+    def fake_get_fetcher(engine, *, browser_pool=None):
+        engines_used.append(engine)
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(side_effect=fake_fetch)
+        return fetcher
+
+    policy = _make_policy(tier=0)
+    policy.max_retries = 1  # bump the tier after a single block
+    policy.max_escalation_attempts = 3
+
+    # A real proxy_manager is required: without one, proxy is always None and
+    # the tier-0 "direct blocked" branch bumps the tier unconditionally,
+    # bypassing the attempts_at_tier / max_retries comparison entirely.
+    proxy_mgr = AsyncMock()
+    proxy_mgr.get_proxy = AsyncMock(return_value=SimpleNamespace(id=uuid4(), url=None))
+    proxy_mgr.report_result = AsyncMock()
+
+    with (
+        patch("app.services.fetchers.get_fetcher", side_effect=fake_get_fetcher),
+        patch("app.services.fetchers.base.asyncio.sleep", new=AsyncMock()),
+    ):
+        _ = await fetch_with_retry(
+            fake_get_fetcher(policy.engine),
+            url="https://example.com",
+            policy=policy,
+            proxy_manager=proxy_mgr,
+            use_proxy=True,
+        )
+
+    # max_retries=1 means every attempt bumps the tier, so the ladder is walked
+    # once per attempt rather than twice (the MAX_ATTEMPTS_PER_TIER default).
+    assert len(fetch_calls) == 3, f"Expected 3 attempts, got {len(fetch_calls)}"
+    assert len(set(engines_used)) >= 2, f"Tier never bumped: {engines_used}"
