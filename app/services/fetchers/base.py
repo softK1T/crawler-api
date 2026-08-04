@@ -37,6 +37,8 @@ class FetchResult:
     # Raw transport bytes and headers for WARC archival (not normalized).
     raw_body: bytes = b""
     raw_headers: dict[str, str] = field(default_factory=dict)
+    # Escalation tier at which this result was produced (set by fetch_with_retry).
+    _tier_used: int = 0
 
 
 # ── FetchError ────────────────────────────────────────────────────────────────
@@ -303,6 +305,7 @@ async def fetch_with_retry(
                             "escalation_ladder_exhausted",
                             extra={"domain": domain, "tier": esc.tier},
                         )
+                        result._tier_used = esc.tier
                         return result
                     logger.info(
                         "escalation_tier_bump",
