@@ -240,6 +240,13 @@ async def fetch_with_retry(
         total_attempts += 1
 
         try:
+            from app.core.observability import FETCH_ATTEMPTS_BY_TIER
+
+            FETCH_ATTEMPTS_BY_TIER.labels(tier=str(esc.tier), engine=LADDER[esc.tier].engine).inc()
+        except Exception:  # noqa: S110
+            pass
+
+        try:
             # 1. Pick proxy.
             if tier_use_proxy and proxy_manager is not None:
                 proxy = await proxy_manager.get_proxy(

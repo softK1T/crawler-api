@@ -140,12 +140,15 @@ def is_escalatable(reason: str | None) -> bool:
     """Return True if *reason* justifies bumping the escalation tier."""
     if reason is None:
         return False
-    try:
-        br = BlockReason(reason)
-    except ValueError:
-        # Unknown/future vendor reason — escalate conservatively.
-        return True
-    return br in ESCALATABLE
+    # Compare by string value directly: BlockReason._missing_ silently maps
+    # any unknown string to OTHER, so BlockReason(reason) never raises.
+    # Instead, check if the raw string matches a known non-escalatable value;
+    # anything not explicitly excluded escalates conservatively.
+    non_escalatable_values = {br.value for br in BlockReason} - {br.value for br in ESCALATABLE}
+    if reason in non_escalatable_values:
+        return False
+    # Known escalatable value OR unknown future vendor string — escalate.
+    return True
 
 
 # ── Tier resolution ───────────────────────────────────────────────────────────

@@ -174,3 +174,28 @@ def record_archive_metrics(*, bytes_written: int, is_revisit: bool) -> None:
     if is_revisit:
         _revisit_records += 1
     _update_dedup_ratio()
+
+
+ESCALATION_TIER_CURRENT = Gauge(
+    "crawler_escalation_tier_current",
+    "Current escalation tier for a domain (0=direct, 6=camoufox+mobile)",
+    ["domain"],
+)
+
+FETCH_ATTEMPTS_BY_TIER = Counter(
+    "crawler_fetch_attempts_by_tier_total",
+    "Total fetch attempts broken down by tier and engine",
+    ["tier", "engine"],
+)
+
+VENDOR_DETECTED_TOTAL = Counter(
+    "crawler_vendor_detected_total",
+    "Anti-bot vendor detections by vendor name",
+    ["vendor"],
+)
+
+CONSECUTIVE_BLOCKS_GAUGE = Gauge(
+    "crawler_consecutive_blocks",
+    "Consecutive blocked responses for a domain at its current tier",
+    ["domain"],
+)

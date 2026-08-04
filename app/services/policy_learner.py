@@ -153,6 +153,20 @@ async def record_outcome(
 
         await db.commit()
 
+        try:
+            from app.core.observability import (
+                CONSECUTIVE_BLOCKS_GAUGE,
+                ESCALATION_TIER_CURRENT,
+                VENDOR_DETECTED_TOTAL,
+            )
+
+            ESCALATION_TIER_CURRENT.labels(domain=row.domain).set(row.escalation_tier)
+            CONSECUTIVE_BLOCKS_GAUGE.labels(domain=row.domain).set(row.consecutive_blocks)
+            if vendor is not None:
+                VENDOR_DETECTED_TOTAL.labels(vendor=vendor).inc()
+        except Exception:  # noqa: S110
+            pass
+
         logger.debug(
             "policy_learner.outcome_recorded",
             extra={

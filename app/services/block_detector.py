@@ -20,7 +20,7 @@ from app.schemas.fetch import BlockReason
 
 _CAPTCHA_PATTERNS = (
     re.compile(rb"\bg-recaptcha\b", re.I),
-    re.compile(rb"\bhcaptcha\b", re.I),
+    re.compile(rb"h-?captcha", re.I),
     re.compile(rb"\bcaptcha-container\b", re.I),
     re.compile(rb"\bverify you are human\b", re.I),
 )
