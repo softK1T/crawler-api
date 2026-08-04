@@ -15,6 +15,14 @@ class BlockReason(StrEnum):
     RATE_LIMITED = "rate_limited"
     WAF = "waf"
     OTHER = "other"
+    # Vendor-specific reasons added in Phase 3.
+    # Stored as plain strings in request_log — backwards compatible via _missing_.
+    AKAMAI = "akamai"
+    DATADOME = "datadome"
+    KASADA = "kasada"
+    PERIMETERX = "perimeterx"
+    INCAPSULA = "incapsula"
+    AWS_WAF = "aws_waf"
 
     @classmethod
     def _missing_(cls, value: object) -> "BlockReason":
@@ -27,6 +35,11 @@ class BlockReason(StrEnum):
                 "access_denied": cls.IP_BAN,
                 "too_many_requests": cls.RATE_LIMITED,
                 "cf_challenge": cls.CLOUDFLARE,
+                # vendor aliases
+                "akamai_bot_manager": cls.AKAMAI,
+                "dd_challenge": cls.DATADOME,
+                "px_challenge": cls.PERIMETERX,
+                "kp_challenge": cls.KASADA,
             }
             mapped = legacy.get(value.strip().lower())
             if mapped is not None:
