@@ -77,6 +77,7 @@ async def fetch_task(
                 use_proxy=req_use_proxy,
                 proxy_country=req_proxy_country,
                 proxy_type=req_proxy_type,
+                browser_pool=ctx.get("browser_pool"),
             )
 
             # 5. Block detection metric.
@@ -137,7 +138,18 @@ async def fetch_task(
                 result_data=schema.model_dump(),
             )
 
-            # 8. Usage counter upsert.
+            # 8. Policy learner — write escalation outcome back to DB.
+            from app.services.policy_learner import record_outcome
+
+            await record_outcome(
+                result=result,
+                policy=policy,
+                db=db,
+                engine_used=result.engine,
+                tier_used=getattr(result, "_tier_used", 0),
+            )
+
+            # 9. Usage counter upsert.
             await _upsert_usage(db, application_id, len(result.body))
 
             # 8b. Cost metric — only for proxied fetches.
