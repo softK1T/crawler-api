@@ -13,6 +13,8 @@ from app.core.db import Base
 class ProxyType(StrEnum):
     residential = "residential"
     datacenter = "datacenter"
+    mobile = "mobile"
+    isp = "isp"
 
 
 class Proxy(Base):
