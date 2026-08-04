@@ -79,8 +79,12 @@ async def test_success_keeps_tier_at_same_level():
 
 
 @pytest.mark.asyncio
-async def test_success_at_lower_tier_de_escalates():
-    """Success at tier 1 when policy is at tier 3 -> min(1,3)=1 (de-escalation)."""
+async def test_success_at_lower_tier_de_escalates_one_step():
+    """Success at tier 1 when policy is at tier 3 steps down to 2, not to 1.
+
+    Regression guard: an immediate collapse to tier_used meant one lucky fetch
+    reset a Cloudflare-protected domain to the bottom of the ladder.
+    """
     row = _make_row(escalation_tier=3)
     db = _make_db(row)
 
@@ -93,7 +97,7 @@ async def test_success_at_lower_tier_de_escalates():
             tier_used=1,
         )
 
-    assert row.escalation_tier == 1  # min(1, 3) = 1
+    assert row.escalation_tier == 2  # max(1, 3-1) = 2 — one step down only
     db.commit.assert_awaited_once()
 
 

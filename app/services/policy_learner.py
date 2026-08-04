@@ -46,7 +46,8 @@ async def record_outcome(
 
     On success
     ----------
-    - escalation_tier   = min(tier_used, current) — never ratchet up on success
+    - escalation_tier   = max(tier_used, current - 1) — never ratchet up on
+      success, and step down by at most one tier at a time
     - last_success_at   = now
     - consecutive_blocks = 0
 
@@ -118,9 +119,13 @@ async def record_outcome(
                     )
                 row.escalation_tier = new_tier
             else:
-                # On success: don't ratchet up (tier_used <= current is a success
-                # at a lower tier — lower is better/cheaper).
-                new_tier = min(tier_used, row.escalation_tier)
+                # On success: never ratchet up, and step down by at most one
+                # tier per success.  A single lucky hit at a low tier must not
+                # collapse a hard domain from tier 3 to 0, or the next request
+                # is blocked and the whole ladder is re-climbed at full cost.
+                # Threshold-based probing (_DE_ESCALATE_AFTER_SUCCESSES) needs a
+                # consecutive_successes column and is deferred to Phase 6.
+                new_tier = max(tier_used, row.escalation_tier - 1, _MIN_TIER)
                 if new_tier != row.escalation_tier:
                     logger.info(
                         "policy_learner.tier_ratchet_down",
