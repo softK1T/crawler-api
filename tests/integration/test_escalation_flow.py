@@ -21,7 +21,7 @@ from app.services.fetchers.base import FetchResult, fetch_with_retry
 # ---------------------------------------------------------------------------
 
 
-def _blocked_result(engine: str, reason: BlockReason = BlockReason.WAF_BLOCK) -> FetchResult:
+def _blocked_result(engine: str, reason: BlockReason = BlockReason.WAF) -> FetchResult:
     return FetchResult(
         url="https://example.com",
         status_code=403,
@@ -64,6 +64,15 @@ def _make_policy(tier=0):
         tier_locked=False,
         antibot_type=None,
         proxy_type=None,
+        max_escalation_attempts=12,
+        max_retries=6,
+        min_delay_ms=0,
+        max_delay_ms=1,
+        engine="httpx",
+        header_profile=None,
+        use_proxy=False,
+        proxy_country=None,
+        proxy_pool_id=None,
     )
 
 
@@ -77,32 +86,35 @@ async def test_engine_changes_on_escalatable_block():
     """After MAX_ATTEMPTS_PER_TIER blocks, engine must change to the next tier."""
     engines_used = []
 
+    fetch_calls = []
+
     async def fake_fetch(url, *, proxy=None, headers=None, **kwargs):
         engine = engines_used[-1] if engines_used else "httpx"
-        if len(engines_used) < 3:
-            return _blocked_result(engine, BlockReason.WAF_BLOCK)
+        fetch_calls.append(engine)
+        if len(fetch_calls) < 6:
+            return _blocked_result(engine, BlockReason.WAF)
         return _ok_result(engine)
 
     def fake_get_fetcher(engine, *, browser_pool=None):
         engines_used.append(engine)
         fetcher = MagicMock()
-        fetcher.fetch = AsyncMock(side_effect=lambda url, **kw: fake_fetch(url, **kw))
+        fetcher.fetch = AsyncMock(side_effect=fake_fetch)
         return fetcher
 
     policy = _make_policy(tier=0)
 
     with (
-        patch("app.services.fetchers.base.get_fetcher", side_effect=fake_get_fetcher),
+        patch("app.services.fetchers.get_fetcher", side_effect=fake_get_fetcher),
         patch("app.services.fetchers.base.asyncio.sleep", new=AsyncMock()),
         patch(
             "app.services.proxy_manager.ProxyManager.get_proxy", new=AsyncMock(return_value=None)
         ),
     ):
+        initial_fetcher = fake_get_fetcher(policy.engine)
         _ = await fetch_with_retry(
+            initial_fetcher,
             url="https://example.com",
             policy=policy,
-            max_retries=6,
-            use_proxy=False,
         )
 
     # At least two different engines must have been tried
@@ -121,7 +133,7 @@ async def test_max_retries_never_exceeded():
         async def _fetch(url, **kwargs):
             nonlocal attempt_count
             attempt_count += 1
-            return _blocked_result(engine, BlockReason.WAF_BLOCK)
+            return _blocked_result(engine, BlockReason.WAF)
 
         fetcher.fetch = AsyncMock(side_effect=_fetch)
         return fetcher
@@ -130,16 +142,18 @@ async def test_max_retries_never_exceeded():
     max_retries = 4
 
     with (
-        patch("app.services.fetchers.base.get_fetcher", side_effect=fake_get_fetcher),
+        patch("app.services.fetchers.get_fetcher", side_effect=fake_get_fetcher),
         patch("app.services.fetchers.base.asyncio.sleep", new=AsyncMock()),
         patch(
             "app.services.proxy_manager.ProxyManager.get_proxy", new=AsyncMock(return_value=None)
         ),
     ):
+        policy.max_escalation_attempts = max_retries
+        initial_fetcher = fake_get_fetcher(policy.engine)
         result = await fetch_with_retry(
+            initial_fetcher,
             url="https://example.com",
             policy=policy,
-            max_retries=max_retries,
             use_proxy=False,
         )
 

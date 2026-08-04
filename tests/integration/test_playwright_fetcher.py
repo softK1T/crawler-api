@@ -72,7 +72,15 @@ async def test_ssrf_interception_handler_fires_per_fetch():
     from app.services.fetchers.base import FetchError
     from app.services.fetchers.playwright_fetcher import PlaywrightFetcher
 
-    fetcher = PlaywrightFetcher()
+    from app.worker.browser_pool import BrowserPool
+
+    pool = BrowserPool()
+    try:
+        await pool.start()
+    except Exception as exc:
+        pytest.skip(f"BrowserPool unavailable (no Chromium/worker): {exc}")
+
+    fetcher = PlaywrightFetcher(browser_pool=pool)
 
     # A URL that redirects to a known blocked address.
     # The SSRF handler should abort via validate_url_async.
@@ -86,3 +94,8 @@ async def test_ssrf_interception_handler_fires_per_fetch():
         assert "blocked" in str(exc).lower() or "169.254" in str(exc), f"Unexpected error: {exc}"
     except Exception:
         pytest.skip("httpbin.org not reachable")
+    finally:
+        try:
+            await pool.stop()
+        except Exception:
+            pass
