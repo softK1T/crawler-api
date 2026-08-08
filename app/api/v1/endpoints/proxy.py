@@ -82,10 +82,10 @@ async def get_proxy_events(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(ProxyEvent)
-        .where(ProxyEvent.proxy_id == proxy_id)
-        .order_by(ProxyEvent.created_at.desc())
-        .limit(limit)
+    select(ProxyEvent)
+    .where(ProxyEvent.proxy_id == proxy_id)
+    .order_by(ProxyEvent.created_at.desc(), ProxyEvent.id.desc())
+    .limit(limit)
     )
     result = await db.execute(stmt)
     return result.scalars().all()
