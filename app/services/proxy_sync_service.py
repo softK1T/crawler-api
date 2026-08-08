@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -28,7 +29,7 @@ class ProxySyncResult:
 
 
 class ProxySyncService:
-    def __init__(self, db_factory, providers: list[ProxyProvider]) -> None:
+    def __init__(self, db_factory, providers: Sequence[ProxyProvider]) -> None:
         self._db_factory = db_factory
         self._providers = providers
 
