@@ -85,7 +85,7 @@ def _make_policy(tier=0):
 @pytest.mark.asyncio
 async def test_engine_changes_on_escalatable_block():
     """After MAX_ATTEMPTS_PER_TIER blocks, engine must change to the next tier."""
-    engines_used = []
+    engines_used: list[str] = []
 
     fetch_calls = []
 
@@ -169,7 +169,7 @@ async def test_policy_max_retries_controls_per_tier_attempts():
     Regression guard: max_retries was documented as the per-tier cap but was
     never read, so the hardcoded MAX_ATTEMPTS_PER_TIER always won.
     """
-    engines_used = []
+    engines_used: list[str] = []
     fetch_calls = []
 
     async def fake_fetch(url, *, proxy=None, headers=None, **kwargs):
