@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from uuid import UUID
 
 if TYPE_CHECKING:
