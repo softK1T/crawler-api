@@ -207,7 +207,7 @@ async def fetch_with_retry(
         effective_country = effective_country.strip().upper()
 
     # ── Escalation state ─────────────────────────────────────────────────────
-    start_tier = min(initial_tier(policy), max_tier)
+    start_tier = min(initial_tier(cast(DomainPolicy | None, policy)), max_tier)
     esc = _EscalationState(tier=start_tier, fetcher=fetcher)
 
     last_result: FetchResult | None = None
