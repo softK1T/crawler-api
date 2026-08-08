@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from app.models.domain_policy import DomainPolicy
     from app.services.proxy_manager import ProxyManager
     from app.worker.browser_pool import BrowserPool
 
@@ -107,7 +106,7 @@ async def fetch_with_retry(
     fetcher: FetcherProtocol,
     url: str,
     *,
-    policy: DomainPolicy | None = None,
+    policy: object | None = None,
     proxy_manager: ProxyManager | None = None,
     db: object = None,
     sticky_key: str | None = None,
@@ -119,6 +118,10 @@ async def fetch_with_retry(
 ) -> FetchResult:
     """Retry loop with proxy selection, health reporting, jittered backoff,
     and adaptive engine escalation.
+
+    ``policy`` is accessed exclusively via ``getattr`` so any object exposing
+    the expected attributes (a real ``DomainPolicy`` row, a test double, or a
+    ``SimpleNamespace``) is accepted — hence the ``object | None`` annotation.
 
     Attempt ceiling
     ---------------
