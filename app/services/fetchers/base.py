@@ -320,6 +320,8 @@ async def fetch_with_retry(
                         success=False,
                         reason=result.block_reason or "http_error",
                         db=db,
+                        response_time_ms=result.elapsed_ms,
+                        engine=result.engine,
                     )
                     failed_proxy_ids.add(proxy.id)
 
@@ -377,6 +379,8 @@ async def fetch_with_retry(
                     success=True,
                     reason=None,
                     db=db,
+                    response_time_ms=result.elapsed_ms,
+                    engine=result.engine,
                 )
             return result
 
@@ -392,6 +396,7 @@ async def fetch_with_retry(
                     success=False,
                     reason="http_error",
                     db=db,
+                    engine=tier_def.engine,
                 )
                 failed_proxy_ids.add(proxy.id)
             if total_attempts < max_attempts:

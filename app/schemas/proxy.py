@@ -62,3 +62,12 @@ class ProxyBulkImport(BaseModel):
 
 class ProxyImportResponse(BaseModel):
     imported: int
+
+
+class ProxyEventResponse(BaseModel):
+    id: UUID
+    proxy_id: UUID
+    event_type: str
+    detail: dict | None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)

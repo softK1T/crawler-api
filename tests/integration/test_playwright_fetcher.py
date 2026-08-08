@@ -71,7 +71,6 @@ async def test_ssrf_interception_handler_fires_per_fetch():
     """The SSRF page.on('response') handler fires and rejects blocked redirects."""
     from app.services.fetchers.base import FetchError
     from app.services.fetchers.playwright_fetcher import PlaywrightFetcher
-
     from app.worker.browser_pool import BrowserPool
 
     pool = BrowserPool()

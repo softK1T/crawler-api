@@ -11,10 +11,12 @@ from app.api.v1.dependencies import SCOPE_ADMIN, require_scope, resolve_api_key
 from app.core.db import get_db
 from app.models.api_key import ApiKey
 from app.models.proxy import Proxy
+from app.models.proxy_event import ProxyEvent
 from app.models.proxy_pool import ProxyPool
 from app.schemas.proxy import (
     PoolStatsResponse,
     ProxyBulkImport,
+    ProxyEventResponse,
     ProxyHealthUpdate,
     ProxyImportResponse,
     ProxyPoolResponse,
@@ -68,6 +70,23 @@ async def list_proxies(
     if country is not None:
         stmt = stmt.where(Proxy.country == country.upper()[:2])
     stmt = stmt.order_by(Proxy.health_score.desc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.get("/proxies/{proxy_id}/events", response_model=list[ProxyEventResponse])
+async def get_proxy_events(
+    proxy_id: UUID,
+    limit: int = Query(50, le=200),
+    _api_key: ApiKey = Depends(require_scope(SCOPE_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(ProxyEvent)
+        .where(ProxyEvent.proxy_id == proxy_id)
+        .order_by(ProxyEvent.created_at.desc())
+        .limit(limit)
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -135,8 +154,8 @@ async def import_proxies(
 ):
     """Bulk import proxies in host:port:user:pass:country format.
 
-    Each proxy is upserted by its URL.  Existing proxies (matched by URL)
-    are reactivated; new proxies are inserted into the tenant's pool.
+    Each proxy is upserted by (provider, URL). Existing proxies are
+    reactivated; new proxies are inserted into the tenant's pool.
     """
     from uuid import uuid4
 
@@ -151,13 +170,14 @@ async def import_proxies(
             insert(Proxy)
             .values(
                 pool_id=pool_id,
+                provider="webshare",
                 url=proxy_url,
                 country=item.country.upper()[:2],
                 health_score=1.0,
                 consecutive_failures=0,
             )
             .on_conflict_do_update(
-                index_elements=["url"],
+                index_elements=["provider", "url"],
                 set_={
                     "country": item.country.upper()[:2],
                     "health_score": 1.0,

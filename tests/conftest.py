@@ -1,6 +1,16 @@
+import os
+from collections.abc import AsyncGenerator, Iterator
+from unittest.mock import AsyncMock
+from unittest.mock import patch as _patch
+from uuid import uuid4
 
 import pytest
-from unittest.mock import AsyncMock, patch as _patch
+
+# Ensure test settings override production before any app imports.
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/testdb")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("API_KEYS_RAW", "")
+os.environ.setdefault("S3_ACCESS_KEY", "test")
 
 
 @pytest.fixture(autouse=True)
@@ -11,20 +21,6 @@ def mock_url_guard():
         new=AsyncMock(return_value=None),
     ):
         yield
-
-"""Shared fixtures: testcontainers for Postgres/Redis, FastAPI app, factories."""
-
-import os
-from collections.abc import AsyncGenerator, Iterator
-from uuid import uuid4
-
-import pytest
-
-# Ensure test settings override production before any app imports.
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/testdb")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("API_KEYS_RAW", "")
-os.environ.setdefault("S3_ACCESS_KEY", "test")
 
 
 @pytest.fixture(scope="session")
@@ -62,6 +58,7 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
         import app.models.legacy_crawl_result
         import app.models.legacy_project
         import app.models.proxy
+        import app.models.proxy_event
         import app.models.proxy_pool
         import app.models.request_log
         import app.models.tenant

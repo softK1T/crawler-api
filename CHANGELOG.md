@@ -15,6 +15,29 @@ All notable changes to crawler-api are documented here.
 - Added a writable runtime home/cache for the non-root `crawler` user.
 - Disabled runtime Public Suffix List downloads by using tldextract's bundled
   snapshot.
+- Fixed `sync_proxies` arq cron task referencing non-existent `username`,
+  `password`, and `is_active` columns on `proxies` by replacing raw SQL
+  reconciliation with SQLAlchemy upserts keyed on `(provider, url)`.
+- Fixed per-proxy `pool_id = uuid4()` generation in proxy sync that violated
+  the `proxies.pool_id` foreign key and prevented a stable per-provider pool.
+- Fixed unsafe `WHERE url NOT IN :urls` tuple binding during proxy deactivation.
+- Fixed `POST /proxy/admin/proxies` conflict target from `["url"]` to the
+  provider-aware unique key.
+
+### Added
+
+- Added `proxies.provider` and `proxies.is_active` columns with
+  `uq_proxy_provider_url` unique constraint (migration `0006`). (ADR-021)
+- Added provider adapter pattern under `app/services/proxy_providers/` with
+  `WebshareProvider` reusing `fetch_webshare_proxies()`. (ADR-021)
+- Added `proxy_events` table for durable transition-only proxy history
+  (`activated`, `deactivated`, `circuit_open`, `circuit_close`). (ADR-021)
+- Added structured `proxy_result` logging in `ProxyManager.report_result()`
+  including `domain`, `engine`, and `response_time_ms`. (ADR-021)
+- Added Redis daily per-proxy request/error aggregates with 48h TTL. (ADR-021)
+- Added `GET /proxy/proxies/{proxy_id}/events` admin endpoint for proxy history.
+  (ADR-021)
+- Added **ADR-021** Proxy Provider Sync and Observability.
 
 ## [0.2.0] — 2026-08-03
 
