@@ -138,17 +138,18 @@ class ProxySyncService:
         )
 
     async def _ensure_provider_pool(self, db, provider_name: str) -> ProxyPool:
-        pool_stmt = (
+        pool_stmt: Select = (
             select(ProxyPool)
             .where(ProxyPool.provider == provider_name)
             .order_by(ProxyPool.created_at.asc())
             .limit(1)
         )
-        pool = (await db.execute(pool_stmt)).scalar_one_or_none()
+        result = await db.execute(pool_stmt)
+        pool: ProxyPool | None = result.scalar_one_or_none()
         if pool is not None:
             return pool
 
-        pool = ProxyPool(name=f"{provider_name}-pool", provider=provider_name, is_active=True)
-        db.add(pool)
+        new_pool = ProxyPool(name=f"{provider_name}-pool", provider=provider_name, is_active=True)
+        db.add(new_pool)
         await db.flush()
-        return pool
+        return new_pool
