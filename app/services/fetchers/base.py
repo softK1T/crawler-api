@@ -246,6 +246,7 @@ async def fetch_with_retry(
         else:
             tier_use_proxy = False
 
+        tier_proxy_type: str | None
         if caller_forced_proxy_type is not None:
             tier_proxy_type = caller_forced_proxy_type
         elif tier_def.proxy_type is not None:
