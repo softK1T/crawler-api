@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -36,14 +37,25 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-# ── Venv auto-detection ──────────────────────────────────────────────────────
-# If we're not already running inside the project's venv, re-exec with it.
+# ── Runtime dependency check ──────────────────────────────────────────────────
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _VENV_PYTHON = _PROJECT_ROOT / ".venv" / "bin" / "python3"
-if _VENV_PYTHON.exists() and Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
+_RUNNING_IN_VENV = Path(sys.executable).resolve() == _VENV_PYTHON.resolve()
+
+# If we're not in the project venv and one exists, re-exec into it.
+# This ensures bootstrap mode has access to sqlalchemy + app modules.
+if not _RUNNING_IN_VENV and _VENV_PYTHON.exists():
     os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__] + sys.argv[1:])
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    # We're in the venv but httpx is missing — install it.
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "httpx"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    import httpx
 
 # ── Terminal colours ────────────────────────────────────────────────────────────
 GREEN = "\033[92m"
@@ -266,11 +278,31 @@ class E2ETestRunner:
     async def bootstrap(self) -> str:
         """Create tenant + app + full-scope admin key directly in the DB.
 
-        Mirrors scripts/bootstrap_dev.py.  Returns the raw admin API key.
+        Tries direct DB access first.  If running in Docker (app modules
+        available), does it in-process.  Falls back to running
+        bootstrap_dev.py via docker compose exec.
         """
-        print(info("Bootstrapping initial tenant, application, and admin key via DB..."))
+        print(info("Bootstrapping initial tenant, application, and admin key..."))
 
-        # Late import so this only runs when needed.
+        # Try direct DB access (inside Docker or with proper venv).
+        try:
+            return await self._bootstrap_direct()
+        except ImportError:
+            pass
+
+        # Fallback: run bootstrap_dev.py inside the api container.
+        try:
+            return self._bootstrap_via_docker()
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            msg = (
+                f"Cannot bootstrap: {exc}\n"
+                "  Option 1: docker compose exec api python3 scripts/bootstrap_dev.py\n"
+                "  Option 2: docker compose exec api python3 tests/e2e/run_e2e_tests.py --bootstrap"
+            )
+            raise RuntimeError(msg) from exc
+
+    async def _bootstrap_direct(self) -> str:
+        """Direct DB bootstrap — requires sqlalchemy + app modules."""
         from sqlalchemy import select
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -327,6 +359,29 @@ class E2ETestRunner:
         await engine.dispose()
         return raw_key
 
+    @staticmethod
+    def _bootstrap_via_docker() -> str:
+        """Run bootstrap_dev.py inside the api container and capture the key."""
+        print(info("  Running bootstrap_dev.py inside api container..."))
+        result = subprocess.run(
+            ["docker", "compose", "exec", "-T", "api",
+             "python3", "scripts/bootstrap_dev.py"],
+            cwd=_PROJECT_ROOT,
+            capture_output=True, text=True, timeout=15,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip() or "(no stderr)"
+            raise subprocess.CalledProcessError(
+                result.returncode, result.args, output=result.stdout, stderr=stderr,
+            )
+        # bootstrap_dev.py prints only the raw key to stdout.
+        key = result.stdout.strip().splitlines()[-1]
+        if not key.startswith("crw"):
+            raise RuntimeError(f"Unexpected bootstrap output: {key}")
+        print(f"    Got admin key: {key[:16]}...")
+        return key
+
     # ── Orchestration ──────────────────────────────────────────────────────
 
     async def run_all(self) -> None:
@@ -345,7 +400,12 @@ class E2ETestRunner:
                     self.admin_key = await self.bootstrap()
                 except Exception as exc:
                     print(fail(f"Bootstrap failed: {exc}"))
-                    print("  Make sure DATABASE_URL is set and the DB is reachable.")
+                    print("")
+                    print("  To bootstrap manually, run:")
+                    print("    docker compose exec api python3 scripts/bootstrap_dev.py")
+                    print("")
+                    print("  Then use the printed key:")
+                    print("    python3 tests/e2e/run_e2e_tests.py --api-key crw_live_...")
                     return
             elif self.api_key:
                 self.admin_key = self.api_key
