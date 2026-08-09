@@ -276,28 +276,33 @@ class E2ETestRunner:
     # ── Bootstrap ──────────────────────────────────────────────────────────
 
     async def bootstrap(self) -> str:
-        """Create tenant + app + full-scope admin key directly in the DB.
+        """Create tenant + app + full-scope admin key.
 
-        Tries direct DB access first.  If running in Docker (app modules
-        available), does it in-process.  Falls back to running
-        bootstrap_dev.py via docker compose exec.
+        Tries (in order):
+        1. If DATABASE_URL is set in env → direct DB access (in-process).
+        2. Otherwise → docker compose exec api python3 scripts/bootstrap_dev.py.
         """
         print(info("Bootstrapping initial tenant, application, and admin key..."))
 
-        # Try direct DB access (inside Docker or with proper venv).
-        try:
-            return await self._bootstrap_direct()
-        except ImportError:
-            pass
+        # Check whether direct DB access is viable.
+        if os.environ.get("DATABASE_URL"):
+            try:
+                return await self._bootstrap_direct()
+            except (ImportError, ModuleNotFoundError):
+                print(warn("  Direct DB failed (missing modules), trying Docker..."))
+            except Exception as exc:
+                print(warn(f"  Direct DB failed ({exc}), trying Docker..."))
 
         # Fallback: run bootstrap_dev.py inside the api container.
         try:
             return self._bootstrap_via_docker()
         except (FileNotFoundError, subprocess.CalledProcessError) as exc:
             msg = (
-                f"Cannot bootstrap: {exc}\n"
-                "  Option 1: docker compose exec api python3 scripts/bootstrap_dev.py\n"
-                "  Option 2: docker compose exec api python3 tests/e2e/run_e2e_tests.py --bootstrap"
+                f"Cannot bootstrap: {exc}\n\n"
+                "  Manual bootstrap:\n"
+                "    docker compose exec api python3 scripts/bootstrap_dev.py\n\n"
+                "  Then use the printed key:\n"
+                "    python3 tests/e2e/run_e2e_tests.py --api-key crw_live_..."
             )
             raise RuntimeError(msg) from exc
 
