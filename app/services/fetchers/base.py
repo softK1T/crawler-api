@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -107,7 +107,7 @@ async def fetch_with_retry(
     fetcher: FetcherProtocol,
     url: str,
     *,
-    policy: DomainPolicy | None = None,
+    policy: object | None = None,
     proxy_manager: ProxyManager | None = None,
     db: object = None,
     sticky_key: str | None = None,
@@ -119,6 +119,10 @@ async def fetch_with_retry(
 ) -> FetchResult:
     """Retry loop with proxy selection, health reporting, jittered backoff,
     and adaptive engine escalation.
+
+    ``policy`` is accessed exclusively via ``getattr`` so any object exposing
+    the expected attributes (a real ``DomainPolicy`` row, a test double, or a
+    ``SimpleNamespace``) is accepted — hence the ``object | None`` annotation.
 
     Attempt ceiling
     ---------------
@@ -204,7 +208,7 @@ async def fetch_with_retry(
         effective_country = effective_country.strip().upper()
 
     # ── Escalation state ─────────────────────────────────────────────────────
-    start_tier = min(initial_tier(policy), max_tier)
+    start_tier = min(initial_tier(cast("DomainPolicy | None", policy)), max_tier)
     esc = _EscalationState(tier=start_tier, fetcher=fetcher)
 
     last_result: FetchResult | None = None
@@ -246,6 +250,7 @@ async def fetch_with_retry(
         else:
             tier_use_proxy = False
 
+        tier_proxy_type: str | None
         if caller_forced_proxy_type is not None:
             tier_proxy_type = caller_forced_proxy_type
         elif tier_def.proxy_type is not None:
@@ -320,6 +325,8 @@ async def fetch_with_retry(
                         success=False,
                         reason=result.block_reason or "http_error",
                         db=db,
+                        response_time_ms=result.elapsed_ms,
+                        engine=result.engine,
                     )
                     failed_proxy_ids.add(proxy.id)
 
@@ -377,6 +384,8 @@ async def fetch_with_retry(
                     success=True,
                     reason=None,
                     db=db,
+                    response_time_ms=result.elapsed_ms,
+                    engine=result.engine,
                 )
             return result
 
@@ -392,6 +401,7 @@ async def fetch_with_retry(
                     success=False,
                     reason="http_error",
                     db=db,
+                    engine=tier_def.engine,
                 )
                 failed_proxy_ids.add(proxy.id)
             if total_attempts < max_attempts:

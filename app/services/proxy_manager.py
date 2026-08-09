@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import random
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -17,10 +18,17 @@ if TYPE_CHECKING:
 
 from sqlalchemy import func, select
 
+from app.core.logging_config import get_logger
+
 logger = logging.getLogger(__name__)
+_slog = get_logger("proxy")
 
 # Weight floor so 0.0-health proxies still get occasional traffic (canary testing).
 _WEIGHT_FLOOR = 0.01
+
+
+def _is_open_state(value: object) -> bool:
+    return value in ("open", b"open")
 
 
 class ProxyManager:
@@ -39,7 +47,7 @@ class ProxyManager:
 
     # ── Circuit breaker (Redis) ───────────────────────────────────────────────
 
-    async def _increment_circuit_breaker(self, domain: str) -> None:
+    async def _increment_circuit_breaker(self, domain: str) -> bool:
         """Increment the failure counter for *domain*.  Trip if threshold reached."""
         try:
             key = f"cb:domain:{domain}"
@@ -47,25 +55,32 @@ class ProxyManager:
             await self._redis.expire(key, self.CIRCUIT_BREAKER_TIMEOUT_S * 2)
             if count >= self.CIRCUIT_BREAKER_THRESHOLD:
                 state_key = f"cb:domain:{domain}:state"
+                was_open = _is_open_state(await self._redis.get(state_key))
                 await self._redis.set(state_key, "open")
                 await self._redis.expire(state_key, self.CIRCUIT_BREAKER_TIMEOUT_S * 2)
                 logger.warning("Circuit breaker OPEN for domain=%s (failures=%d)", domain, count)
+                return not was_open
+            return False
         except Exception:
             logger.warning("Circuit breaker increment failed for domain=%s", domain, exc_info=True)
+            return False
 
-    async def _reset_circuit_breaker(self, domain: str) -> None:
+    async def _reset_circuit_breaker(self, domain: str) -> bool:
         """Clear failure counter and open state for *domain*."""
         try:
+            was_open = _is_open_state(await self._redis.get(f"cb:domain:{domain}:state"))
             await self._redis.delete(f"cb:domain:{domain}")
             await self._redis.delete(f"cb:domain:{domain}:state")
+            return was_open
         except Exception:
             logger.warning("Circuit breaker reset failed for domain=%s", domain, exc_info=True)
+            return False
 
     async def _is_circuit_open(self, domain: str) -> bool:
         """Check if the circuit breaker is currently open for *domain*."""
         try:
             state = await self._redis.get(f"cb:domain:{domain}:state")
-            return state == "open"
+            return _is_open_state(state)
         except Exception:
             # Redis down → fail-open (bypass circuit breaker).
             return False
@@ -136,7 +151,11 @@ class ProxyManager:
             if sticky_id is not None and sticky_id not in _excluded:
                 async with self._db_factory() as db:
                     sticky_proxy = await db.get(Proxy, sticky_id)
-                    if sticky_proxy is not None and not is_on_cooldown(sticky_proxy):
+                    if (
+                        sticky_proxy is not None
+                        and sticky_proxy.is_active
+                        and not is_on_cooldown(sticky_proxy)
+                    ):
                         return sticky_proxy
                 # Dead proxy or on cooldown — clear sticky.
                 await self._delete_sticky(domain, sticky_key)
@@ -146,6 +165,7 @@ class ProxyManager:
             stmt = select(Proxy).order_by(Proxy.health_score.desc(), func.random())
             if effective_pool is not None:
                 stmt = stmt.where(Proxy.pool_id == effective_pool)
+            stmt = stmt.where(Proxy.is_active.is_(True))
             if country is not None:
                 stmt = stmt.where(Proxy.country == country.upper()[:2])
             if proxy_type is not None:
@@ -186,18 +206,49 @@ class ProxyManager:
         success: bool,
         reason: str | None,
         db,
+        response_time_ms: int | None = None,
+        engine: str | None = None,
     ) -> None:
         """Record a proxy request outcome and update circuit breaker state."""
         from app.models.proxy import Proxy
+        from app.models.proxy_event import ProxyEvent
         from app.services.proxy_health import record_failure, record_success
 
         if success:
             await record_success(proxy_id, db)
-            await self._reset_circuit_breaker(domain)
+            circuit_closed = await self._reset_circuit_breaker(domain)
+            if circuit_closed:
+                db.add(
+                    ProxyEvent(
+                        proxy_id=proxy_id,
+                        event_type="circuit_close",
+                        detail={"domain": domain},
+                    )
+                )
         else:
             reason_literal = reason if reason is not None else "http_error"
             await record_failure(proxy_id, db, reason_literal)  # type: ignore[arg-type]
-            await self._increment_circuit_breaker(domain)
+            circuit_opened = await self._increment_circuit_breaker(domain)
+            if circuit_opened:
+                db.add(
+                    ProxyEvent(
+                        proxy_id=proxy_id,
+                        event_type="circuit_open",
+                        detail={"domain": domain, "reason": reason_literal},
+                    )
+                )
+
+        await self._record_daily_aggregate(proxy_id=proxy_id, success=success)
+
+        _slog.info(
+            "proxy_result",
+            proxy_id=str(proxy_id),
+            domain=domain,
+            engine=engine,
+            success=success,
+            reason=reason,
+            response_time_ms=response_time_ms,
+        )
 
         # Emit health metric after every mutation.
         proxy = await db.get(Proxy, proxy_id)
@@ -205,6 +256,20 @@ class ProxyManager:
             from app.core.observability import update_proxy_health_metric
 
             update_proxy_health_metric(proxy)
+
+    async def _record_daily_aggregate(self, *, proxy_id: UUID, success: bool) -> None:
+        date_key = datetime.now(UTC).date().isoformat()
+        redis_key = f"proxy:daily:{proxy_id}:{date_key}"
+        try:
+            requests_count = await self._redis.hincrby(redis_key, "requests", 1)
+            if not success:
+                await self._redis.hincrby(redis_key, "errors", 1)
+            if requests_count == 1:
+                await self._redis.expire(redis_key, 172800)
+        except Exception:
+            logger.warning(
+                "Daily proxy aggregate update failed for proxy_id=%s", proxy_id, exc_info=True
+            )
 
     # ── Pool statistics ───────────────────────────────────────────────────────
 
@@ -231,7 +296,7 @@ class ProxyManager:
                     cursor=cursor, match="cb:domain:*:state", count=100
                 )
                 for key in keys:
-                    if await self._redis.get(key) == "open":
+                    if _is_open_state(await self._redis.get(key)):
                         domain = key.decode().removeprefix("cb:domain:").removesuffix(":state")
                         open_circuits.append(domain)
                 if cursor == 0:

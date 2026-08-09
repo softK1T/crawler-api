@@ -4,6 +4,7 @@ from app.models.domain_policy import DomainPolicy
 from app.models.legacy_crawl_result import CrawlResult
 from app.models.legacy_project import Project
 from app.models.proxy import Proxy
+from app.models.proxy_event import ProxyEvent
 from app.models.proxy_pool import ProxyPool
 from app.models.request_log import RequestLog
 from app.models.tenant import Tenant
@@ -17,6 +18,7 @@ __all__ = [
     "DomainPolicy",
     "Project",
     "Proxy",
+    "ProxyEvent",
     "ProxyPool",
     "RequestLog",
     "Tenant",

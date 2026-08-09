@@ -1,12 +1,12 @@
 """Unit tests for proxy rotation: different IDs on retry, health score decay, excluded-ID accumulation."""
 
 from unittest.mock import AsyncMock
-
-from app.schemas.fetch import BlockReason
+from unittest.mock import AsyncMock as _AsyncMock
 from uuid import UUID
 
 import pytest
-from unittest.mock import AsyncMock as _AsyncMock, patch as _patch2
+
+from app.schemas.fetch import BlockReason
 
 
 @pytest.fixture(autouse=True)

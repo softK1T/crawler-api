@@ -2,10 +2,11 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, String, func, text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import UniqueConstraint
 
 from app.core.db import Base
 
@@ -23,6 +24,7 @@ class Proxy(Base):
         Index("ix_proxy_pool_health", "pool_id", "health_score"),
         Index("ix_proxy_cooldown", "cooldown_until"),
         Index("ix_proxy_country", "country"),
+        UniqueConstraint("provider", "url", name="uq_proxy_provider_url"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -32,6 +34,9 @@ class Proxy(Base):
         UUID(as_uuid=True),
         ForeignKey("proxy_pools.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("'webshare'")
     )
     url: Mapped[str] = mapped_column(String(1024), nullable=False)
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)
@@ -45,6 +50,9 @@ class Proxy(Base):
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     total_requests: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     total_errors: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default=text("true")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

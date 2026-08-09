@@ -4,11 +4,14 @@ These require a real Playwright installation and are marked ``integration``.
 Run with: pytest -m slow tests/integration/test_playwright_fetcher.py
 """
 
+import logging
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("playwright", reason="Playwright not installed")
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.mark.integration
@@ -71,7 +74,6 @@ async def test_ssrf_interception_handler_fires_per_fetch():
     """The SSRF page.on('response') handler fires and rejects blocked redirects."""
     from app.services.fetchers.base import FetchError
     from app.services.fetchers.playwright_fetcher import PlaywrightFetcher
-
     from app.worker.browser_pool import BrowserPool
 
     pool = BrowserPool()
@@ -98,4 +100,4 @@ async def test_ssrf_interception_handler_fires_per_fetch():
         try:
             await pool.stop()
         except Exception:
-            pass
+            logger.debug("BrowserPool.stop() raised during test teardown", exc_info=True)
