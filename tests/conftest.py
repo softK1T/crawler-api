@@ -66,6 +66,7 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
         import app.models.warc_index  # noqa: F401
         from app.core.db import Base
 
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
