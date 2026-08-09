@@ -26,13 +26,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
+
+# ── Venv auto-detection ──────────────────────────────────────────────────────
+# If we're not already running inside the project's venv, re-exec with it.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_VENV_PYTHON = _PROJECT_ROOT / ".venv" / "bin" / "python3"
+if _VENV_PYTHON.exists() and Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__] + sys.argv[1:])
 
 import httpx
 
