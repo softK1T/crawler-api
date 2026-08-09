@@ -174,8 +174,10 @@ class E2ETestRunner:
     # ── Helpers ────────────────────────────────────────────────────────────
 
     def _auth(self, key: str | None = None) -> dict[str, str]:
-        k = key or self.admin_key
-        return {"X-API-Key": k} if k else {}
+        # key=None → use admin_key; key="" → explicitly no auth.
+        if key is None:
+            key = self.admin_key
+        return {"X-API-Key": key} if key else {}
 
     async def _request(
         self,
