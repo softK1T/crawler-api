@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 libcairo2 libatspi2.0-0 \
     fonts-liberation fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m playwright install --only-shell chromium \
+    && python -m playwright install chromium \
     && chmod -R a+rx /ms-playwright
 
 # Copy application code.
