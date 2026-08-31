@@ -31,8 +31,12 @@ async def create_crawl_batch(
     # Domain-level rate limiting: charge once per unique domain in the batch.
     rate_limiter = req.app.state.rate_limiter
     unique_domains = {normalize_domain(str(u)) for u in request.urls}
+    from app.services.policy_resolver import resolve_policy
+
     for domain in unique_domains:
-        result = await rate_limiter.check_domain(domain, rps=1.0)
+        _policy = await resolve_policy(f"https://{domain}", db)
+        _rps = float(getattr(_policy, "rate_limit_rps", None) or 1.0)
+        result = await rate_limiter.check_domain(domain, rps=_rps)
         if not result["allowed"]:
             raise HTTPException(
                 status_code=429,
