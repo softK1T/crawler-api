@@ -3,15 +3,83 @@
 import pytest
 
 
+def _make_ctx(redis_client):
+    """Minimal arq ctx: real Redis, stub settings, no-op db session factory."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    @asynccontextmanager
+    async def _db_factory():
+        db = AsyncMock()
+        scalar_result = MagicMock()
+        scalar_result.scalar_one_or_none.return_value = None  # no DomainPolicy
+        db.execute = AsyncMock(return_value=scalar_result)
+        yield db
+
+    return {
+        "redis": redis_client,
+        "db_factory": _db_factory,
+        "settings": SimpleNamespace(
+            job_result_ttl_s=60,
+            ssrf_enabled=False,
+            warc_enabled=False,
+            archive_enabled=False,
+            callback_max_retries=1,
+        ),
+        "browser_pool": None,
+    }
+
+
 @pytest.mark.integration
 async def test_fetch_task_success_stores_result_in_redis(redis_client):
-    """On success, job status and result are stored in Redis."""
-    job_id = "test-job-success"
-    await redis_client.set(
-        f"job:{job_id}:status", '{"status":"completed","updated_at":"2026-07-27T00:00:00Z"}'
+    """fetch_task must itself write a terminal status to Redis on success.
+
+    Regression guard: this test used to set the key by hand and assert it was
+    readable, so fetch_task was never invoked at all.
+    """
+    import json
+    from unittest.mock import AsyncMock, patch
+    from uuid import uuid4
+
+    from app.services.fetchers.base import FetchResult
+    from app.worker.tasks.fetch_task import fetch_task
+
+    job_id = f"job-ok-{uuid4().hex[:8]}"
+    await redis_client.delete(f"job:{job_id}:status")
+
+    ok = FetchResult(
+        url="https://example.com",
+        status_code=200,
+        headers={"content-type": "text/html"},
+        body=b"<html>ok</html>",
+        blocked=False,
+        block_reason=None,
+        engine="httpx",
+        elapsed_ms=12,
     )
-    status = await redis_client.get(f"job:{job_id}:status")
-    assert status is not None
+
+    with (
+        patch("app.services.fetchers.base.fetch_with_retry", new=AsyncMock(return_value=ok)),
+        patch("app.services.policy_learner.record_outcome", new=AsyncMock()),
+    ):
+        await fetch_task(
+            _make_ctx(redis_client),
+            job_id=job_id,
+            url="https://example.com",
+            mode="static",
+            api_key_prefix="ck_test",
+            application_id=str(uuid4()),
+            domain="example.com",
+            proxy_pool_id=None,
+            callback_url=None,
+            options={},
+        )
+
+    raw = await redis_client.get(f"job:{job_id}:status")
+    assert raw is not None, "fetch_task wrote no status to Redis"
+    payload = json.loads(raw)
+    assert payload["status"] != "running", f"Job left in non-terminal state: {payload}"
 
 
 @pytest.mark.integration
