@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -45,7 +46,8 @@ _RUNNING_IN_VENV = Path(sys.executable).resolve() == _VENV_PYTHON.resolve()
 # If we're not in the project venv and one exists, re-exec into it.
 # This ensures bootstrap mode has access to sqlalchemy + app modules.
 if not _RUNNING_IN_VENV and _VENV_PYTHON.exists():
-    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__] + sys.argv[1:])
+    # Absolute path, list argv — never a shell; S606 is a false positive here.
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__, *sys.argv[1:]])  # noqa: S606
 
 try:
     import httpx
@@ -53,7 +55,8 @@ except ImportError:
     # We're in the venv but httpx is missing — install it.
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "httpx"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     import httpx
 
@@ -83,7 +86,7 @@ def info(s: str) -> str:
 
 
 def header(s: str) -> str:
-    return f"\n{BOLD}{'='*70}{RESET}\n{BOLD}  {s}{RESET}\n{BOLD}{'='*70}{RESET}"
+    return f"\n{BOLD}{'=' * 70}{RESET}\n{BOLD}  {s}{RESET}\n{BOLD}{'=' * 70}{RESET}"
 
 
 # ── Result tracking ────────────────────────────────────────────────────────────
@@ -218,7 +221,8 @@ class E2ETestRunner:
         json_body: dict | None = None,
         key: str | None = None,
         params: dict | None = None,
-        check: callable | None = None,  # extra assertion: (resp, test) -> None
+        # Extra assertion: (resp, test) -> None
+        check: Callable[[httpx.Response, TestCase], None] | None = None,
         expected_fail_reason: str | None = None,  # marks as EXPECTED_FAIL
         request_timeout: float = 30.0,
     ) -> TestCase:
@@ -252,9 +256,7 @@ class E2ETestRunner:
             else:
                 test.outcome = Outcome.FAIL
                 body_snippet = resp.text[:200]
-                test.detail = (
-                    f"expected {expected_set}, got {resp.status_code} — {body_snippet}"
-                )
+                test.detail = f"expected {expected_set}, got {resp.status_code} — {body_snippet}"
 
             if check and test.outcome in (Outcome.PASS, Outcome.EXPECTED_FAIL):
                 try:
@@ -324,10 +326,8 @@ class E2ETestRunner:
 
         async with session_factory() as db:
             # Tenant.
-            result = await db.execute(
-                select(Tenant).where(Tenant.name == "e2e-tenant")
-            )
-            tenant = result.scalar_one_or_none()
+            result = await db.execute(select(Tenant).where(Tenant.name == "e2e-tenant"))
+            tenant: Tenant | None = result.scalar_one_or_none()
             if tenant is None:
                 tenant = Tenant(name="e2e-tenant")
                 db.add(tenant)
@@ -338,13 +338,13 @@ class E2ETestRunner:
                 print(f"    Tenant exists: {tenant.id}")
 
             # Application.
-            result = await db.execute(
+            app_result = await db.execute(
                 select(Application).where(
                     Application.tenant_id == tenant.id,
                     Application.name == "e2e-app",
                 )
             )
-            app = result.scalar_one_or_none()
+            app: Application | None = app_result.scalar_one_or_none()
             if app is None:
                 app = Application(tenant_id=tenant.id, name="e2e-app")
                 db.add(app)
@@ -371,17 +371,30 @@ class E2ETestRunner:
     def _bootstrap_via_docker() -> str:
         """Run bootstrap_dev.py inside the api container and capture the key."""
         print(info("  Running bootstrap_dev.py inside api container..."))
+        # `docker` is resolved via PATH — bootstrap already requires it to be installed.
         result = subprocess.run(
-            ["docker", "compose", "exec", "-T", "api",
-             "python3", "scripts/bootstrap_dev.py"],
+            [  # noqa: S607
+                "docker",
+                "compose",
+                "exec",
+                "-T",
+                "api",
+                "python3",
+                "scripts/bootstrap_dev.py",
+            ],
             cwd=_PROJECT_ROOT,
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
         if result.returncode != 0:
             stderr = result.stderr.strip() or "(no stderr)"
             raise subprocess.CalledProcessError(
-                result.returncode, result.args, output=result.stdout, stderr=stderr,
+                result.returncode,
+                result.args,
+                output=result.stdout,
+                stderr=stderr,
             )
         # bootstrap_dev.py prints only the raw key to stdout.
         key = result.stdout.strip().splitlines()[-1]
@@ -495,13 +508,23 @@ class E2ETestRunner:
         t0 = time.perf_counter()
 
         suite.tests.append(
-            await self._test("GET /healthz → 200 ok", "GET", "/healthz", 200,
-                             check=lambda r, t: _assert_json_key(r, "status", "ok"))
+            await self._test(
+                "GET /healthz → 200 ok",
+                "GET",
+                "/healthz",
+                200,
+                check=lambda r, t: _assert_json_key(r, "status", "ok"),
+            )
         )
 
         suite.tests.append(
-            await self._test("GET /readyz → 200 or 503", "GET", "/readyz", {200, 503},
-                             check=lambda r, t: _assert_has_keys(r, ["status", "checks"]))
+            await self._test(
+                "GET /readyz → 200 or 503",
+                "GET",
+                "/readyz",
+                {200, 503},
+                check=lambda r, t: _assert_has_keys(r, ["status", "checks"]),
+            )
         )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -517,15 +540,21 @@ class E2ETestRunner:
 
         # List keys to verify the admin key works.
         suite.tests.append(
-            await self._test("GET /v1/keys — verify admin key", "GET", "/v1/keys", 200,
-                             key=self.admin_key)
+            await self._test(
+                "GET /v1/keys — verify admin key", "GET", "/v1/keys", 200, key=self.admin_key
+            )
         )
 
         # Get my own application info.
         suite.tests.append(
-            await self._test("GET /v1/applications — verify admin key", "GET",
-                             "/v1/applications", 200, key=self.admin_key,
-                             check=lambda r, t: _assert_has_keys(r, ["items", "total"]))
+            await self._test(
+                "GET /v1/applications — verify admin key",
+                "GET",
+                "/v1/applications",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_has_keys(r, ["items", "total"]),
+            )
         )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -542,53 +571,88 @@ class E2ETestRunner:
         tenant_name = f"e2e-tenant-{uuid4().hex[:8]}"
 
         # Create tenant.
-        resp = await self._request("POST", "/v1/tenants", 201,
-                                   json_body={"name": tenant_name},
-                                   key=self.admin_key)
+        resp = await self._request(
+            "POST", "/v1/tenants", 201, json_body={"name": tenant_name}, key=self.admin_key
+        )
         if resp.status_code == 201:
             data = resp.json()
             self.tenant_id = UUID(data["id"])
-            suite.tests.append(TestCase(name="POST /v1/tenants → 201", outcome=Outcome.PASS,
-                                        detail=f"id={self.tenant_id}", status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/tenants → 201",
+                    outcome=Outcome.PASS,
+                    detail=f"id={self.tenant_id}",
+                    status_code=201,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /v1/tenants → 201", outcome=Outcome.FAIL,
-                                        detail=resp.text[:200], status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/tenants → 201",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
             self.reports.append(suite)
             return
 
         # Duplicate check.
         suite.tests.append(
-            await self._test("POST /v1/tenants (duplicate) → 409", "POST", "/v1/tenants", 409,
-                             json_body={"name": tenant_name}, key=self.admin_key)
+            await self._test(
+                "POST /v1/tenants (duplicate) → 409",
+                "POST",
+                "/v1/tenants",
+                409,
+                json_body={"name": tenant_name},
+                key=self.admin_key,
+            )
         )
 
         # List tenants.
         suite.tests.append(
-            await self._test("GET /v1/tenants → 200", "GET", "/v1/tenants", 200,
-                             key=self.admin_key,
-                             check=lambda r, t: _assert_has_keys(r, ["items", "total"]))
+            await self._test(
+                "GET /v1/tenants → 200",
+                "GET",
+                "/v1/tenants",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_has_keys(r, ["items", "total"]),
+            )
         )
 
         # Get single tenant.
         suite.tests.append(
-            await self._test(f"GET /v1/tenants/{self.tenant_id} → 200", "GET",
-                             f"/v1/tenants/{self.tenant_id}", 200, key=self.admin_key,
-                             check=lambda r, t: _assert_json_key(r, "name", tenant_name))
+            await self._test(
+                f"GET /v1/tenants/{self.tenant_id} → 200",
+                "GET",
+                f"/v1/tenants/{self.tenant_id}",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_json_key(r, "name", tenant_name),
+            )
         )
 
         # Get nonexistent tenant.
         fake_id = "00000000-0000-0000-0000-000000000000"
         suite.tests.append(
-            await self._test(f"GET /v1/tenants/{fake_id} → 404", "GET",
-                             f"/v1/tenants/{fake_id}", 404, key=self.admin_key)
+            await self._test(
+                f"GET /v1/tenants/{fake_id} → 404",
+                "GET",
+                f"/v1/tenants/{fake_id}",
+                404,
+                key=self.admin_key,
+            )
         )
 
         # Auth check: non-admin cannot list tenants.
         # We don't have a non-admin key yet at this stage — test in edge-cases phase.
         suite.tests.append(
-            TestCase(name="GET /v1/tenants (fetch key) → 403 (tested later)",
-                     outcome=Outcome.SKIP,
-                     detail="non-admin key not available yet")
+            TestCase(
+                name="GET /v1/tenants (fetch key) → 403 (tested later)",
+                outcome=Outcome.SKIP,
+                detail="non-admin key not available yet",
+            )
         )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -612,64 +676,107 @@ class E2ETestRunner:
         app_name = f"e2e-app-{uuid4().hex[:8]}"
 
         # Create application.
-        resp = await self._request("POST", "/v1/applications", 201,
-                                   json_body={"tenant_id": str(self.tenant_id), "name": app_name},
-                                   key=self.admin_key)
+        resp = await self._request(
+            "POST",
+            "/v1/applications",
+            201,
+            json_body={"tenant_id": str(self.tenant_id), "name": app_name},
+            key=self.admin_key,
+        )
         if resp.status_code == 201:
             data = resp.json()
             self.app_id = UUID(data["id"])
-            suite.tests.append(TestCase(name="POST /v1/applications → 201", outcome=Outcome.PASS,
-                                        detail=f"id={self.app_id}", status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/applications → 201",
+                    outcome=Outcome.PASS,
+                    detail=f"id={self.app_id}",
+                    status_code=201,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /v1/applications → 201", outcome=Outcome.FAIL,
-                                        detail=resp.text[:200], status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/applications → 201",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
             self.reports.append(suite)
             return
 
         # Duplicate check.
         suite.tests.append(
-            await self._test("POST /v1/applications (duplicate) → 409", "POST",
-                             "/v1/applications", 409,
-                             json_body={"tenant_id": str(self.tenant_id), "name": app_name},
-                             key=self.admin_key)
+            await self._test(
+                "POST /v1/applications (duplicate) → 409",
+                "POST",
+                "/v1/applications",
+                409,
+                json_body={"tenant_id": str(self.tenant_id), "name": app_name},
+                key=self.admin_key,
+            )
         )
 
         # List applications.
         suite.tests.append(
-            await self._test("GET /v1/applications → 200", "GET", "/v1/applications", 200,
-                             key=self.admin_key,
-                             check=lambda r, t: _assert_has_keys(r, ["items", "total"]))
+            await self._test(
+                "GET /v1/applications → 200",
+                "GET",
+                "/v1/applications",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_has_keys(r, ["items", "total"]),
+            )
         )
 
         # Get single application.
         suite.tests.append(
-            await self._test(f"GET /v1/applications/{self.app_id} → 200", "GET",
-                             f"/v1/applications/{self.app_id}", 200, key=self.admin_key,
-                             check=lambda r, t: _assert_json_key(r, "name", app_name))
+            await self._test(
+                f"GET /v1/applications/{self.app_id} → 200",
+                "GET",
+                f"/v1/applications/{self.app_id}",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_json_key(r, "name", app_name),
+            )
         )
 
         # Update application.
         new_label = f"owner-{uuid4().hex[:6]}"
         suite.tests.append(
-            await self._test(f"PATCH /v1/applications/{self.app_id} → 200", "PATCH",
-                             f"/v1/applications/{self.app_id}", 200, key=self.admin_key,
-                             json_body={"owner_label": new_label},
-                             check=lambda r, t: _assert_json_key(r, "owner_label", new_label))
+            await self._test(
+                f"PATCH /v1/applications/{self.app_id} → 200",
+                "PATCH",
+                f"/v1/applications/{self.app_id}",
+                200,
+                key=self.admin_key,
+                json_body={"owner_label": new_label},
+                check=lambda r, t: _assert_json_key(r, "owner_label", new_label),
+            )
         )
 
         # Create second app for cross-app key tests.
-        resp2 = await self._request("POST", "/v1/applications", 201,
-                                    json_body={"tenant_id": str(self.tenant_id),
-                                               "name": f"e2e-app-b-{uuid4().hex[:8]}"},
-                                    key=self.admin_key)
+        resp2 = await self._request(
+            "POST",
+            "/v1/applications",
+            201,
+            json_body={"tenant_id": str(self.tenant_id), "name": f"e2e-app-b-{uuid4().hex[:8]}"},
+            key=self.admin_key,
+        )
         if resp2.status_code == 201:
             self.second_app_id = UUID(resp2.json()["id"])
 
         # Nonexistent application → 404.
         fake_id = "00000000-0000-0000-0000-000000000001"
         suite.tests.append(
-            await self._test(f"GET /v1/applications/{fake_id} → 404", "GET",
-                             f"/v1/applications/{fake_id}", 404, key=self.admin_key)
+            await self._test(
+                f"GET /v1/applications/{fake_id} → 404",
+                "GET",
+                f"/v1/applications/{fake_id}",
+                404,
+                key=self.admin_key,
+            )
         )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -689,128 +796,217 @@ class E2ETestRunner:
             return
 
         # --- Create a keys-scoped key (for key management).
-        resp = await self._request("POST", "/v1/keys", 201, key=self.admin_key,
-                                   json_body={"application_id": str(self.app_id),
-                                              "scopes": ["keys", "fetch"],
-                                              "mode": "live"})
+        resp = await self._request(
+            "POST",
+            "/v1/keys",
+            201,
+            key=self.admin_key,
+            json_body={
+                "application_id": str(self.app_id),
+                "scopes": ["keys", "fetch"],
+                "mode": "live",
+            },
+        )
         if resp.status_code == 201:
             data = resp.json()
             self.keys_key = data["raw_key"]
-            suite.tests.append(TestCase(name="POST /v1/keys (keys+fetch) → 201",
-                                        outcome=Outcome.PASS,
-                                        detail=f"prefix={data['prefix']} raw_key present",
-                                        status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/keys (keys+fetch) → 201",
+                    outcome=Outcome.PASS,
+                    detail=f"prefix={data['prefix']} raw_key present",
+                    status_code=201,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /v1/keys (keys+fetch) → 201",
-                                        outcome=Outcome.FAIL,
-                                        detail=resp.text[:200], status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/keys (keys+fetch) → 201",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
 
         # --- Create a fetch-only key.
-        resp = await self._request("POST", "/v1/keys", 201, key=self.admin_key,
-                                   json_body={"application_id": str(self.app_id),
-                                              "scopes": ["fetch"],
-                                              "mode": "live"})
+        resp = await self._request(
+            "POST",
+            "/v1/keys",
+            201,
+            key=self.admin_key,
+            json_body={"application_id": str(self.app_id), "scopes": ["fetch"], "mode": "live"},
+        )
         if resp.status_code == 201:
             self.fetch_key = resp.json()["raw_key"]
-            suite.tests.append(TestCase(name="POST /v1/keys (fetch-only) → 201",
-                                        outcome=Outcome.PASS,
-                                        detail=f"prefix={resp.json()['prefix']}",
-                                        status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/keys (fetch-only) → 201",
+                    outcome=Outcome.PASS,
+                    detail=f"prefix={resp.json()['prefix']}",
+                    status_code=201,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /v1/keys (fetch-only) → 201",
-                                        outcome=Outcome.FAIL,
-                                        detail=resp.text[:200], status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/keys (fetch-only) → 201",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
 
         # --- Create an archive-scoped key.
-        resp = await self._request("POST", "/v1/keys", 201, key=self.admin_key,
-                                   json_body={"application_id": str(self.app_id),
-                                              "scopes": ["archive"],
-                                              "mode": "live"})
+        resp = await self._request(
+            "POST",
+            "/v1/keys",
+            201,
+            key=self.admin_key,
+            json_body={"application_id": str(self.app_id), "scopes": ["archive"], "mode": "live"},
+        )
         if resp.status_code == 201:
             self.archive_key = resp.json()["raw_key"]
-            suite.tests.append(TestCase(name="POST /v1/keys (archive-only) → 201",
-                                        outcome=Outcome.PASS,
-                                        detail=f"prefix={resp.json()['prefix']}",
-                                        status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/keys (archive-only) → 201",
+                    outcome=Outcome.PASS,
+                    detail=f"prefix={resp.json()['prefix']}",
+                    status_code=201,
+                )
+            )
 
         # --- Test-mode key.
-        resp = await self._request("POST", "/v1/keys", 201, key=self.admin_key,
-                                   json_body={"application_id": str(self.app_id),
-                                              "scopes": ["fetch"],
-                                              "mode": "test"})
+        resp = await self._request(
+            "POST",
+            "/v1/keys",
+            201,
+            key=self.admin_key,
+            json_body={"application_id": str(self.app_id), "scopes": ["fetch"], "mode": "test"},
+        )
         if resp.status_code == 201:
             data = resp.json()
-            suite.tests.append(TestCase(name="POST /v1/keys (test mode) → 201, prefix=crwt*",
-                                        outcome=Outcome.PASS if data["prefix"].startswith("crwt")
-                                        else Outcome.FAIL,
-                                        detail=f"prefix={data['prefix']}", status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/keys (test mode) → 201, prefix=crwt*",
+                    outcome=Outcome.PASS if data["prefix"].startswith("crwt") else Outcome.FAIL,
+                    detail=f"prefix={data['prefix']}",
+                    status_code=201,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /v1/keys (test mode) → 201",
-                                        outcome=Outcome.FAIL,
-                                        detail=resp.text[:200], status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/keys (test mode) → 201",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
 
         # --- List keys.
         suite.tests.append(
-            await self._test("GET /v1/keys → 200 list", "GET", "/v1/keys", 200,
-                             key=self.admin_key,
-                             check=lambda r, t: _assert_is_list(r))
+            await self._test(
+                "GET /v1/keys → 200 list",
+                "GET",
+                "/v1/keys",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_is_list(r),
+            )
         )
 
         # --- Invalid scope rejection.
         suite.tests.append(
-            await self._test("POST /v1/keys (invalid scope) → 403", "POST", "/v1/keys", 403,
-                             json_body={"application_id": str(self.app_id),
-                                        "scopes": ["superuser"],
-                                        "mode": "live"},
-                             key=self.admin_key)
+            await self._test(
+                "POST /v1/keys (invalid scope) → 403",
+                "POST",
+                "/v1/keys",
+                403,
+                json_body={
+                    "application_id": str(self.app_id),
+                    "scopes": ["superuser"],
+                    "mode": "live",
+                },
+                key=self.admin_key,
+            )
         )
 
         # --- Cannot grant scopes you don't hold (keys key cannot grant admin).
         if self.keys_key:
             suite.tests.append(
-                await self._test("POST /v1/keys (escalation attempt) → 403", "POST",
-                                 "/v1/keys", 403,
-                                 json_body={"application_id": str(self.app_id),
-                                            "scopes": ["admin"],
-                                            "mode": "live"},
-                                 key=self.keys_key)
+                await self._test(
+                    "POST /v1/keys (escalation attempt) → 403",
+                    "POST",
+                    "/v1/keys",
+                    403,
+                    json_body={
+                        "application_id": str(self.app_id),
+                        "scopes": ["admin"],
+                        "mode": "live",
+                    },
+                    key=self.keys_key,
+                )
             )
 
         # --- Cross-application key issuance requires admin.
         if self.second_app_id and self.keys_key:
             suite.tests.append(
-                await self._test("POST /v1/keys (cross-app, keys key) → 403", "POST",
-                                 "/v1/keys", 403,
-                                 json_body={"application_id": str(self.second_app_id),
-                                            "scopes": ["fetch"],
-                                            "mode": "live"},
-                                 key=self.keys_key)
+                await self._test(
+                    "POST /v1/keys (cross-app, keys key) → 403",
+                    "POST",
+                    "/v1/keys",
+                    403,
+                    json_body={
+                        "application_id": str(self.second_app_id),
+                        "scopes": ["fetch"],
+                        "mode": "live",
+                    },
+                    key=self.keys_key,
+                )
             )
 
         # --- Cross-app key issuance with admin key → OK.
         if self.second_app_id:
-            resp = await self._request("POST", "/v1/keys", 201, key=self.admin_key,
-                                       json_body={"application_id": str(self.second_app_id),
-                                                  "scopes": ["fetch"],
-                                                  "mode": "live"})
+            resp = await self._request(
+                "POST",
+                "/v1/keys",
+                201,
+                key=self.admin_key,
+                json_body={
+                    "application_id": str(self.second_app_id),
+                    "scopes": ["fetch"],
+                    "mode": "live",
+                },
+            )
             suite.tests.append(
-                TestCase(name="POST /v1/keys (cross-app, admin) → 201",
-                         outcome=Outcome.PASS if resp.status_code == 201 else Outcome.FAIL,
-                         detail=f"status={resp.status_code}", status_code=resp.status_code)
+                TestCase(
+                    name="POST /v1/keys (cross-app, admin) → 201",
+                    outcome=Outcome.PASS if resp.status_code == 201 else Outcome.FAIL,
+                    detail=f"status={resp.status_code}",
+                    status_code=resp.status_code,
+                )
             )
 
         # --- Revoke a key.
         if self.keys_key:
             # First create a sacrificial key.
-            resp = await self._request("POST", "/v1/keys", 201, key=self.admin_key,
-                                       json_body={"application_id": str(self.app_id),
-                                                  "scopes": ["fetch"],
-                                                  "mode": "live"})
+            resp = await self._request(
+                "POST",
+                "/v1/keys",
+                201,
+                key=self.admin_key,
+                json_body={"application_id": str(self.app_id), "scopes": ["fetch"], "mode": "live"},
+            )
             if resp.status_code == 201:
                 victim_id = resp.json()["id"]
                 suite.tests.append(
-                    await self._test(f"DELETE /v1/keys/{victim_id} → 200", "DELETE",
-                                     f"/v1/keys/{victim_id}", 200, key=self.admin_key)
+                    await self._test(
+                        f"DELETE /v1/keys/{victim_id} → 200",
+                        "DELETE",
+                        f"/v1/keys/{victim_id}",
+                        200,
+                        key=self.admin_key,
+                    )
                 )
 
         # --- Self-revocation prevention.
@@ -828,15 +1024,21 @@ class E2ETestRunner:
                         break
                 if own_id:
                     suite.tests.append(
-                        await self._test(f"DELETE /v1/keys/{own_id} (self-revoke) → 403",
-                                         "DELETE", f"/v1/keys/{own_id}", 403,
-                                         key=self.keys_key)
+                        await self._test(
+                            f"DELETE /v1/keys/{own_id} (self-revoke) → 403",
+                            "DELETE",
+                            f"/v1/keys/{own_id}",
+                            403,
+                            key=self.keys_key,
+                        )
                     )
                 else:
                     suite.tests.append(
-                        TestCase(name="DELETE /v1/keys/... (self-revoke) → skip",
-                                 outcome=Outcome.SKIP,
-                                 detail="Could not find keys_key ID")
+                        TestCase(
+                            name="DELETE /v1/keys/... (self-revoke) → skip",
+                            outcome=Outcome.SKIP,
+                            detail="Could not find keys_key ID",
+                        )
                     )
 
         # --- Key rotation.
@@ -846,17 +1048,26 @@ class E2ETestRunner:
             if resp.status_code == 200 and resp.json():
                 key_to_rotate = resp.json()[0]["id"]
                 suite.tests.append(
-                    await self._test(f"POST /v1/keys/{key_to_rotate}/rotate → 201",
-                                     "POST", f"/v1/keys/{key_to_rotate}/rotate", 201,
-                                     key=self.admin_key,
-                                     check=lambda r, t: _assert_has_key(r, "raw_key"))
+                    await self._test(
+                        f"POST /v1/keys/{key_to_rotate}/rotate → 201",
+                        "POST",
+                        f"/v1/keys/{key_to_rotate}/rotate",
+                        201,
+                        key=self.admin_key,
+                        check=lambda r, t: _assert_has_key(r, "raw_key"),
+                    )
                 )
 
         # --- Non-admin listing: keys-scoped key sees only own app's keys.
         if self.keys_key:
             suite.tests.append(
-                await self._test("GET /v1/keys (keys-scoped, own app) → 200", "GET",
-                                 "/v1/keys", 200, key=self.keys_key)
+                await self._test(
+                    "GET /v1/keys (keys-scoped, own app) → 200",
+                    "GET",
+                    "/v1/keys",
+                    200,
+                    key=self.keys_key,
+                )
             )
 
         # --- 401 without auth header. FastAPI returns 422 for missing required
@@ -867,8 +1078,13 @@ class E2ETestRunner:
 
         # --- 401 with garbage auth header.
         suite.tests.append(
-            await self._test("GET /v1/keys (garbage auth) → 401", "GET", "/v1/keys", 401,
-                             key="not-even-close-to-a-valid-api-key-format")
+            await self._test(
+                "GET /v1/keys (garbage auth) → 401",
+                "GET",
+                "/v1/keys",
+                401,
+                key="not-even-close-to-a-valid-api-key-format",
+            )
         )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -885,85 +1101,146 @@ class E2ETestRunner:
         fetch_key = self.fetch_key or self.admin_key
 
         # --- Submit async fetch.
-        resp = await self._request("POST", "/v1/fetch", {202, 429}, key=fetch_key,
-                                   json_body={"url": "https://httpbin.org/get",
-                                              "mode": "static"})
+        resp = await self._request(
+            "POST",
+            "/v1/fetch",
+            {202, 429},
+            key=fetch_key,
+            json_body={"url": "https://httpbin.org/get", "mode": "static"},
+        )
         if resp.status_code == 202:
             data = resp.json()
             self.job_id = data.get("job_id")
-            suite.tests.append(TestCase(name="POST /v1/fetch (httpbin.org) → 202",
-                                        outcome=Outcome.PASS,
-                                        detail=f"job_id={self.job_id}",
-                                        status_code=202))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/fetch (httpbin.org) → 202",
+                    outcome=Outcome.PASS,
+                    detail=f"job_id={self.job_id}",
+                    status_code=202,
+                )
+            )
         elif resp.status_code == 429:
-            suite.tests.append(TestCase(name="POST /v1/fetch (httpbin.org) → 202 (got 429 rate-limited)",
-                                        outcome=Outcome.PASS,
-                                        detail="Rate limited — try again later",
-                                        status_code=429))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/fetch (httpbin.org) → 202 (got 429 rate-limited)",
+                    outcome=Outcome.PASS,
+                    detail="Rate limited — try again later",
+                    status_code=429,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /v1/fetch (httpbin.org) → 202",
-                                        outcome=Outcome.FAIL,
-                                        detail=resp.text[:200],
-                                        status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/fetch (httpbin.org) → 202",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
 
         # --- Submit with idempotency key.
         idem_key = f"e2e-idem-{uuid4().hex[:8]}"
-        resp = await self._request("POST", "/v1/fetch", {202, 200, 429}, key=fetch_key,
-                                   json_body={"url": "https://httpbin.org/ip",
-                                              "mode": "static",
-                                              "idempotency_key": idem_key})
+        resp = await self._request(
+            "POST",
+            "/v1/fetch",
+            {202, 200, 429},
+            key=fetch_key,
+            json_body={
+                "url": "https://httpbin.org/ip",
+                "mode": "static",
+                "idempotency_key": idem_key,
+            },
+        )
         if resp.status_code in (202, 200, 429):
-            suite.tests.append(TestCase(name="POST /v1/fetch (with idempotency_key) → 202/200/429",
-                                        outcome=Outcome.PASS,
-                                        detail=f"status={resp.status_code}",
-                                        status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/fetch (with idempotency_key) → 202/200/429",
+                    outcome=Outcome.PASS,
+                    detail=f"status={resp.status_code}",
+                    status_code=resp.status_code,
+                )
+            )
 
             if resp.status_code != 429:
                 # Replay the same idempotency key (skip if rate-limited).
-                resp2 = await self._request("POST", "/v1/fetch", {200, 429}, key=fetch_key,
-                                            json_body={"url": "https://httpbin.org/ip",
-                                                       "mode": "static",
-                                                       "idempotency_key": idem_key})
-                suite.tests.append(TestCase(name="POST /v1/fetch (idempotency replay) → 200",
-                                            outcome=Outcome.PASS if resp2.status_code in (200, 429)
-                                            else Outcome.FAIL,
-                                            detail=f"status={resp2.status_code} "
-                                                   f"header={resp2.headers.get('Idempotency-Key-Status', 'none')}",
-                                            status_code=resp2.status_code))
+                resp2 = await self._request(
+                    "POST",
+                    "/v1/fetch",
+                    {200, 429},
+                    key=fetch_key,
+                    json_body={
+                        "url": "https://httpbin.org/ip",
+                        "mode": "static",
+                        "idempotency_key": idem_key,
+                    },
+                )
+                suite.tests.append(
+                    TestCase(
+                        name="POST /v1/fetch (idempotency replay) → 200",
+                        outcome=Outcome.PASS if resp2.status_code in (200, 429) else Outcome.FAIL,
+                        detail=f"status={resp2.status_code} "
+                        f"header={resp2.headers.get('Idempotency-Key-Status', 'none')}",
+                        status_code=resp2.status_code,
+                    )
+                )
             else:
-                suite.tests.append(TestCase(name="POST /v1/fetch (idempotency replay) → skip",
-                                            outcome=Outcome.SKIP,
-                                            detail="Skipped due to rate limit",
-                                            status_code=0))
+                suite.tests.append(
+                    TestCase(
+                        name="POST /v1/fetch (idempotency replay) → skip",
+                        outcome=Outcome.SKIP,
+                        detail="Skipped due to rate limit",
+                        status_code=0,
+                    )
+                )
         else:
-            suite.tests.append(TestCase(name="POST /v1/fetch (idempotency) → 202",
-                                        outcome=Outcome.FAIL,
-                                        detail=resp.text[:200],
-                                        status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /v1/fetch (idempotency) → 202",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
 
         # --- Poll job status.
         if self.job_id:
             suite.tests.append(
-                await self._test(f"GET /v1/jobs/{self.job_id} → 200", "GET",
-                                 f"/v1/jobs/{self.job_id}", 200, key=fetch_key)
+                await self._test(
+                    f"GET /v1/jobs/{self.job_id} → 200",
+                    "GET",
+                    f"/v1/jobs/{self.job_id}",
+                    200,
+                    key=fetch_key,
+                )
             )
 
         # --- Nonexistent job.
         fake_job_id = "00000000-0000-0000-0000-000000000000"
         resp = await self._request("GET", f"/v1/jobs/{fake_job_id}", {200, 404}, key=fetch_key)
-        suite.tests.append(TestCase(name=f"GET /v1/jobs/{fake_job_id} → 200/404",
-                                    outcome=Outcome.PASS,
-                                    detail=f"status={resp.status_code}",
-                                    status_code=resp.status_code))
+        suite.tests.append(
+            TestCase(
+                name=f"GET /v1/jobs/{fake_job_id} → 200/404",
+                outcome=Outcome.PASS,
+                detail=f"status={resp.status_code}",
+                status_code=resp.status_code,
+            )
+        )
 
         # --- Sync mode (wait up to 30s for result).
         suite.tests.append(
-            await self._test("POST /v1/fetch (sync mode) → 200/202", "POST", "/v1/fetch",
-                             {200, 202, 429}, key=fetch_key,
-                             json_body={"url": "https://httpbin.org/headers",
-                                        "mode": "static",
-                                        "options": {"sync": True}},
-                             request_timeout=35.0)
+            await self._test(
+                "POST /v1/fetch (sync mode) → 200/202",
+                "POST",
+                "/v1/fetch",
+                {200, 202, 429},
+                key=fetch_key,
+                json_body={
+                    "url": "https://httpbin.org/headers",
+                    "mode": "static",
+                    "options": {"sync": True},
+                },
+                request_timeout=35.0,
+            )
         )
 
         # --- Real-site tests (if enabled).
@@ -972,16 +1249,27 @@ class E2ETestRunner:
 
         # --- Validation: missing URL.
         suite.tests.append(
-            await self._test("POST /v1/fetch (no url) → 422", "POST", "/v1/fetch", 422,
-                             key=fetch_key, json_body={"mode": "static"})
+            await self._test(
+                "POST /v1/fetch (no url) → 422",
+                "POST",
+                "/v1/fetch",
+                422,
+                key=fetch_key,
+                json_body={"mode": "static"},
+            )
         )
 
         # --- Auth: missing scope.
         if self.archive_key:
             suite.tests.append(
-                await self._test("POST /v1/fetch (archive key, no fetch scope) → 403", "POST",
-                                 "/v1/fetch", 403, key=self.archive_key,
-                                 json_body={"url": "https://example.com", "mode": "static"})
+                await self._test(
+                    "POST /v1/fetch (archive key, no fetch scope) → 403",
+                    "POST",
+                    "/v1/fetch",
+                    403,
+                    key=self.archive_key,
+                    json_body={"url": "https://example.com", "mode": "static"},
+                )
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -995,14 +1283,16 @@ class E2ETestRunner:
             ("https://httpbin.org/user-agent", "stealth"),
         ]
         for url, mode in sites:
-            resp = await self._request("POST", "/v1/fetch", {202, 429}, key=fetch_key,
-                                       json_body={"url": url, "mode": mode})
+            resp = await self._request(
+                "POST", "/v1/fetch", {202, 429}, key=fetch_key, json_body={"url": url, "mode": mode}
+            )
             suite.tests.append(
-                TestCase(name=f"Fetch {url} ({mode}) → 202",
-                         outcome=Outcome.PASS if resp.status_code in (202, 429)
-                         else Outcome.FAIL,
-                         detail=f"status={resp.status_code}",
-                         status_code=resp.status_code)
+                TestCase(
+                    name=f"Fetch {url} ({mode}) → 202",
+                    outcome=Outcome.PASS if resp.status_code in (202, 429) else Outcome.FAIL,
+                    detail=f"status={resp.status_code}",
+                    status_code=resp.status_code,
+                )
             )
             await asyncio.sleep(0.5)  # gentle pacing
 
@@ -1021,10 +1311,15 @@ class E2ETestRunner:
         suite.tests.append(
             await self._test(
                 "POST /batches/ → creates batch (known broken)",
-                "POST", "/batches/", {202, 429, 500}, key=fetch_key,
-                json_body={"urls": ["https://example.com", "https://httpbin.org/get"],
-                           "mode": "static"},
-                expected_fail_reason="Calls nonexistent JobService.create_job / storage methods; also rate-limited"
+                "POST",
+                "/batches/",
+                {202, 429, 500},
+                key=fetch_key,
+                json_body={
+                    "urls": ["https://example.com", "https://httpbin.org/get"],
+                    "mode": "static",
+                },
+                expected_fail_reason="Calls nonexistent JobService.create_job / storage methods; also rate-limited",
             )
         )
 
@@ -1032,16 +1327,22 @@ class E2ETestRunner:
         suite.tests.append(
             await self._test(
                 "GET /batches/nonexistent/status → 404",
-                "GET", "/batches/nonexistent/status", {404, 500}, key=fetch_key,
-                expected_fail_reason="Likely broken — uses legacy storage"
+                "GET",
+                "/batches/nonexistent/status",
+                {404, 500},
+                key=fetch_key,
+                expected_fail_reason="Likely broken — uses legacy storage",
             )
         )
 
         suite.tests.append(
             await self._test(
                 "GET /batches/nonexistent/results → 404",
-                "GET", "/batches/nonexistent/results", {404, 500}, key=fetch_key,
-                expected_fail_reason="Likely broken — uses legacy storage"
+                "GET",
+                "/batches/nonexistent/results",
+                {404, 500},
+                key=fetch_key,
+                expected_fail_reason="Likely broken — uses legacy storage",
             )
         )
 
@@ -1060,36 +1361,57 @@ class E2ETestRunner:
 
         # List archive entries.
         suite.tests.append(
-            await self._test("GET /v1/archive/ → 200 (may be empty)", "GET", "/v1/archive/",
-                             200, key=archive_key)
+            await self._test(
+                "GET /v1/archive/ → 200 (may be empty)", "GET", "/v1/archive/", 200, key=archive_key
+            )
         )
 
         # List with filters.
         suite.tests.append(
-            await self._test("GET /v1/archive/?url=https://example.com → 200", "GET",
-                             "/v1/archive/", 200, key=archive_key,
-                             params={"url": "https://example.com"})
+            await self._test(
+                "GET /v1/archive/?url=https://example.com → 200",
+                "GET",
+                "/v1/archive/",
+                200,
+                key=archive_key,
+                params={"url": "https://example.com"},
+            )
         )
 
         # Pagination.
         suite.tests.append(
-            await self._test("GET /v1/archive/?per_page=5&page=1 → 200", "GET",
-                             "/v1/archive/", 200, key=archive_key,
-                             params={"per_page": 5, "page": 1})
+            await self._test(
+                "GET /v1/archive/?per_page=5&page=1 → 200",
+                "GET",
+                "/v1/archive/",
+                200,
+                key=archive_key,
+                params={"per_page": 5, "page": 1},
+            )
         )
 
         # Nonexistent entry.
         fake_id = "00000000-0000-0000-0000-000000000000"
         suite.tests.append(
-            await self._test(f"GET /v1/archive/{fake_id} → 404", "GET",
-                             f"/v1/archive/{fake_id}", 404, key=archive_key)
+            await self._test(
+                f"GET /v1/archive/{fake_id} → 404",
+                "GET",
+                f"/v1/archive/{fake_id}",
+                404,
+                key=archive_key,
+            )
         )
 
         # Auth: fetch key cannot access archive.
         if self.fetch_key:
             suite.tests.append(
-                await self._test("GET /v1/archive/ (fetch key) → 403", "GET", "/v1/archive/",
-                                 403, key=self.fetch_key)
+                await self._test(
+                    "GET /v1/archive/ (fetch key) → 403",
+                    "GET",
+                    "/v1/archive/",
+                    403,
+                    key=self.fetch_key,
+                )
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1107,27 +1429,41 @@ class E2ETestRunner:
 
         # Get own usage.
         suite.tests.append(
-            await self._test("GET /v1/usage/ → 200", "GET", "/v1/usage/", 200, key=fetch_key,
-                             check=lambda r, t: _assert_has_keys(r, ["application_id", "periods",
-                                                                     "total_requests"]))
+            await self._test(
+                "GET /v1/usage/ → 200",
+                "GET",
+                "/v1/usage/",
+                200,
+                key=fetch_key,
+                check=lambda r, t: _assert_has_keys(
+                    r, ["application_id", "periods", "total_requests"]
+                ),
+            )
         )
 
         # Admin: get any app's usage.
         if self.app_id:
             suite.tests.append(
-                await self._test(f"GET /v1/usage/applications/{self.app_id} → 200", "GET",
-                                 f"/v1/usage/applications/{self.app_id}", 200,
-                                 key=self.admin_key,
-                                 check=lambda r, t: _assert_has_keys(r, ["application_id",
-                                                                         "periods"]))
+                await self._test(
+                    f"GET /v1/usage/applications/{self.app_id} → 200",
+                    "GET",
+                    f"/v1/usage/applications/{self.app_id}",
+                    200,
+                    key=self.admin_key,
+                    check=lambda r, t: _assert_has_keys(r, ["application_id", "periods"]),
+                )
             )
 
         # Non-admin cannot see another app's usage.
         if self.fetch_key and self.second_app_id:
             suite.tests.append(
-                await self._test("GET /v1/usage/applications/{other} (fetch key) → 403", "GET",
-                                 f"/v1/usage/applications/{self.second_app_id}", 403,
-                                 key=self.fetch_key)
+                await self._test(
+                    "GET /v1/usage/applications/{other} (fetch key) → 403",
+                    "GET",
+                    f"/v1/usage/applications/{self.second_app_id}",
+                    403,
+                    key=self.fetch_key,
+                )
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1166,55 +1502,88 @@ class E2ETestRunner:
 
         # Create (upsert) a policy — domain gets normalized by normalize_domain().
         policy_domain = f"e2e-{uuid4().hex[:8]}.test"
-        resp = await self._request("POST", "/admin/domain-policies", 201, key=self.admin_key,
-                                   json_body={"domain": policy_domain,
-                                              "engine": "httpx",
-                                              "rate_limit_rps": 5.0,
-                                              "min_delay_ms": 100,
-                                              "max_delay_ms": 1000})
+        resp = await self._request(
+            "POST",
+            "/admin/domain-policies",
+            201,
+            key=self.admin_key,
+            json_body={
+                "domain": policy_domain,
+                "engine": "httpx",
+                "rate_limit_rps": 5.0,
+                "min_delay_ms": 100,
+                "max_delay_ms": 1000,
+            },
+        )
         if resp.status_code == 201:
             data = resp.json()
             self.policy_id = UUID(data["id"])
             self.policy_domain = data["domain"]  # normalized name
-            suite.tests.append(TestCase(name="POST /admin/domain-policies → 201",
-                                        outcome=Outcome.PASS,
-                                        detail=f"id={self.policy_id} domain={data['domain']}",
-                                        status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /admin/domain-policies → 201",
+                    outcome=Outcome.PASS,
+                    detail=f"id={self.policy_id} domain={data['domain']}",
+                    status_code=201,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /admin/domain-policies → 201",
-                                        outcome=Outcome.FAIL,
-                                        detail=resp.text[:200], status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /admin/domain-policies → 201",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
 
         # List policies.
         suite.tests.append(
-            await self._test("GET /admin/domain-policies → 200", "GET",
-                             "/admin/domain-policies", 200, key=self.admin_key,
-                             check=lambda r, t: _assert_is_list(r))
+            await self._test(
+                "GET /admin/domain-policies → 200",
+                "GET",
+                "/admin/domain-policies",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_is_list(r),
+            )
         )
 
         # Filter by domain substring.
         suite.tests.append(
-            await self._test("GET /admin/domain-policies?domain=e2e → 200", "GET",
-                             "/admin/domain-policies", 200, key=self.admin_key,
-                             params={"domain": "e2e"})
+            await self._test(
+                "GET /admin/domain-policies?domain=e2e → 200",
+                "GET",
+                "/admin/domain-policies",
+                200,
+                key=self.admin_key,
+                params={"domain": "e2e"},
+            )
         )
 
         # Get single policy.
         if self.policy_id:
             suite.tests.append(
-                await self._test(f"GET /admin/domain-policies/{self.policy_id} → 200", "GET",
-                                 f"/admin/domain-policies/{self.policy_id}", 200,
-                                 key=self.admin_key,
-                                 check=lambda r, t: _assert_json_key(r, "domain",
-                                                                     self.policy_domain))
+                await self._test(
+                    f"GET /admin/domain-policies/{self.policy_id} → 200",
+                    "GET",
+                    f"/admin/domain-policies/{self.policy_id}",
+                    200,
+                    key=self.admin_key,
+                    check=lambda r, t: _assert_json_key(r, "domain", self.policy_domain),
+                )
             )
 
             # Update policy.
             suite.tests.append(
-                await self._test(f"PATCH /admin/domain-policies/{self.policy_id} → 200", "PATCH",
-                                 f"/admin/domain-policies/{self.policy_id}", 200,
-                                 key=self.admin_key,
-                                 json_body={"rate_limit_rps": 10.0, "max_retries": 5})
+                await self._test(
+                    f"PATCH /admin/domain-policies/{self.policy_id} → 200",
+                    "PATCH",
+                    f"/admin/domain-policies/{self.policy_id}",
+                    200,
+                    key=self.admin_key,
+                    json_body={"rate_limit_rps": 10.0, "max_retries": 5},
+                )
             )
 
             # Pin escalation tier.
@@ -1223,29 +1592,44 @@ class E2ETestRunner:
                     f"POST /admin/domain-policies/{self.policy_id}/pin-tier?tier=2&locked=true → 200",
                     "POST",
                     f"/admin/domain-policies/{self.policy_id}/pin-tier?tier=2&locked=true",
-                    200, key=self.admin_key)
+                    200,
+                    key=self.admin_key,
+                )
             )
 
             # Delete policy.
             suite.tests.append(
-                await self._test(f"DELETE /admin/domain-policies/{self.policy_id} → 204", "DELETE",
-                                 f"/admin/domain-policies/{self.policy_id}", 204,
-                                 key=self.admin_key)
+                await self._test(
+                    f"DELETE /admin/domain-policies/{self.policy_id} → 204",
+                    "DELETE",
+                    f"/admin/domain-policies/{self.policy_id}",
+                    204,
+                    key=self.admin_key,
+                )
             )
 
             # Verify deleted → 404.
             suite.tests.append(
-                await self._test(f"GET /admin/domain-policies/{self.policy_id} (deleted) → 404",
-                                 "GET", f"/admin/domain-policies/{self.policy_id}", 404,
-                                 key=self.admin_key)
+                await self._test(
+                    f"GET /admin/domain-policies/{self.policy_id} (deleted) → 404",
+                    "GET",
+                    f"/admin/domain-policies/{self.policy_id}",
+                    404,
+                    key=self.admin_key,
+                )
             )
             self.policy_id = None
 
         # Auth: non-admin cannot access.
         if self.fetch_key:
             suite.tests.append(
-                await self._test("GET /admin/domain-policies (fetch key) → 403", "GET",
-                                 "/admin/domain-policies", 403, key=self.fetch_key)
+                await self._test(
+                    "GET /admin/domain-policies (fetch key) → 403",
+                    "GET",
+                    "/admin/domain-policies",
+                    403,
+                    key=self.fetch_key,
+                )
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1261,60 +1645,94 @@ class E2ETestRunner:
 
         # Create proxy pool.
         pool_name = f"e2e-pool-{uuid4().hex[:8]}"
-        resp = await self._request("POST", "/admin/proxy-pools", 201, key=self.admin_key,
-                                   json_body={"name": pool_name, "provider": "custom"})
+        resp = await self._request(
+            "POST",
+            "/admin/proxy-pools",
+            201,
+            key=self.admin_key,
+            json_body={"name": pool_name, "provider": "custom"},
+        )
         if resp.status_code == 201:
             data = resp.json()
             self.proxy_pool_id = UUID(data["id"])
-            suite.tests.append(TestCase(name="POST /admin/proxy-pools → 201",
-                                        outcome=Outcome.PASS,
-                                        detail=f"id={self.proxy_pool_id}",
-                                        status_code=201))
+            suite.tests.append(
+                TestCase(
+                    name="POST /admin/proxy-pools → 201",
+                    outcome=Outcome.PASS,
+                    detail=f"id={self.proxy_pool_id}",
+                    status_code=201,
+                )
+            )
         else:
-            suite.tests.append(TestCase(name="POST /admin/proxy-pools → 201",
-                                        outcome=Outcome.FAIL,
-                                        detail=resp.text[:200], status_code=resp.status_code))
+            suite.tests.append(
+                TestCase(
+                    name="POST /admin/proxy-pools → 201",
+                    outcome=Outcome.FAIL,
+                    detail=resp.text[:200],
+                    status_code=resp.status_code,
+                )
+            )
 
         # Duplicate pool name.
         suite.tests.append(
-            await self._test("POST /admin/proxy-pools (duplicate) → 409", "POST",
-                             "/admin/proxy-pools", 409, key=self.admin_key,
-                             json_body={"name": pool_name, "provider": "custom"})
+            await self._test(
+                "POST /admin/proxy-pools (duplicate) → 409",
+                "POST",
+                "/admin/proxy-pools",
+                409,
+                key=self.admin_key,
+                json_body={"name": pool_name, "provider": "custom"},
+            )
         )
 
         # Add a proxy to the pool.
         if self.proxy_pool_id:
-            resp = await self._request("POST",
-                                       f"/admin/proxy-pools/{self.proxy_pool_id}/proxies",
-                                       {201, 500}, key=self.admin_key,
-                                       json_body={
-                                           "pool_id": str(self.proxy_pool_id),
-                                           "url": "http://testuser:testpass@10.0.0.1:8080",
-                                           "country": "PL",
-                                       })
+            resp = await self._request(
+                "POST",
+                f"/admin/proxy-pools/{self.proxy_pool_id}/proxies",
+                {201, 500},
+                key=self.admin_key,
+                json_body={
+                    "pool_id": str(self.proxy_pool_id),
+                    "url": "http://testuser:testpass@10.0.0.1:8080",
+                    "country": "PL",
+                },
+            )
             if resp.status_code == 201:
                 self.proxy_id = UUID(resp.json()["id"])
-                suite.tests.append(TestCase(name="POST .../proxies → 201",
-                                            outcome=Outcome.PASS,
-                                            detail=f"proxy_id={self.proxy_id}",
-                                            status_code=201))
+                suite.tests.append(
+                    TestCase(
+                        name="POST .../proxies → 201",
+                        outcome=Outcome.PASS,
+                        detail=f"proxy_id={self.proxy_id}",
+                        status_code=201,
+                    )
+                )
             else:
                 # Sometimes returns 500 — proxy insert may fail on FK or unique constraints.
-                suite.tests.append(TestCase(name="POST .../proxies → 201",
-                                            outcome=Outcome.EXPECTED_FAIL,
-                                            detail=f"status={resp.status_code} — {resp.text[:100]}",
-                                            status_code=resp.status_code))
+                suite.tests.append(
+                    TestCase(
+                        name="POST .../proxies → 201",
+                        outcome=Outcome.EXPECTED_FAIL,
+                        detail=f"status={resp.status_code} — {resp.text[:100]}",
+                        status_code=resp.status_code,
+                    )
+                )
 
             # Invalid proxy URL format.
             suite.tests.append(
-                await self._test("POST .../proxies (bad URL) → 422", "POST",
-                                 f"/admin/proxy-pools/{self.proxy_pool_id}/proxies", 422,
-                                 key=self.admin_key,
-                                 json_body={
-                                     "pool_id": str(self.proxy_pool_id),
-                                     "url": "not-a-valid-proxy-url",
-                                     "country": "XX",
-                                 })
+                await self._test(
+                    "POST .../proxies (bad URL) → 422",
+                    "POST",
+                    f"/admin/proxy-pools/{self.proxy_pool_id}/proxies",
+                    422,
+                    key=self.admin_key,
+                    json_body={
+                        "pool_id": str(self.proxy_pool_id),
+                        "url": "not-a-valid-proxy-url",
+                        "country": "XX",
+                    },
+                )
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1330,86 +1748,134 @@ class E2ETestRunner:
 
         # List proxy pools (any authenticated user).
         suite.tests.append(
-            await self._test("GET /proxy/pools → 200", "GET", "/proxy/pools", 200,
-                             key=self.admin_key,
-                             check=lambda r, t: _assert_is_list(r))
+            await self._test(
+                "GET /proxy/pools → 200",
+                "GET",
+                "/proxy/pools",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_is_list(r),
+            )
         )
 
         # Pool stats.
         if self.proxy_pool_id:
             suite.tests.append(
-                await self._test(f"GET /proxy/pools/{self.proxy_pool_id}/stats → 200", "GET",
-                                 f"/proxy/pools/{self.proxy_pool_id}/stats", 200,
-                                 key=self.admin_key,
-                                 check=lambda r, t: _assert_has_keys(r, ["pool_id", "total",
-                                                                          "active", "avg_health"]))
+                await self._test(
+                    f"GET /proxy/pools/{self.proxy_pool_id}/stats → 200",
+                    "GET",
+                    f"/proxy/pools/{self.proxy_pool_id}/stats",
+                    200,
+                    key=self.admin_key,
+                    check=lambda r, t: _assert_has_keys(
+                        r, ["pool_id", "total", "active", "avg_health"]
+                    ),
+                )
             )
 
         # List proxies (admin).
         suite.tests.append(
-            await self._test("GET /proxy/proxies → 200", "GET", "/proxy/proxies", 200,
-                             key=self.admin_key,
-                             check=lambda r, t: _assert_is_list(r))
+            await self._test(
+                "GET /proxy/proxies → 200",
+                "GET",
+                "/proxy/proxies",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_is_list(r),
+            )
         )
 
         # Proxy events.
         if self.proxy_id:
             suite.tests.append(
-                await self._test(f"GET /proxy/proxies/{self.proxy_id}/events → 200", "GET",
-                                 f"/proxy/proxies/{self.proxy_id}/events", 200,
-                                 key=self.admin_key)
+                await self._test(
+                    f"GET /proxy/proxies/{self.proxy_id}/events → 200",
+                    "GET",
+                    f"/proxy/proxies/{self.proxy_id}/events",
+                    200,
+                    key=self.admin_key,
+                )
             )
 
         # Report proxy health.
         if self.proxy_id:
             suite.tests.append(
-                await self._test("POST /proxy/health → 200", "POST", "/proxy/health", 200,
-                                 key=self.admin_key,
-                                 json_body={"proxy_id": str(self.proxy_id),
-                                            "domain": "example.com",
-                                            "success": True,
-                                            "reason": None})
+                await self._test(
+                    "POST /proxy/health → 200",
+                    "POST",
+                    "/proxy/health",
+                    200,
+                    key=self.admin_key,
+                    json_body={
+                        "proxy_id": str(self.proxy_id),
+                        "domain": "example.com",
+                        "success": True,
+                        "reason": None,
+                    },
+                )
             )
 
         # Reset proxy.
         if self.proxy_id:
             suite.tests.append(
-                await self._test(f"POST /proxy/reset/{self.proxy_id} → 200", "POST",
-                                 f"/proxy/reset/{self.proxy_id}", 200,
-                                 key=self.admin_key)
+                await self._test(
+                    f"POST /proxy/reset/{self.proxy_id} → 200",
+                    "POST",
+                    f"/proxy/reset/{self.proxy_id}",
+                    200,
+                    key=self.admin_key,
+                )
             )
 
         # Reset circuit breaker.
         suite.tests.append(
-            await self._test("DELETE /proxy/circuit-breaker/example.com → 200", "DELETE",
-                             "/proxy/circuit-breaker/example.com", 200,
-                             key=self.admin_key)
+            await self._test(
+                "DELETE /proxy/circuit-breaker/example.com → 200",
+                "DELETE",
+                "/proxy/circuit-breaker/example.com",
+                200,
+                key=self.admin_key,
+            )
         )
 
         # Bulk import — known bug: endpoint creates uuid4() pool_id that
         # doesn't reference an existing proxy_pool row, causing FK violation.
         suite.tests.append(
-            await self._test("POST /proxy/admin/proxies (bulk) → 201/500", "POST",
-                             "/proxy/admin/proxies", {201, 500}, key=self.admin_key,
-                             json_body={
-                                 "tenant_id": str(self.tenant_id or uuid4()),
-                                 "proxies": [
-                                     {"host": "10.0.0.2", "port": 3128,
-                                      "username": "u1", "password": "p1",
-                                      "country": "DE"},
-                                 ],
-                             },
-                             expected_fail_reason=(
-                                 "Bug: endpoint generates random pool_id without creating "
-                                 "the proxy_pool row first → FK violation"
-                             ))
+            await self._test(
+                "POST /proxy/admin/proxies (bulk) → 201/500",
+                "POST",
+                "/proxy/admin/proxies",
+                {201, 500},
+                key=self.admin_key,
+                json_body={
+                    "tenant_id": str(self.tenant_id or uuid4()),
+                    "proxies": [
+                        {
+                            "host": "10.0.0.2",
+                            "port": 3128,
+                            "username": "u1",
+                            "password": "p1",
+                            "country": "DE",
+                        },
+                    ],
+                },
+                expected_fail_reason=(
+                    "Bug: endpoint generates random pool_id without creating "
+                    "the proxy_pool row first → FK violation"
+                ),
+            )
         )
 
         # Auth: non-admin cannot list proxies.
         if self.fetch_key:
             suite.tests.append(
-                await self._test("GET /proxy/proxies (fetch key) → 403", "GET",
-                                 "/proxy/proxies", 403, key=self.fetch_key)
+                await self._test(
+                    "GET /proxy/proxies (fetch key) → 403",
+                    "GET",
+                    "/proxy/proxies",
+                    403,
+                    key=self.fetch_key,
+                )
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1427,30 +1893,46 @@ class E2ETestRunner:
 
         # Create project.
         suite.tests.append(
-            await self._test("POST /projects/ → 201", "POST", "/projects/", 201,
-                             key=self.admin_key,
-                             json_body={"name": project_name})
+            await self._test(
+                "POST /projects/ → 201",
+                "POST",
+                "/projects/",
+                201,
+                key=self.admin_key,
+                json_body={"name": project_name},
+            )
         )
 
         # Duplicate.
         suite.tests.append(
-            await self._test("POST /projects/ (duplicate) → 409", "POST", "/projects/", 409,
-                             key=self.admin_key,
-                             json_body={"name": project_name})
+            await self._test(
+                "POST /projects/ (duplicate) → 409",
+                "POST",
+                "/projects/",
+                409,
+                key=self.admin_key,
+                json_body={"name": project_name},
+            )
         )
 
         # List projects.
         suite.tests.append(
-            await self._test("GET /projects/ → 200", "GET", "/projects/", 200,
-                             key=self.admin_key,
-                             check=lambda r, t: _assert_is_list(r))
+            await self._test(
+                "GET /projects/ → 200",
+                "GET",
+                "/projects/",
+                200,
+                key=self.admin_key,
+                check=lambda r, t: _assert_is_list(r),
+            )
         )
 
         # Auth: non-admin cannot access.
         if self.fetch_key:
             suite.tests.append(
-                await self._test("GET /projects/ (fetch key) → 403", "GET", "/projects/", 403,
-                                 key=self.fetch_key)
+                await self._test(
+                    "GET /projects/ (fetch key) → 403", "GET", "/projects/", 403, key=self.fetch_key
+                )
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1465,9 +1947,14 @@ class E2ETestRunner:
         t0 = time.perf_counter()
 
         suite.tests.append(
-            await self._test("GET /metrics → 200 (Prometheus text)", "GET", "/metrics", 200,
-                             key="",  # no auth
-                             check=lambda r, t: _assert_content_type(r, "text/plain"))
+            await self._test(
+                "GET /metrics → 200 (Prometheus text)",
+                "GET",
+                "/metrics",
+                200,
+                key="",  # no auth
+                check=lambda r, t: _assert_content_type(r, "text/plain"),
+            )
         )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1486,64 +1973,98 @@ class E2ETestRunner:
         # URL field is str (not HttpUrl) in JobCreate schema, so Pydantic doesn't
         # validate the format.  The server may crash when parsing a malformed URL.
         suite.tests.append(
-            await self._test("POST /v1/fetch (invalid URL) → 422", "POST", "/v1/fetch",
-                             {422, 500}, key=fetch_key,
-                             json_body={"url": "not-a-valid-url", "mode": "static"},
-                             expected_fail_reason="JobCreate.url is str, not HttpUrl — Pydantic doesn't validate format"
+            await self._test(
+                "POST /v1/fetch (invalid URL) → 422",
+                "POST",
+                "/v1/fetch",
+                {422, 500},
+                key=fetch_key,
+                json_body={"url": "not-a-valid-url", "mode": "static"},
+                expected_fail_reason="JobCreate.url is str, not HttpUrl — Pydantic doesn't validate format",
             )
         )
 
         # Missing required body fields.
         suite.tests.append(
-            await self._test("POST /v1/fetch (empty body) → 422", "POST", "/v1/fetch", 422,
-                             key=fetch_key, json_body={})
+            await self._test(
+                "POST /v1/fetch (empty body) → 422",
+                "POST",
+                "/v1/fetch",
+                422,
+                key=fetch_key,
+                json_body={},
+            )
         )
 
         # Wrong HTTP method.
         resp = await self._request("PATCH", "/v1/fetch", 405, key=fetch_key)
-        suite.tests.append(TestCase(name="PATCH /v1/fetch → 405",
-                                    outcome=Outcome.PASS if resp.status_code == 405
-                                    else Outcome.FAIL,
-                                    detail=f"status={resp.status_code}",
-                                    status_code=resp.status_code))
+        suite.tests.append(
+            TestCase(
+                name="PATCH /v1/fetch → 405",
+                outcome=Outcome.PASS if resp.status_code == 405 else Outcome.FAIL,
+                detail=f"status={resp.status_code}",
+                status_code=resp.status_code,
+            )
+        )
 
         # Malformed UUID in path → 422 (DELETE /v1/keys/{key_id} expects UUID).
         suite.tests.append(
-            await self._test("DELETE /v1/keys/not-a-uuid → 422", "DELETE",
-                             "/v1/keys/not-a-uuid", 422, key=self.admin_key)
+            await self._test(
+                "DELETE /v1/keys/not-a-uuid → 422",
+                "DELETE",
+                "/v1/keys/not-a-uuid",
+                422,
+                key=self.admin_key,
+            )
         )
 
         # Non-admin cannot access admin endpoints.
         if self.fetch_key:
             suite.tests.append(
-                await self._test("GET /v1/tenants (fetch key, no admin scope) → 403",
-                                 "GET", "/v1/tenants", 403, key=self.fetch_key)
+                await self._test(
+                    "GET /v1/tenants (fetch key, no admin scope) → 403",
+                    "GET",
+                    "/v1/tenants",
+                    403,
+                    key=self.fetch_key,
+                )
             )
 
         # 404 for unknown route.
         resp = await self._request("GET", "/v1/nonexistent-endpoint", 404, key=self.admin_key)
-        suite.tests.append(TestCase(name="GET /v1/nonexistent → 404",
-                                    outcome=Outcome.PASS if resp.status_code == 404
-                                    else Outcome.FAIL,
-                                    detail=f"status={resp.status_code}",
-                                    status_code=resp.status_code))
+        suite.tests.append(
+            TestCase(
+                name="GET /v1/nonexistent → 404",
+                outcome=Outcome.PASS if resp.status_code == 404 else Outcome.FAIL,
+                detail=f"status={resp.status_code}",
+                status_code=resp.status_code,
+            )
+        )
 
         # Rate-limit headers present on fetch response.
-        resp = await self._request("POST", "/v1/fetch", {202, 429}, key=fetch_key,
-                                   json_body={"url": "https://httpbin.org/get",
-                                              "mode": "static"})
+        resp = await self._request(
+            "POST",
+            "/v1/fetch",
+            {202, 429},
+            key=fetch_key,
+            json_body={"url": "https://httpbin.org/get", "mode": "static"},
+        )
         has_rate_headers = all(
-            h in resp.headers for h in ["X-RateLimit-Limit", "X-RateLimit-Remaining",
-                                        "X-RateLimit-Reset"]
+            h in resp.headers
+            for h in ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"]
         )
         suite.tests.append(
-            TestCase(name="POST /v1/fetch returns rate-limit headers",
-                     outcome=Outcome.PASS if resp.status_code in (202, 429) and has_rate_headers
-                     else Outcome.FAIL if resp.status_code not in (202, 429)
-                     else Outcome.PASS,  # 429 still has headers sometimes
-                     detail=f"status={resp.status_code} "
-                            f"headers={'present' if has_rate_headers else 'missing'}",
-                     status_code=resp.status_code)
+            TestCase(
+                name="POST /v1/fetch returns rate-limit headers",
+                outcome=Outcome.PASS
+                if resp.status_code in (202, 429) and has_rate_headers
+                else Outcome.FAIL
+                if resp.status_code not in (202, 429)
+                else Outcome.PASS,  # 429 still has headers sometimes
+                detail=f"status={resp.status_code} "
+                f"headers={'present' if has_rate_headers else 'missing'}",
+                status_code=resp.status_code,
+            )
         )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1670,16 +2191,25 @@ Examples:
   python tests/e2e/run_e2e_tests.py --base-url https://api.example.com --api-key crw_live_xxxx
         """,
     )
-    parser.add_argument("--base-url", default="http://localhost:8000",
-                        help="API base URL (default: http://localhost:8000)")
-    parser.add_argument("--api-key", default=None,
-                        help="Admin-scope API key (skip bootstrap if provided)")
-    parser.add_argument("--bootstrap", action="store_true",
-                        help="Auto-create tenant/app/admin-key via direct DB access")
-    parser.add_argument("--fetch-real", action="store_true",
-                        help="Include real-website fetch tests (requires arq worker)")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Verbose output")
+    parser.add_argument(
+        "--base-url",
+        default="http://localhost:8000",
+        help="API base URL (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--api-key", default=None, help="Admin-scope API key (skip bootstrap if provided)"
+    )
+    parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="Auto-create tenant/app/admin-key via direct DB access",
+    )
+    parser.add_argument(
+        "--fetch-real",
+        action="store_true",
+        help="Include real-website fetch tests (requires arq worker)",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     args = parser.parse_args()
 
     runner = E2ETestRunner(
