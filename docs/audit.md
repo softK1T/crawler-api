@@ -64,21 +64,17 @@ graph LR
 | `app/models/crawl_result.py` | `CrawlResult` ORM model (job_id, url, status, body, markdown, extracted, headers, errors) |
 | `app/schemas/requests.py` | Pydantic v2 request models: `CrawlRequest`, `BatchCrawlRequest`, `ProjectCreateRequest` |
 | `app/schemas/responses.py` | Pydantic v2 response models: `JobResponse`, `CrawlResult`, `BatchResponse`, `ProjectResponse`, `TaskState` enum |
-| `app/services/adapters/base.py` | Abstract `SiteAdapter` with login, session check, cookie helpers |
-| `app/services/adapters/__init__.py` | Adapter registry (empty dict — no site adapters implemented) |
 | `app/services/crawler.py` | `Crawler` (httpx sync), `SmartProxyPool`, `ProxyRateLimiter`, HTML helpers, ban detection |
 | `app/services/stealth_crawler.py` | `StealthCrawler` (curl_cffi), `crawl_camoufox` (anti-detect Firefox), `crawl_playwright_stealth` |
 | `app/services/geo_proxy_pool.py` | `GeoProxyPool` extends `SmartProxyPool` with per-country proxy selection and geo-stats |
 | `app/services/proxy_singleton.py` | Lazy-init global `GeoProxyPool` singleton, reset on Webshare sync |
 | `app/services/job_service.py` | Celery task submission, status polling, result deserialization |
 | `app/services/batch_service.py` | Batch creation (N tasks), progress aggregation, result collection |
-| `app/services/session_manager.py` | Cookie session persistence to Redis with 6-hour TTL |
 | `app/services/storage.py` | Dual-write service: Redis TTL cache (used) + PostgreSQL async persistence (defined but uncalled) |
 | `app/services/events.py` | Redis Streams event publishing for crawl lifecycle events |
 | `app/services/webshare_sync.py` | Webshare API v2 proxy list fetcher + file writer |
 | `app/worker/celery_app.py` | Celery app config: Redis broker, JSON serialization, beat schedule (periodic proxy sync) |
 | `app/worker/tasks/crawl.py` | Main crawl task — dispatches by mode, encodes body (base64+gzip), saves result, publishes event |
-| `app/worker/tasks/auth.py` | Login task — resolves adapter, runs async login in sync worker via `asyncio.run()` |
 | `app/worker/tasks/sync.py` | Periodic Celery Beat task — re-syncs Webshare proxy list and reloads pool singleton |
 
 ### Async Strategy
@@ -134,7 +130,6 @@ graph LR
 ### MEDIUM
 
 - **[MEDIUM]** app/core/config.py:27 — Default `database_url` contains hardcoded credentials (`crawler:crawler`). While overridable via env, the default value is committed.
-- **[MEDIUM]** app/services/adapters/__init__.py:9 — `ADAPTERS` registry is empty. All calls to `POST /auth/login`, `POST /auth/session`, `GET /auth/session` will raise `ValueError("No adapter registered")` at runtime. The login/auth subsystem is non-functional.
 - **[MEDIUM]** app/services/stealth_crawler.py:141 — Hardcoded domain `".shopee.sg"` in cookie injection for `crawl_camoufox`. The Shopee adapter was deleted in commit `e3da2a0` but this residual hardcoding remains, which would inject cookies with wrong domain for any non-Shopee site.
 - **[MEDIUM]** app/services/storage.py:58 — `save_result_to_db` is defined but never called from any code path. All crawl results are written to Redis only; PostgreSQL persistence is dead code.
 - **[MEDIUM]** app/worker/tasks/crawl.py:97-102 — Task raises `RuntimeError` after calling `storage.save_job_result(job_id, error_result)`. Combined with `acks_late=True`, this causes Celery to re-deliver the task, resulting in duplicate crawl attempts for the same job (the first one already stored an error result).

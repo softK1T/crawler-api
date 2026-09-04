@@ -4,6 +4,10 @@ All notable changes to crawler-api are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed: site adapter system (site adapter base, empty adapter registry, /v1/auth stubs, Redis session manager).
+
 ### Fixed
 
 - Prevented legacy or unknown block-reason values from failing completed jobs.

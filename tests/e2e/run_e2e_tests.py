@@ -45,7 +45,7 @@ _RUNNING_IN_VENV = Path(sys.executable).resolve() == _VENV_PYTHON.resolve()
 # If we're not in the project venv and one exists, re-exec into it.
 # This ensures bootstrap mode has access to sqlalchemy + app modules.
 if not _RUNNING_IN_VENV and _VENV_PYTHON.exists():
-    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__] + sys.argv[1:])
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__, *sys.argv[1:]])  # noqa: S606
 
 try:
     import httpx
@@ -372,7 +372,7 @@ class E2ETestRunner:
         """Run bootstrap_dev.py inside the api container and capture the key."""
         print(info("  Running bootstrap_dev.py inside api container..."))
         result = subprocess.run(
-            ["docker", "compose", "exec", "-T", "api",
+            ["docker", "compose", "exec", "-T", "api",  # noqa: S607
              "python3", "scripts/bootstrap_dev.py"],
             cwd=_PROJECT_ROOT,
             capture_output=True, text=True, timeout=15,
@@ -458,25 +458,22 @@ class E2ETestRunner:
             # 8. Usage.
             await self.phase_usage()
 
-            # 9. Auth stubs (501).
-            await self.phase_auth_stubs()
-
-            # 10. Admin — Domain policies.
+            # 9. Admin — Domain policies.
             await self.phase_domain_policies()
 
-            # 11. Admin — Proxy pools & proxies.
+            # 10. Admin — Proxy pools & proxies.
             await self.phase_proxy_pools()
 
-            # 12. Proxy endpoints.
+            # 11. Proxy endpoints.
             await self.phase_proxy_endpoints()
 
-            # 13. Projects.
+            # 12. Projects.
             await self.phase_projects()
 
-            # 14. Metrics.
+            # 13. Metrics.
             await self.phase_metrics()
 
-            # 15. Edge cases.
+            # 14. Edge cases.
             await self.phase_edge_cases()
 
         finally:
@@ -1134,30 +1131,7 @@ class E2ETestRunner:
         self.reports.append(suite)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Phase 10: Auth stubs (all return 501)
-    # ═══════════════════════════════════════════════════════════════════════
-
-    async def phase_auth_stubs(self) -> None:
-        suite = SuiteReport(suite_name="Auth stubs (Stage 8 — not implemented)")
-        t0 = time.perf_counter()
-
-        fetch_key = self.fetch_key or self.admin_key
-
-        for method, path in [
-            ("POST", "/auth/login"),
-            ("POST", "/auth/session"),
-            ("GET", "/auth/session"),
-            ("DELETE", "/auth/session"),
-        ]:
-            suite.tests.append(
-                await self._test(f"{method} {path} → 501", method, path, 501, key=fetch_key)
-            )
-
-        suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
-        self.reports.append(suite)
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # Phase 11: Domain policies
+    # Phase 10: Domain policies
     # ═══════════════════════════════════════════════════════════════════════
 
     async def phase_domain_policies(self) -> None:
@@ -1252,7 +1226,7 @@ class E2ETestRunner:
         self.reports.append(suite)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Phase 12: Proxy pools & proxies
+    # Phase 11: Proxy pools & proxies
     # ═══════════════════════════════════════════════════════════════════════
 
     async def phase_proxy_pools(self) -> None:
@@ -1321,7 +1295,7 @@ class E2ETestRunner:
         self.reports.append(suite)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Phase 13: Proxy endpoints
+    # Phase 12: Proxy endpoints
     # ═══════════════════════════════════════════════════════════════════════
 
     async def phase_proxy_endpoints(self) -> None:
@@ -1416,7 +1390,7 @@ class E2ETestRunner:
         self.reports.append(suite)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Phase 14: Projects
+    # Phase 13: Projects
     # ═══════════════════════════════════════════════════════════════════════
 
     async def phase_projects(self) -> None:
@@ -1457,7 +1431,7 @@ class E2ETestRunner:
         self.reports.append(suite)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Phase 15: Metrics
+    # Phase 14: Metrics
     # ═══════════════════════════════════════════════════════════════════════
 
     async def phase_metrics(self) -> None:
@@ -1474,7 +1448,7 @@ class E2ETestRunner:
         self.reports.append(suite)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Phase 16: Edge cases & error handling
+    # Phase 15: Edge cases & error handling
     # ═══════════════════════════════════════════════════════════════════════
 
     async def phase_edge_cases(self) -> None:

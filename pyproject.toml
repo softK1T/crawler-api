@@ -144,7 +144,6 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "app.services.session_manager",
     "app.services.job_service",
     "app.services.proxy_health",
     "app.services.proxy_manager",
