@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
@@ -35,6 +36,28 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _sem
 
 
+@asynccontextmanager
+async def _new_browser(camoufox_module: Any, **kwargs):
+    """Launch a camoufox Firefox instance with the installed package API.
+
+    Current camoufox exposes ``AsyncNewBrowser(playwright, **launch_options)``
+    as an async function — it needs a started playwright instance and does
+    not support ``async with`` directly.  This wrapper restores the
+    context-manager shape and guarantees teardown.
+    """
+    from playwright.async_api import async_playwright
+
+    pw = await async_playwright().start()
+    try:
+        browser = await camoufox_module.AsyncNewBrowser(pw, **kwargs)
+        try:
+            yield browser
+        finally:
+            await browser.close()
+    finally:
+        await pw.stop()
+
+
 class CamoufoxFetcher:
     """Implements FetcherProtocol using camoufox (Firefox + humanization).
 
@@ -46,13 +69,18 @@ class CamoufoxFetcher:
     is acceptable.  Concurrency is capped by _sem (default 2).
     """
 
-    def __init__(self, browser_pool: object | None = None) -> None:
+    def __init__(
+        self, browser_pool: object | None = None, camoufox_ready: bool | None = None
+    ) -> None:
         # browser_pool is accepted for API compatibility with PlaywrightFetcher
         # but intentionally ignored — camoufox cannot reuse a Chromium pool.
         if browser_pool is not None:
             logger.debug(
                 "CamoufoxFetcher: browser_pool ignored (Firefox uses per-request lifecycle)"
             )
+        # None = self-check not run (API context, tests); False = failed at
+        # worker startup — fail fast instead of a low-level launch error.
+        self._camoufox_ready = camoufox_ready
 
     async def fetch(
         self,
@@ -64,6 +92,9 @@ class CamoufoxFetcher:
         follow_redirects: bool = True,
         max_redirects: int = 10,
     ) -> FetchResult:
+        if self._camoufox_ready is False:
+            raise FetchError("Camoufox failed self-check at worker startup — see logs")
+
         start = time.perf_counter()
 
         from app.core.url_guard import URLGuardError, validate_url_async
@@ -112,10 +143,13 @@ class CamoufoxFetcher:
         timeout_s: float,
         start: float,
     ) -> FetchResult:
-        # Camoufox AsyncNewBrowser is an async context manager that launches
-        # Firefox with humanized fingerprint patches.
+        # Launch camoufox/Firefox with humanized fingerprint patches.
+        # headless="virtual" spawns Xvfb inside the container (see Dockerfile:
+        # xvfb is installed) — camoufox recommends a real virtual display over
+        # pure headless mode to avoid headless-detection heuristics.
         kwargs: dict[str, object] = {
             "humanize": True,
+            "headless": "virtual",  # spawn Xvfb inside the container (see Dockerfile: xvfb installed)
             "geoip": proxy_country is not None,  # align TZ/locale to exit-IP country
         }
         if proxy_url:
@@ -125,7 +159,7 @@ class CamoufoxFetcher:
             kwargs["country"] = proxy_country.upper()
 
         try:
-            async with camoufox.AsyncNewBrowser(**kwargs) as browser:
+            async with _new_browser(camoufox, **kwargs) as browser:
                 page = await browser.new_page()
 
                 async def _check_response(response: object) -> None:
@@ -141,7 +175,17 @@ class CamoufoxFetcher:
                 page.on("response", _check_response)
 
                 if headers:
-                    await page.set_extra_http_headers(headers)
+                    # Let camoufox humanize provide the UA and language — a
+                    # Chrome-style rotated UA over a Firefox engine is a
+                    # detectable inconsistency (verified on httpbin echo).
+                    # Keep Cookie (session) and other custom headers only.
+                    extra = {
+                        k: v
+                        for k, v in headers.items()
+                        if k.lower() not in ("user-agent", "accept-language")
+                    }
+                    if extra:
+                        await page.set_extra_http_headers(extra)
 
                 response = await page.goto(
                     url,

@@ -28,11 +28,26 @@ does not install [browser]) imports cleanly without ImportError.
 
 ### Docker: no separate image (yet)
 Dockerfile already installs [browser] deps including camoufox.
-Firefox binary (~200 MB) is already pulled by `camoufox-install` at
-container start via the existing entrypoint pattern.  A split worker/API
-image is deferred until the EUR 20/month budget is visibly strained.
-The worker runs on a single t3.small (~€9/month); adding camoufox does
-not require a second instance because tiers 5-6 are rare cold-start paths.
+The Firefox binary is fetched at Docker build time via
+`python -m camoufox fetch` in the Dockerfile, not at container start.
+A split worker/API image is deferred until the EUR 20/month budget is
+visibly strained.  The worker runs on a single t3.small (~€9/month);
+adding camoufox does not require a second instance because tiers 5-6 are
+rare cold-start paths.
+
+> **Status update (post-audit):** the original claim that the Firefox binary
+> was "already pulled by `camoufox-install` at container start via the
+> existing entrypoint pattern" was inaccurate — no `camoufox-install` step
+> existed anywhere in the Dockerfile, docker-compose.yml, or worker
+> entrypoint. Fixed by an explicit
+> `RUN python -m camoufox fetch` build step in the Dockerfile
+> runtime stage (plus Xvfb for `headless="virtual"` launches; the
+> `--browserforge` flag does not exist in this CLI — variant selection is
+> version-prefix based), a non-fatal
+> `verify_camoufox()` startup self-check (`app/worker/camoufox_check.py`,
+> called from `fetch_task.startup()`), and the `mode="camoufox"` →
+> camoufox engine mapping in `fetch_task.py` (it previously resolved to the
+> Playwright/Chromium engine).
 
 ### GeoIP alignment
 When proxy.country is set, `country=` is passed to AsyncNewBrowser so
