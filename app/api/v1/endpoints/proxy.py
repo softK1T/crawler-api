@@ -155,13 +155,17 @@ async def import_proxies(
     """Bulk import proxies in host:port:user:pass:country format.
 
     Each proxy is upserted by (provider, URL). Existing proxies are
-    reactivated; new proxies are inserted into the tenant's pool.
+    reactivated; new proxies are inserted into a freshly created pool —
+    the pool row must exist first or every insert violates the FK.
     """
     from uuid import uuid4
 
     from sqlalchemy.dialects.postgresql import insert
 
     pool_id = uuid4()
+    db.add(ProxyPool(id=pool_id, name=f"bulk-import-{pool_id.hex[:8]}", provider="webshare"))
+    await db.flush()
+
     created = 0
 
     for item in payload.proxies:
@@ -173,6 +177,7 @@ async def import_proxies(
                 provider="webshare",
                 url=proxy_url,
                 country=item.country.upper()[:2],
+                proxy_type=item.proxy_type,
                 health_score=1.0,
                 consecutive_failures=0,
             )
@@ -180,6 +185,7 @@ async def import_proxies(
                 index_elements=["provider", "url"],
                 set_={
                     "country": item.country.upper()[:2],
+                    "proxy_type": item.proxy_type,
                     "health_score": 1.0,
                     "consecutive_failures": 0,
                     "cooldown_until": None,
