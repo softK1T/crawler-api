@@ -1,11 +1,13 @@
 from app.services.adapters.base import SiteAdapter
+from app.services.adapters.example_site import ExampleSiteAdapter
+from app.services.adapters.quotes_toscrape import QuotesToScrapeAdapter
 
 # Registry: domain -> SiteAdapter subclass
 # Add entries here when implementing a new site adapter.
-# Example:
-#   from app.services.adapters.mysite import MySiteAdapter
-#   ADAPTERS["mysite.com"] = MySiteAdapter
-ADAPTERS: dict[str, type[SiteAdapter]] = {}
+ADAPTERS: dict[str, type[SiteAdapter]] = {
+    "example.com": ExampleSiteAdapter,
+    "quotes.toscrape.com": QuotesToScrapeAdapter,
+}
 
 
 def get_adapter(url: str) -> SiteAdapter:

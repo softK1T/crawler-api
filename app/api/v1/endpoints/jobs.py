@@ -57,21 +57,21 @@ async def create_fetch(
 
     from app.services.job_service import JobService
 
-    domain = normalize_domain(urlparse(body.url).hostname or body.url)
+    domain = normalize_domain(urlparse(str(body.url)).hostname or str(body.url))
 
     # 2. Rate limit check.
     # domain_rps comes from the DomainPolicy — it was hardcoded to 1.0, so a
     # per-domain rate_limit_rps set by an operator had no effect at all.
     from app.services.policy_resolver import resolve_policy
 
-    _policy = await resolve_policy(body.url, db)
+    _policy = await resolve_policy(str(body.url), db)
     _domain_rps = float(getattr(_policy, "rate_limit_rps", None) or 1.0)
 
     rate_limiter = req.app.state.rate_limiter
     result = await rate_limiter.check_all(
         api_key_prefix=api_key.prefix,
         application_id=api_key.application_id,
-        domain=body.url,
+        domain=str(body.url),
         proxy_id=None,
         domain_rps=_domain_rps,
         monthly_quota=settings.default_monthly_quota,
@@ -128,7 +128,7 @@ async def create_fetch(
 
     await job_svc.enqueue(
         job_id=job_id,
-        url=body.url,
+        url=str(body.url),
         mode=body.mode,
         api_key=api_key,
         domain=domain,
