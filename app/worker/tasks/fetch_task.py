@@ -150,7 +150,7 @@ async def fetch_task(
                 job_id,
                 "completed",
                 settings.job_result_ttl_s,
-                result_data=schema.model_dump(),
+                result_data=schema.model_dump(mode="json"),  # UUID proxy_id must serialize
             )
 
             # 8. Policy learner — write escalation outcome back to DB.
