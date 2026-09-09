@@ -335,7 +335,7 @@ async def fetch_with_retry(
             # 2. Build headers.
             from app.services.fetchers.headers import headers_for_domain
 
-            merged_headers = headers_for_domain(policy, session_key=session_key)
+            merged_headers = headers_for_domain(policy)
 
             # 3. Fetch.
             result = await current_fetcher.fetch(
