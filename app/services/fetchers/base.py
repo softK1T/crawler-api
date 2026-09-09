@@ -357,6 +357,7 @@ async def fetch_with_retry(
             )
             result.retries_used = total_attempts - 1
             result.trace_id = trace_id
+            result._tier_used = esc.tier
 
             # 4. Check for block.
             if result.blocked:

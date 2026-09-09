@@ -53,6 +53,8 @@ async def _init_services(app: FastAPI) -> None:
         app.state.proxy_manager = ProxyManager(
             db_session_factory=AsyncSessionLocal,
             redis_client=redis_client,
+            circuit_breaker_threshold=settings.circuit_breaker_threshold,
+            circuit_breaker_timeout_s=settings.circuit_breaker_timeout_s,
         )
 
         from app.services.warc.storage import create_warc_storage

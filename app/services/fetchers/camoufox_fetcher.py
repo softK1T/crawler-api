@@ -21,6 +21,7 @@ from uuid import UUID
 
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
+from app.services.fetchers.playwright_fetcher import _split_proxy_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ class CamoufoxFetcher:
             "geoip": proxy_country is not None,  # align TZ/locale to exit-IP country
         }
         if proxy_url:
-            kwargs["proxy"] = {"server": proxy_url}
+            kwargs["proxy"] = _split_proxy_credentials(proxy_url)
         if proxy_country:
             # Pass the country so camoufox[geoip] can pick matching locale/TZ.
             kwargs["country"] = proxy_country.upper()

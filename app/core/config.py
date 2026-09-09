@@ -50,7 +50,9 @@ class Settings(BaseSettings):
     default_monthly_quota: int = 100_000  # per-application monthly quota
 
     # Circuit breaker settings
-    circuit_breaker_threshold: int = 5
+    # Must be high enough to let the escalation ladder reach premium/browser
+    # tiers on hard targets before the breaker trips for the whole domain.
+    circuit_breaker_threshold: int = 20
     circuit_breaker_timeout_s: int = 300
     proxy_sticky_ttl_s: int = 1800
 

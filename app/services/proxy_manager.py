@@ -37,13 +37,27 @@ class ProxyManager:
     Instantiated once at startup and stored on ``app.state.proxy_manager``.
     """
 
-    # Circuit breaker constants.
+    # Circuit breaker constants — fallback defaults if not overridden via ctor.
     CIRCUIT_BREAKER_THRESHOLD = 5
     CIRCUIT_BREAKER_TIMEOUT_S = 300
 
-    def __init__(self, db_session_factory, redis_client) -> None:
+    def __init__(
+        self,
+        db_session_factory,
+        redis_client,
+        *,
+        circuit_breaker_threshold: int | None = None,
+        circuit_breaker_timeout_s: int | None = None,
+    ) -> None:
         self._db_factory = db_session_factory
         self._redis = redis_client
+        # Instance-level overrides so the escalation ladder (which needs
+        # MAX_ATTEMPTS_PER_TIER * len(LADDER) attempts to reach the top tier)
+        # isn't tripped by a breaker threshold lower than the ladder's depth.
+        if circuit_breaker_threshold is not None:
+            self.CIRCUIT_BREAKER_THRESHOLD = circuit_breaker_threshold
+        if circuit_breaker_timeout_s is not None:
+            self.CIRCUIT_BREAKER_TIMEOUT_S = circuit_breaker_timeout_s
 
     # ── Circuit breaker (Redis) ───────────────────────────────────────────────
 

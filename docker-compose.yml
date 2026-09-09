@@ -46,6 +46,8 @@ services:
 
   api:
     build: .
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy
@@ -71,6 +73,8 @@ services:
   worker:
     build: .
     ipc: host
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy

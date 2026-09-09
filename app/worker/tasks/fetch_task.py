@@ -380,6 +380,8 @@ async def startup(ctx: dict) -> None:
     ctx["proxy_manager"] = ProxyManager(
         db_session_factory=AsyncSessionLocal,
         redis_client=ctx["redis"],
+        circuit_breaker_threshold=settings.circuit_breaker_threshold,
+        circuit_breaker_timeout_s=settings.circuit_breaker_timeout_s,
     )
     ctx["warc_storage"] = await create_warc_storage(settings)
 

@@ -73,6 +73,7 @@ class FetchResultSchema(BaseModel):
     blocked: bool = False
     block_reason: BlockReason | None = None
     retries_used: int = 0
+    tier_used: int = 0
     trace_id: str | None = None
 
     @classmethod
@@ -96,5 +97,6 @@ class FetchResultSchema(BaseModel):
             blocked=r.blocked,
             block_reason=normalize_block_reason(r.block_reason),
             retries_used=r.retries_used,
+            tier_used=getattr(r, "_tier_used", 0),
             trace_id=r.trace_id,
         )

@@ -6,11 +6,35 @@ single Chromium process with a semaphore to cap concurrent contexts.
 
 import logging
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
 
 logger = logging.getLogger(__name__)
+
+
+def _split_proxy_credentials(proxy_url: str) -> dict[str, str]:
+    """Split ``http://user:pass@host:port`` into Playwright's proxy shape.
+
+    Playwright/Chromium's ``--proxy-server`` flag does NOT accept embedded
+    credentials in the server URL — it authenticates only via the separate
+    ``username``/``password`` fields.  Passing the full URL as ``server``
+    causes Chromium to connect anonymously, and the proxy replies 407.
+    """
+    parts = urlsplit(proxy_url)
+    config: dict[str, str] = {}
+    if parts.username:
+        config["username"] = parts.username
+    if parts.password:
+        config["password"] = parts.password
+    # Rebuild server URL without credentials.
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    server = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    config["server"] = server
+    return config
 
 
 class PlaywrightFetcher:
@@ -49,7 +73,7 @@ class PlaywrightFetcher:
         if proxy is not None:
             proxy_url = getattr(proxy, "url", None)
             if proxy_url:
-                proxy_config = {"server": proxy_url}
+                proxy_config = _split_proxy_credentials(proxy_url)
             proxy_id = getattr(proxy, "id", None)
 
         if self._pool is None:
