@@ -9,6 +9,7 @@ import pytest
 
 def _fetch_task_source() -> str:
     module = importlib.import_module("app.worker.tasks.fetch_task")
+    assert module.__file__ is not None
     with open(module.__file__, encoding="utf-8") as f:
         return f.read()
 

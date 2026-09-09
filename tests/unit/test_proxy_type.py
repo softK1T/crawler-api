@@ -122,6 +122,7 @@ async def test_add_proxy_to_pool_persists_proxy_type_and_get_proxy_finds_it(
     from sqlalchemy import select
 
     from app.api.v1.endpoints.admin import add_proxy_to_pool
+    from app.models.api_key import ApiKey
     from app.models.proxy import Proxy
     from app.models.proxy_pool import ProxyPool
     from app.schemas.admin import ProxyCreate
@@ -138,7 +139,15 @@ async def test_add_proxy_to_pool_persists_proxy_type_and_get_proxy_finds_it(
         country="PL",
         proxy_type="residential",
     )
-    row = await add_proxy_to_pool(pool.id, body=body, _api_key=None, db=db_session)
+    # In-memory only: never added to the session, so no Application row is needed.
+    _api_key = ApiKey(
+        application_id=uuid4(),
+        prefix="test1234",
+        hashed_key="dummy",
+        scopes=["admin"],
+        mode="live",
+    )
+    row = await add_proxy_to_pool(pool.id, body=body, _api_key=_api_key, db=db_session)
     assert row.proxy_type == "residential"
 
     # Persisted in the DB, not just on the in-memory ORM object.
