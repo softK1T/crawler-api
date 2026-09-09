@@ -9,6 +9,7 @@ class RawProxy:
     url: str
     country: str | None
     proxy_type: str
+    city: str | None = None
 
 
 class ProxyProvider(ABC):

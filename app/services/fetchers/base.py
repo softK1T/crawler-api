@@ -114,6 +114,7 @@ async def fetch_with_retry(
     trace_id: str | None = None,
     use_proxy: bool | None = None,
     proxy_country: str | None = None,
+    proxy_city: str | None = None,
     proxy_type: str | None = None,
     session_key: str | None = None,
     browser_pool: BrowserPool | None = None,
@@ -209,6 +210,13 @@ async def fetch_with_retry(
     )
     if effective_country is not None:
         effective_country = effective_country.strip().upper()
+
+    # ── City resolution — same precedence as country: caller arg wins,
+    # falling back to policy.proxy_city if present (most policies won't set
+    # it; city targeting is primarily a request-level override). ─────────────
+    effective_city = proxy_city if proxy_city is not None else (getattr(policy, "proxy_city", None))
+    if effective_city is not None:
+        effective_city = effective_city.strip()
 
     # ── Escalation state ─────────────────────────────────────────────────────
     if requested_engine is not None:
@@ -316,6 +324,7 @@ async def fetch_with_retry(
                     sticky_key=sticky_key if total_attempts == 1 else None,
                     exclude_ids=failed_proxy_ids,
                     country=effective_country,
+                    city=effective_city,
                     proxy_type=tier_proxy_type,
                 )
 
@@ -323,13 +332,15 @@ async def fetch_with_retry(
                     if failed_proxy_ids:
                         raise ProxyPoolExhaustedError(
                             f"PROXY_POOL_EXHAUSTED: all eligible "
-                            f"{effective_country or 'ANY'} proxies were "
+                            f"{effective_country or 'ANY'}"
+                            f"{'/' + effective_city if effective_city else ''} proxies were "
                             f"blocked or unhealthy for domain={domain}"
                         )
                     raise ProxyPoolUnavailableError(
                         f"PROXY_POOL_EMPTY: no healthy proxy for "
                         f"domain={domain}, "
-                        f"country={effective_country or 'ANY'}"
+                        f"country={effective_country or 'ANY'}, "
+                        f"city={effective_city or 'ANY'}"
                     )
 
             # 2. Build headers.

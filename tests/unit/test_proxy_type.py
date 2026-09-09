@@ -6,9 +6,17 @@ import pytest
 
 
 class FakeProxy:
-    def __init__(self, proxy_id: str, country: str, proxy_type: str, health: float = 1.0):
+    def __init__(
+        self,
+        proxy_id: str,
+        country: str,
+        proxy_type: str,
+        health: float = 1.0,
+        city: str | None = None,
+    ):
         self.id = proxy_id
         self.country = country
+        self.city = city
         self.proxy_type = proxy_type
         self.health_score = health
         self.cooldown_until = None
@@ -73,6 +81,58 @@ async def test_proxy_type_none_returns_any():
         domain="example.com",
         sticky_key=None,
         proxy_type=None,
+    )
+
+    assert proxy is not None
+
+
+@pytest.mark.asyncio
+async def test_city_filter_passed_through_to_query_and_returns_match():
+    """city='Warsaw' must not prevent a matching proxy from being returned."""
+    warsaw = FakeProxy("w-1", "PL", "residential", city="Warsaw")
+
+    mgr = _make_manager()
+    mock_db = MagicMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock()
+    mgr._db_factory.return_value = mock_db
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [warsaw]
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    proxy = await mgr.get_proxy(
+        domain="example.com",
+        sticky_key=None,
+        country="PL",
+        city="Warsaw",
+        proxy_type="residential",
+    )
+
+    assert proxy is not None
+    assert proxy.city == "Warsaw"
+
+
+@pytest.mark.asyncio
+async def test_city_none_does_not_filter():
+    """city=None must return any city (backwards compatible default)."""
+    warsaw = FakeProxy("w-1", "PL", "residential", city="Warsaw")
+    krakow = FakeProxy("k-1", "PL", "residential", city="Krakow")
+
+    mgr = _make_manager()
+    mock_db = MagicMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock()
+    mgr._db_factory.return_value = mock_db
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [warsaw, krakow]
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    proxy = await mgr.get_proxy(
+        domain="example.com",
+        sticky_key=None,
+        city=None,
     )
 
     assert proxy is not None

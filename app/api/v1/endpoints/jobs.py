@@ -117,6 +117,8 @@ async def create_fetch(
         merged_options["use_proxy"] = body.use_proxy
     if body.proxy_country is not None:
         merged_options["proxy_country"] = body.proxy_country.upper()
+    if body.proxy_city is not None:
+        merged_options["proxy_city"] = body.proxy_city
     if body.proxy_type is not None:
         merged_options["proxy_type"] = body.proxy_type
     if body.session_key is not None:

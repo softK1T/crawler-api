@@ -40,6 +40,7 @@ class Proxy(Base):
     )
     url: Mapped[str] = mapped_column(String(1024), nullable=False)
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(128), nullable=True)
     proxy_type: Mapped[str] = mapped_column(
         SAEnum(ProxyType, name="proxy_type_enum"),
         nullable=False,

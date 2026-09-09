@@ -5,16 +5,6 @@ import asyncio
 from app.services.proxy_providers.base import ProxyProvider, RawProxy
 
 
-def _parse_line(line: str) -> RawProxy:
-    host, port, user, pwd, country, proxy_type = line.split(":", maxsplit=5)
-    country_value = country.upper()[:2] if country else None
-    return RawProxy(
-        url=f"http://{user}:{pwd}@{host}:{port}",
-        country=country_value,
-        proxy_type=proxy_type.lower(),
-    )
-
-
 class WebshareProvider(ProxyProvider):
     name = "webshare"
 
@@ -22,7 +12,6 @@ class WebshareProvider(ProxyProvider):
         self._api_key = api_key
 
     async def fetch_proxies(self) -> list[RawProxy]:
-        from app.services.webshare_sync import fetch_webshare_proxies
+        from app.services.webshare_sync import fetch_all_webshare_proxies
 
-        lines = await asyncio.to_thread(fetch_webshare_proxies, self._api_key)
-        return [_parse_line(line) for line in lines]
+        return await asyncio.to_thread(fetch_all_webshare_proxies, self._api_key)

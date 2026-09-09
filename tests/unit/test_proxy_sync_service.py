@@ -60,6 +60,64 @@ async def test_sync_upserts_by_provider_and_url_and_creates_one_pool_per_provide
 
 
 @pytest.mark.asyncio
+async def test_sync_persists_and_updates_city(db_session) -> None:
+    @asynccontextmanager
+    async def _db_factory():
+        yield db_session
+
+    proxy_url = "http://warsaw-proxy:9000"
+    service = ProxySyncService(
+        db_factory=_db_factory,
+        providers=[
+            _Provider(
+                "webshare",
+                [
+                    RawProxy(
+                        url=proxy_url,
+                        country="PL",
+                        proxy_type="residential",
+                        city="Warsaw",
+                    )
+                ],
+            )
+        ],
+    )
+    await service.sync()
+
+    proxy = (await db_session.execute(select(Proxy).where(Proxy.url == proxy_url))).scalar_one()
+    assert proxy.city == "Warsaw"
+    assert proxy.proxy_type == "residential"
+
+    updated_service = ProxySyncService(
+        db_factory=_db_factory,
+        providers=[
+            _Provider(
+                "webshare",
+                [
+                    RawProxy(
+                        url=proxy_url,
+                        country="PL",
+                        proxy_type="residential",
+                        city="Krakow",
+                    )
+                ],
+            )
+        ],
+    )
+    await updated_service.sync()
+
+    # _db_factory yields the same fixture session across both sync() calls
+    # (production code opens a fresh session per call). The upsert runs as
+    # core-level SQL via db.execute(), bypassing the ORM unit-of-work, so the
+    # identity-mapped object from the first select above is never refreshed
+    # (expire_on_commit=False). Expire it so this select re-reads from the DB.
+    db_session.expire_all()
+
+    refreshed = (await db_session.execute(select(Proxy).where(Proxy.url == proxy_url))).scalar_one()
+    assert refreshed.city == "Krakow"
+
+
+@pytest.mark.asyncio
 async def test_sync_preserves_health_and_tracks_activation_transitions(db_session) -> None:
     @asynccontextmanager
     async def _db_factory():
@@ -90,6 +148,7 @@ async def test_sync_preserves_health_and_tracks_activation_transitions(db_sessio
     ).scalar_one()
     assert refreshed.country == "PL"
     assert refreshed.proxy_type == "datacenter"
+    assert refreshed.city is None
     assert refreshed.health_score == pytest.approx(0.33)
     assert refreshed.consecutive_failures == 3
     assert refreshed.total_requests == 123

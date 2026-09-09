@@ -120,6 +120,7 @@ class ProxyManager:
         proxy_sticky_ttl_s: int = 1800,
         exclude_ids: set[UUID] | None = None,
         country: str | None = None,
+        city: str | None = None,
         proxy_type: str | None = None,
     ) -> Proxy | None:
         """Select a proxy by weighted health score.
@@ -132,6 +133,7 @@ class ProxyManager:
         *tenant_id* is an alias for *pool_id* (maps to ProxyPool).
         *exclude_ids* removes proxies already tried (rotation).
         *country* filters to proxies matching an ISO 3166-1 alpha-2 code.
+        *city* filters to proxies matching a city name exactly.
         *proxy_type* filters to 'residential' or 'datacenter' proxies.
         """
         from app.models.proxy import Proxy
@@ -168,6 +170,8 @@ class ProxyManager:
             stmt = stmt.where(Proxy.is_active.is_(True))
             if country is not None:
                 stmt = stmt.where(Proxy.country == country.upper()[:2])
+            if city is not None:
+                stmt = stmt.where(Proxy.city == city)
             if proxy_type is not None:
                 stmt = stmt.where(Proxy.proxy_type == proxy_type)
             result = await db.execute(stmt)
@@ -177,10 +181,11 @@ class ProxyManager:
             eligible = [p for p in all_proxies if not is_on_cooldown(p) and p.id not in _excluded]
             if not eligible:
                 logger.warning(
-                    "No eligible proxies for pool=%s domain=%s country=%s excluded=%d",
+                    "No eligible proxies for pool=%s domain=%s country=%s city=%s excluded=%d",
                     effective_pool,
                     domain,
                     country,
+                    city,
                     len(_excluded),
                 )
                 return None

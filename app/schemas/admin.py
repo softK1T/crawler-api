@@ -102,7 +102,7 @@ class ProxyCreate(BaseModel):
     pool_id: UUID
     url: str
     country: str | None = Field(default=None, min_length=2, max_length=2)
-    proxy_type: Literal["residential", "datacenter"] = "datacenter"
+    proxy_type: Literal["residential", "datacenter", "isp"] = "datacenter"
 
     @field_validator("url")
     @classmethod

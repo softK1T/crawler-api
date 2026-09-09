@@ -63,6 +63,7 @@ class ProxySyncService:
                         "provider": provider.name,
                         "url": proxy.url,
                         "country": proxy.country,
+                        "city": proxy.city,
                         "proxy_type": proxy.proxy_type,
                         "is_active": True,
                     }
@@ -74,6 +75,7 @@ class ProxySyncService:
                     index_elements=["provider", "url"],
                     set_={
                         "country": upsert_stmt.excluded.country,
+                        "city": upsert_stmt.excluded.city,
                         "proxy_type": upsert_stmt.excluded.proxy_type,
                         "updated_at": now,
                     },

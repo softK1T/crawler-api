@@ -71,7 +71,10 @@ async def fetch_task(
             # request > domain_policy > defaults).
             req_use_proxy = options["use_proxy"] if "use_proxy" in options else None
             req_proxy_country = options["proxy_country"] if "proxy_country" in options else None
-            req_proxy_type = options.get("proxy_type")  # "residential" | "datacenter" | None
+            req_proxy_city = options.get("proxy_city")
+            req_proxy_type = options.get(
+                "proxy_type"
+            )  # "residential" | "datacenter" | "isp" | None
             req_session_key = options.get("session_key")
 
             result = await fetch_with_retry(
@@ -84,6 +87,7 @@ async def fetch_task(
                 trace_id=job_id,
                 use_proxy=req_use_proxy,
                 proxy_country=req_proxy_country,
+                proxy_city=req_proxy_city,
                 proxy_type=req_proxy_type,
                 session_key=req_session_key,
                 browser_pool=ctx.get("browser_pool"),
