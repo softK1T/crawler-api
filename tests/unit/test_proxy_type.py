@@ -76,3 +76,107 @@ async def test_proxy_type_none_returns_any():
     )
 
     assert proxy is not None
+
+
+# ── BUG 2 regression: proxy_type must be settable through the admin API ───────
+
+
+def test_proxy_create_schema_accepts_proxy_type():
+    """ProxyCreate must carry proxy_type (residential is allowed)."""
+    from app.schemas.admin import ProxyCreate
+
+    body = ProxyCreate(
+        pool_id="00000000-0000-0000-0000-000000000001",
+        url="http://user:pass@1.2.3.4:7970",
+        country="PL",
+        proxy_type="residential",
+    )
+    assert body.proxy_type == "residential"
+
+
+def test_proxy_create_schema_defaults_to_datacenter():
+    """Omitting proxy_type keeps the datacenter default (backwards compatible)."""
+    from app.schemas.admin import ProxyCreate
+
+    body = ProxyCreate(
+        pool_id="00000000-0000-0000-0000-000000000001",
+        url="http://user:pass@1.2.3.4:7970",
+        country="PL",
+    )
+    assert body.proxy_type == "datacenter"
+
+
+@pytest.mark.asyncio
+async def test_add_proxy_to_pool_persists_proxy_type_and_get_proxy_finds_it(
+    db_session, redis_client
+):
+    """A proxy created with proxy_type='residential' must be stored with that
+    type and be returned by get_proxy(proxy_type='residential').
+
+    Regression: previously all API-created proxies fell back to the
+    server_default 'datacenter', so residential selection always returned
+    PROXY_POOL_EMPTY.
+    """
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from app.api.v1.endpoints.admin import add_proxy_to_pool
+    from app.models.api_key import ApiKey
+    from app.models.proxy import Proxy
+    from app.models.proxy_pool import ProxyPool
+    from app.schemas.admin import ProxyCreate
+    from app.services.proxy_manager import ProxyManager
+
+    pool = ProxyPool(name=f"test-pool-{uuid4().hex[:8]}", provider="webshare")
+    db_session.add(pool)
+    await db_session.commit()
+    await db_session.refresh(pool)
+
+    body = ProxyCreate(
+        pool_id=pool.id,
+        url="http://resuser:pass@1.2.3.4:7970",
+        country="PL",
+        proxy_type="residential",
+    )
+    # In-memory only: never added to the session, so no Application row is needed.
+    _api_key = ApiKey(
+        application_id=uuid4(),
+        prefix="test1234",
+        hashed_key="dummy",
+        scopes=["admin"],
+        mode="live",
+    )
+    row = await add_proxy_to_pool(pool.id, body=body, _api_key=_api_key, db=db_session)
+    assert row.proxy_type == "residential"
+
+    # Persisted in the DB, not just on the in-memory ORM object.
+    persisted = (await db_session.execute(select(Proxy).where(Proxy.id == row.id))).scalar_one()
+    assert persisted.proxy_type == "residential"
+
+    # get_proxy with the same filter must find it; datacenter filter must not.
+    class _SessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    manager = ProxyManager(
+        db_session_factory=_SessionFactory(db_session), redis_client=redis_client
+    )
+    picked = await manager.get_proxy(
+        domain="example.com", sticky_key=None, proxy_type="residential"
+    )
+    assert picked is not None and picked.id == row.id
+
+    picked_dc = await manager.get_proxy(
+        domain="example.com", sticky_key=None, proxy_type="datacenter"
+    )
+    assert picked_dc is None

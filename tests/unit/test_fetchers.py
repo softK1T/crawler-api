@@ -50,6 +50,15 @@ def test_get_fetcher_unknown_engine_raises():
         get_fetcher("nope")
 
 
+def test_mode_to_engine_maps_camoufox_to_camoufox():
+    from app.worker.tasks.fetch_task import MODE_TO_ENGINE
+
+    assert MODE_TO_ENGINE["camoufox"] == "camoufox"
+    assert MODE_TO_ENGINE["static"] == "httpx"
+    assert MODE_TO_ENGINE["stealth"] == "curl_cffi"
+    assert MODE_TO_ENGINE["browser"] == "playwright"
+
+
 def test_headers_for_domain_merges():
     from app.services.fetchers.headers import headers_for_domain
 

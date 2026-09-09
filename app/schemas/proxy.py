@@ -53,6 +53,7 @@ class ProxyImportItem(BaseModel):
     username: str
     password: str
     country: str  # ISO 3166-1 alpha-2
+    proxy_type: Literal["residential", "datacenter"] = "datacenter"
 
 
 class ProxyBulkImport(BaseModel):

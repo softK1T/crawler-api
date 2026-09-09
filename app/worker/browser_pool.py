@@ -25,7 +25,10 @@ _VIEWPORTS = [
 ]
 
 _STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+// navigator.webdriver is NOT redefined here: --disable-blink-features=
+// AutomationControlled already removes the property, and creating an
+// accessor in its place is itself a fingerprint bot.sannysoft.com flags
+// ("WebDriver (New)").  Keep the remaining humanization only.
 Object.defineProperty(navigator, 'languages', {get: () => ['pl-PL', 'pl', 'en-US']});
 Object.defineProperty(navigator, 'platform', {get: () => 'Linux x86_64'});
 window.chrome = window.chrome || {runtime: {}};

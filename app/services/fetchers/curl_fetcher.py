@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 
 IMPERSONATION = "chrome120"
 
+# UA pinned to the impersonation profile: a rotated Firefox UA riding on
+# Chrome TLS is an inconsistency anti-bot vendors fingerprint (verified on
+# tls.peet.ws — the site echoes both UA and JA3 side by side).
+CHROME_120_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
 # ── Shared executor ───────────────────────────────────────────────────────────
 _executor: ThreadPoolExecutor | None = None
 
@@ -92,7 +100,9 @@ class CurlFetcher:
                     "verify": True,
                 }
                 if headers:
-                    kwargs["headers"] = headers
+                    merged = dict(headers)
+                    merged["User-Agent"] = CHROME_120_UA
+                    kwargs["headers"] = merged
                 if proxy_url:
                     kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
 

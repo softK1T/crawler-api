@@ -31,8 +31,12 @@ async def create_crawl_batch(
     # Domain-level rate limiting: charge once per unique domain in the batch.
     rate_limiter = req.app.state.rate_limiter
     unique_domains = {normalize_domain(str(u)) for u in request.urls}
+    from app.services.policy_resolver import resolve_policy
+
     for domain in unique_domains:
-        result = await rate_limiter.check_domain(domain, rps=1.0)
+        _policy = await resolve_policy(f"https://{domain}", db)
+        _rps = float(getattr(_policy, "rate_limit_rps", None) or 1.0)
+        result = await rate_limiter.check_domain(domain, rps=_rps)
         if not result["allowed"]:
             raise HTTPException(
                 status_code=429,
@@ -45,12 +49,17 @@ async def create_crawl_batch(
                 headers={"Retry-After": str(math.ceil(result["retry_after_s"]))},
             )
 
-    # Note: BatchCrawlRequest may have fewer fields than the old request.
-    # Fields not in the schema default to None.
-    return BatchService.create_batch(
+    # Enqueue one real fetch_task per URL via the shared JobService.
+    import redis.asyncio as aioredis
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    return await BatchService.create_batch(
         urls=[str(url) for url in request.urls],
         mode=request.mode,
-        project_id=None,
+        api_key=api_key,
+        redis_client=redis_client,
+        callback_url=str(request.callback_url) if request.callback_url else None,
+        options=request.options,
     )
 
 
@@ -59,7 +68,10 @@ async def get_batch_status(
     batch_id: str,
     api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
 ):
-    result = BatchService.get_batch_status(batch_id)
+    import redis.asyncio as aioredis
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    result = await BatchService.get_batch_status(batch_id, redis_client)
     if not result:
         raise HTTPException(status_code=404, detail="Batch not found")
     return result
@@ -70,7 +82,10 @@ async def get_batch_results(
     batch_id: str,
     api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
 ):
-    results = BatchService.get_batch_results(batch_id)
+    import redis.asyncio as aioredis
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    results = await BatchService.get_batch_results(batch_id, redis_client)
     if not results:
         raise HTTPException(status_code=404, detail="Batch not found")
     return results

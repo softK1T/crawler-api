@@ -7,12 +7,16 @@ from app.services.fetchers.base import FetcherProtocol, FetchError, FetchResult,
 logger = logging.getLogger(__name__)
 
 
-def get_fetcher(engine: str, *, browser_pool=None) -> FetcherProtocol:
+def get_fetcher(
+    engine: str, *, browser_pool=None, camoufox_ready: bool | None = None
+) -> FetcherProtocol:
     """Return a fetcher instance for *engine*.
 
     Supported engines: ``"httpx"``, ``"curl_cffi"``, ``"playwright"``,
     ``"camoufox"`` (native CamoufoxFetcher).
     *browser_pool* is injected into PlaywrightFetcher for browser reuse.
+    *camoufox_ready* carries the worker-startup self-check result into
+    CamoufoxFetcher (False → fail fast with a clear FetchError).
     """
     if engine == "httpx":
         from app.services.fetchers.httpx_fetcher import HttpxFetcher
@@ -29,7 +33,7 @@ def get_fetcher(engine: str, *, browser_pool=None) -> FetcherProtocol:
     if engine == "camoufox":
         from app.services.fetchers.camoufox_fetcher import CamoufoxFetcher
 
-        return CamoufoxFetcher(browser_pool=browser_pool)
+        return CamoufoxFetcher(browser_pool=browser_pool, camoufox_ready=camoufox_ready)
     raise ValueError(f"Unknown engine: {engine!r}")
 
 

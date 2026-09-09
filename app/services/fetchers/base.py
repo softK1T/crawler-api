@@ -115,7 +115,10 @@ async def fetch_with_retry(
     use_proxy: bool | None = None,
     proxy_country: str | None = None,
     proxy_type: str | None = None,
+    session_key: str | None = None,
     browser_pool: BrowserPool | None = None,
+    requested_engine: str | None = None,
+    camoufox_ready: bool | None = None,
 ) -> FetchResult:
     """Retry loop with proxy selection, health reporting, jittered backoff,
     and adaptive engine escalation.
@@ -208,7 +211,14 @@ async def fetch_with_retry(
         effective_country = effective_country.strip().upper()
 
     # ── Escalation state ─────────────────────────────────────────────────────
-    start_tier = min(initial_tier(cast("DomainPolicy | None", policy)), max_tier)
+    if requested_engine is not None:
+        # The caller explicitly asked for a specific engine (mode="camoufox").
+        # Start at the first ladder rung using that engine instead of the
+        # learned policy tier — otherwise the request would silently run the
+        # cheap httpx tier and never touch the requested engine.
+        start_tier = next(i for i, t in enumerate(LADDER) if t.engine == requested_engine)
+    else:
+        start_tier = min(initial_tier(cast("DomainPolicy | None", policy)), max_tier)
     esc = _EscalationState(tier=start_tier, fetcher=fetcher)
 
     last_result: FetchResult | None = None
@@ -217,20 +227,36 @@ async def fetch_with_retry(
     total_attempts = 0
 
     while total_attempts < max_attempts:
-        # Clamp tier to max_tier (premium gate).
+        # Clamp tier to max_tier (premium gate).  An explicit
+        # requested_engine bypasses the gate for the ENGINE only: the premium
+        # gate protects proxy EUR spend, not engine CPU, so the requested
+        # engine runs direct (no proxy) instead of bailing out.
+        tier_bypassed_premium_gate = False
         if esc.tier > max_tier:
-            logger.warning(
-                "escalation_premium_gate_hit",
-                extra={
-                    "domain": domain,
-                    "tier": esc.tier,
-                    "max_tier": max_tier,
-                    "reason": "enable_premium_proxy_tiers=False",
-                },
-            )
-            if last_result is not None:
-                return last_result
-            break
+            if requested_engine is not None and LADDER[esc.tier].engine == requested_engine:
+                tier_bypassed_premium_gate = True
+                logger.warning(
+                    "premium_gate_bypassed_for_requested_engine",
+                    extra={
+                        "domain": domain,
+                        "engine": requested_engine,
+                        "tier": esc.tier,
+                        "reason": "explicit engine request — premium proxy dropped, engine kept",
+                    },
+                )
+            else:
+                logger.warning(
+                    "escalation_premium_gate_hit",
+                    extra={
+                        "domain": domain,
+                        "tier": esc.tier,
+                        "max_tier": max_tier,
+                        "reason": "enable_premium_proxy_tiers=False",
+                    },
+                )
+                if last_result is not None:
+                    return last_result
+                break
 
         tier_def = LADDER[esc.tier]
 
@@ -243,6 +269,8 @@ async def fetch_with_retry(
 
         if caller_forced_use_proxy is not None:
             tier_use_proxy = caller_forced_use_proxy
+        elif tier_bypassed_premium_gate:
+            tier_use_proxy = False
         elif tier_def.use_proxy:
             tier_use_proxy = True
         elif policy_use_proxy is not None:
@@ -253,6 +281,8 @@ async def fetch_with_retry(
         tier_proxy_type: str | None
         if caller_forced_proxy_type is not None:
             tier_proxy_type = caller_forced_proxy_type
+        elif tier_bypassed_premium_gate:
+            tier_proxy_type = None
         elif tier_def.proxy_type is not None:
             tier_proxy_type = tier_def.proxy_type
         else:
@@ -260,7 +290,11 @@ async def fetch_with_retry(
 
         # ── Re-instantiate fetcher when engine changes ───────────────────────
         if esc.fetcher is None or getattr(esc.fetcher, "_engine_name", None) != tier_def.engine:
-            esc.fetcher = get_fetcher(tier_def.engine, browser_pool=browser_pool)
+            esc.fetcher = get_fetcher(
+                tier_def.engine,
+                browser_pool=browser_pool,
+                camoufox_ready=camoufox_ready,
+            )
 
         current_fetcher = esc.fetcher
         proxy = None

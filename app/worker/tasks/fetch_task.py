@@ -9,6 +9,15 @@ from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
+# API mode → engine name.  Camoufox requests must resolve to the real
+# CamoufoxFetcher (Firefox), never to Playwright (Chromium).
+MODE_TO_ENGINE: dict[str, str] = {
+    "static": "httpx",
+    "stealth": "curl_cffi",
+    "browser": "playwright",
+    "camoufox": "camoufox",
+}
+
 
 async def fetch_task(
     ctx: dict,
@@ -46,16 +55,14 @@ async def fetch_task(
             # 3. Select fetcher — map API mode to engine name.
             from app.services.fetchers import get_fetcher
 
-            _MODE_TO_ENGINE = {
-                "static": "httpx",
-                "stealth": "curl_cffi",
-                "browser": "playwright",
-                "camoufox": "playwright",
-            }
             engine = (
-                policy.engine if policy and policy.engine else _MODE_TO_ENGINE.get(mode, "httpx")
+                policy.engine if policy and policy.engine else MODE_TO_ENGINE.get(mode, "httpx")
             )
-            fetcher = get_fetcher(engine, browser_pool=ctx.get("browser_pool"))
+            fetcher = get_fetcher(
+                engine,
+                browser_pool=ctx.get("browser_pool"),
+                camoufox_ready=ctx.get("camoufox_ready"),
+            )
 
             # 4. Execute fetch with retry.
             from app.services.fetchers.base import fetch_with_retry
@@ -65,6 +72,7 @@ async def fetch_task(
             req_use_proxy = options["use_proxy"] if "use_proxy" in options else None
             req_proxy_country = options["proxy_country"] if "proxy_country" in options else None
             req_proxy_type = options.get("proxy_type")  # "residential" | "datacenter" | None
+            req_session_key = options.get("session_key")
 
             result = await fetch_with_retry(
                 fetcher=fetcher,
@@ -77,7 +85,14 @@ async def fetch_task(
                 use_proxy=req_use_proxy,
                 proxy_country=req_proxy_country,
                 proxy_type=req_proxy_type,
+                session_key=req_session_key,
                 browser_pool=ctx.get("browser_pool"),
+                # An explicit mode must actually run its engine — otherwise
+                # the ladder starts at tier 0 (httpx) and stealth/browser/
+                # camoufox requests silently degrade to httpx.  Static stays
+                # on the ladder path (tier 0 for an empty policy).
+                requested_engine=engine if engine != "httpx" else None,
+                camoufox_ready=ctx.get("camoufox_ready"),
             )
 
             # 5. Block detection metric.
@@ -135,7 +150,7 @@ async def fetch_task(
                 job_id,
                 "completed",
                 settings.job_result_ttl_s,
-                result_data=schema.model_dump(),
+                result_data=schema.model_dump(mode="json"),  # UUID proxy_id must serialize
             )
 
             # 8. Policy learner — write escalation outcome back to DB.
@@ -376,6 +391,19 @@ async def startup(ctx: dict) -> None:
         ctx["browser_ready"] = False
         logger.error("browser_selfcheck_failed error=PLAYWRIGHT_CHROMIUM_MISSING")
         raise
+
+    # Verify Camoufox can launch too.  Unlike Chromium this is NOT fatal:
+    # Firefox is only needed at ladder tiers 5-6, so a failure marks
+    # camoufox_ready=False and CamoufoxFetcher fails fast per-request.
+    try:
+        from app.worker.camoufox_check import CamoufoxMissingError, verify_camoufox
+
+        camoufox_version = await verify_camoufox()
+        ctx["camoufox_ready"] = True
+        logger.info("camoufox_selfcheck_passed version=%s", camoufox_version)
+    except CamoufoxMissingError as exc:
+        ctx["camoufox_ready"] = False
+        logger.error("camoufox_selfcheck_failed error=%s", exc)
 
     logger.info("arq worker startup complete")
 

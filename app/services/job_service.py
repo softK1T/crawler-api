@@ -88,16 +88,20 @@ class JobService:
         )
         return job_id
 
-    async def get_status(self, job_id: str) -> None:
-        """Return job status enum.  Raises NotFoundError if key is missing."""
+    async def get_status_data(self, job_id: str) -> dict:
+        """Return the raw status payload from Redis.  Raises NotFoundError if missing."""
         from app.core.errors import NotFoundError
 
         raw = await self._redis.get(f"job:{job_id}:status")
         if not raw:
             raise NotFoundError(detail="Job not found")
-        data = json.loads(raw)
+        return json.loads(raw)
+
+    async def get_status(self, job_id: str) -> None:
+        """Return job status enum.  Raises NotFoundError if key is missing."""
         from app.schemas.job import JobStatus
 
+        data = await self.get_status_data(job_id)
         return JobStatus(data["status"])
 
     async def get_result(self, job_id: str) -> None:

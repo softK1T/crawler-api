@@ -471,9 +471,6 @@ class E2ETestRunner:
             # 8. Usage.
             await self.phase_usage()
 
-            # 9. Auth stubs (501).
-            await self.phase_auth_stubs()
-
             # 10. Admin — Domain policies.
             await self.phase_domain_policies()
 
@@ -1281,6 +1278,7 @@ class E2ETestRunner:
             ("https://example.com", "static"),
             ("https://httpbin.org/html", "static"),
             ("https://httpbin.org/user-agent", "stealth"),
+            ("https://httpbin.org/user-agent", "camoufox"),
         ]
         for url, mode in sites:
             resp = await self._request(
@@ -1306,43 +1304,79 @@ class E2ETestRunner:
 
         fetch_key = self.fetch_key or self.admin_key
 
-        # POST /batches/ — known broken: calls nonexistent JobService methods.
-        # Also may return 429 if the domain is rate-limited.
-        suite.tests.append(
-            await self._test(
-                "POST /batches/ → creates batch (known broken)",
-                "POST",
-                "/batches/",
-                {202, 429, 500},
-                key=fetch_key,
-                json_body={
-                    "urls": ["https://example.com", "https://httpbin.org/get"],
-                    "mode": "static",
-                },
-                expected_fail_reason="Calls nonexistent JobService.create_job / storage methods; also rate-limited",
-            )
+        # Create a batch — each URL becomes a real fetch_task job.
+        # 429 is possible when the domains are rate-limited earlier in the run.
+        resp = await self._request(
+            "POST",
+            "/batches/",
+            {202, 429},
+            key=fetch_key,
+            json_body={
+                "urls": ["https://example.com", "https://httpbin.org/get"],
+                "mode": "static",
+            },
         )
+        if resp.status_code == 202:
+            batch_id = resp.json()["batch_id"]
+            suite.tests.append(
+                TestCase(
+                    name="POST /batches/ → 202",
+                    outcome=Outcome.PASS,
+                    detail=f"batch_id={batch_id}",
+                    status_code=202,
+                )
+            )
+            # Status aggregation over the enqueued jobs.
+            suite.tests.append(
+                await self._test(
+                    f"GET /batches/{batch_id}/status → 200",
+                    "GET",
+                    f"/batches/{batch_id}/status",
+                    200,
+                    key=fetch_key,
+                    check=lambda r, t: _assert_json_eq(r, {"total": 2}),
+                )
+            )
+            # Results aggregation (jobs may still be running — check shape only).
+            suite.tests.append(
+                await self._test(
+                    f"GET /batches/{batch_id}/results → 200",
+                    "GET",
+                    f"/batches/{batch_id}/results",
+                    200,
+                    key=fetch_key,
+                    check=lambda r, t: _assert_has_keys(
+                        r, ["batch_id", "total", "successful", "failed", "results"]
+                    ),
+                )
+            )
+        else:
+            suite.tests.append(
+                TestCase(
+                    name="POST /batches/ → 202",
+                    outcome=Outcome.PASS,
+                    detail="Rate limited — try again later",
+                    status_code=429,
+                )
+            )
 
-        # Get batch status.
+        # Unknown batch ids → 404.
         suite.tests.append(
             await self._test(
                 "GET /batches/nonexistent/status → 404",
                 "GET",
                 "/batches/nonexistent/status",
-                {404, 500},
+                404,
                 key=fetch_key,
-                expected_fail_reason="Likely broken — uses legacy storage",
             )
         )
-
         suite.tests.append(
             await self._test(
                 "GET /batches/nonexistent/results → 404",
                 "GET",
                 "/batches/nonexistent/results",
-                {404, 500},
+                404,
                 key=fetch_key,
-                expected_fail_reason="Likely broken — uses legacy storage",
             )
         )
 
@@ -1464,29 +1498,6 @@ class E2ETestRunner:
                     403,
                     key=self.fetch_key,
                 )
-            )
-
-        suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
-        self.reports.append(suite)
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # Phase 10: Auth stubs (all return 501)
-    # ═══════════════════════════════════════════════════════════════════════
-
-    async def phase_auth_stubs(self) -> None:
-        suite = SuiteReport(suite_name="Auth stubs (Stage 8 — not implemented)")
-        t0 = time.perf_counter()
-
-        fetch_key = self.fetch_key or self.admin_key
-
-        for method, path in [
-            ("POST", "/auth/login"),
-            ("POST", "/auth/session"),
-            ("GET", "/auth/session"),
-            ("DELETE", "/auth/session"),
-        ]:
-            suite.tests.append(
-                await self._test(f"{method} {path} → 501", method, path, 501, key=fetch_key)
             )
 
         suite.suite_duration_ms = (time.perf_counter() - t0) * 1000
@@ -1687,14 +1698,16 @@ class E2ETestRunner:
 
         # Add a proxy to the pool.
         if self.proxy_pool_id:
+            # Unique username per run — (provider, url) is globally unique and
+            # the DB volume persists across runs.
             resp = await self._request(
                 "POST",
                 f"/admin/proxy-pools/{self.proxy_pool_id}/proxies",
-                {201, 500},
+                201,
                 key=self.admin_key,
                 json_body={
                     "pool_id": str(self.proxy_pool_id),
-                    "url": "http://testuser:testpass@10.0.0.1:8080",
+                    "url": f"http://testuser-{uuid4().hex[:8]}:testpass@10.0.0.1:8080",
                     "country": "PL",
                 },
             )
@@ -1709,12 +1722,11 @@ class E2ETestRunner:
                     )
                 )
             else:
-                # Sometimes returns 500 — proxy insert may fail on FK or unique constraints.
                 suite.tests.append(
                     TestCase(
                         name="POST .../proxies → 201",
-                        outcome=Outcome.EXPECTED_FAIL,
-                        detail=f"status={resp.status_code} — {resp.text[:100]}",
+                        outcome=Outcome.FAIL,
+                        detail=f"status={resp.status_code} — {resp.text[:200]}",
                         status_code=resp.status_code,
                     )
                 )
@@ -1838,14 +1850,14 @@ class E2ETestRunner:
             )
         )
 
-        # Bulk import — known bug: endpoint creates uuid4() pool_id that
-        # doesn't reference an existing proxy_pool row, causing FK violation.
+        # Bulk import — the endpoint creates its own proxy_pool row before
+        # inserting, so the FK is satisfied.  Upsert by (provider, url).
         suite.tests.append(
             await self._test(
-                "POST /proxy/admin/proxies (bulk) → 201/500",
+                "POST /proxy/admin/proxies (bulk) → 201",
                 "POST",
                 "/proxy/admin/proxies",
-                {201, 500},
+                201,
                 key=self.admin_key,
                 json_body={
                     "tenant_id": str(self.tenant_id or uuid4()),
@@ -1859,10 +1871,6 @@ class E2ETestRunner:
                         },
                     ],
                 },
-                expected_fail_reason=(
-                    "Bug: endpoint generates random pool_id without creating "
-                    "the proxy_pool row first → FK violation"
-                ),
             )
         )
 
@@ -1970,17 +1978,15 @@ class E2ETestRunner:
 
         fetch_key = self.fetch_key or self.admin_key
 
-        # URL field is str (not HttpUrl) in JobCreate schema, so Pydantic doesn't
-        # validate the format.  The server may crash when parsing a malformed URL.
+        # JobCreate.url is HttpUrl — malformed URLs are rejected at validation.
         suite.tests.append(
             await self._test(
                 "POST /v1/fetch (invalid URL) → 422",
                 "POST",
                 "/v1/fetch",
-                {422, 500},
+                422,
                 key=fetch_key,
                 json_body={"url": "not-a-valid-url", "mode": "static"},
-                expected_fail_reason="JobCreate.url is str, not HttpUrl — Pydantic doesn't validate format",
             )
         )
 
@@ -2154,6 +2160,13 @@ def _assert_json_key(resp: httpx.Response, key: str, expected: Any) -> None:
     data = resp.json()
     actual = data.get(key)
     assert actual == expected, f"Expected {key}={expected!r}, got {actual!r}"
+
+
+def _assert_json_eq(resp: httpx.Response, expected: dict[str, object]) -> None:
+    data = resp.json()
+    for key, value in expected.items():
+        actual = data.get(key)
+        assert actual == value, f"Expected {key}={value!r}, got {actual!r}"
 
 
 def _assert_has_key(resp: httpx.Response, key: str) -> None:

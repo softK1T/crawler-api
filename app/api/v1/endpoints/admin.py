@@ -183,8 +183,19 @@ async def add_proxy_to_pool(
     if not pool.is_active:
         raise AuthorizationError(detail="Cannot add proxies to an inactive pool")
 
+    # (provider, url) is globally unique — a duplicate insert would surface
+    # as an IntegrityError 500 instead of a proper 409.
+    existing = await db.execute(
+        select(Proxy).where(Proxy.url == body.url, Proxy.provider == "webshare")
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise ConflictError(detail="Proxy with this URL already exists")
+
     row = Proxy(
-        pool_id=pool_id, url=body.url, country=body.country.upper()[:2] if body.country else None
+        pool_id=pool_id,
+        url=body.url,
+        country=body.country.upper()[:2] if body.country else None,
+        proxy_type=body.proxy_type,
     )
     db.add(row)
     await db.commit()

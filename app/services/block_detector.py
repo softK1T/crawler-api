@@ -69,11 +69,17 @@ def detect_block_reason(
     if status_code == 429:
         return BlockReason.RATE_LIMITED
 
+    # cf-ray/server:cloudflare appear on EVERY Cloudflare-fronted response,
+    # including clean 200s — only a non-2xx plus those headers is a block.
+    # Body patterns (cf-chl-, "cloudflare ray id", challenge text) are
+    # challenge-page markers and match on any status.
     if (
-        "cf-ray" in normalized_headers
-        or "cloudflare" in normalized_headers.get("server", "").lower()
-        or any(pattern.search(sample) for pattern in _CLOUDFLARE_PATTERNS)
-    ):
+        (status_code >= 400)
+        and (
+            "cf-ray" in normalized_headers
+            or "cloudflare" in normalized_headers.get("server", "").lower()
+        )
+    ) or any(pattern.search(sample) for pattern in _CLOUDFLARE_PATTERNS):
         return BlockReason.CLOUDFLARE
 
     if any(pattern.search(sample) for pattern in _CAPTCHA_PATTERNS):
@@ -88,9 +94,9 @@ def detect_block_reason(
     if status_code in {401, 403, 407, 451}:
         return BlockReason.IP_BAN
 
-    if status_code >= 400:
-        return BlockReason.OTHER
-
+    # Any other non-2xx (404, 500, ...) is a plain HTTP failure of the site,
+    # not an anti-bot block — pass it through as a normal response instead of
+    # escalating the ladder on server errors.
     return None
 
 

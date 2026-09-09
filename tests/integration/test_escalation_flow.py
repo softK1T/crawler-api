@@ -96,7 +96,7 @@ async def test_engine_changes_on_escalatable_block():
             return _blocked_result(engine, BlockReason.WAF)
         return _ok_result(engine)
 
-    def fake_get_fetcher(engine, *, browser_pool=None):
+    def fake_get_fetcher(engine, *, browser_pool=None, camoufox_ready=None):
         engines_used.append(engine)
         fetcher = MagicMock()
         fetcher.fetch = AsyncMock(side_effect=fake_fetch)
@@ -127,7 +127,7 @@ async def test_max_retries_never_exceeded():
     """Total attempts must never exceed max_retries regardless of escalation."""
     attempt_count = 0
 
-    def fake_get_fetcher(engine, *, browser_pool=None):
+    def fake_get_fetcher(engine, *, browser_pool=None, camoufox_ready=None):
         nonlocal attempt_count
         fetcher = MagicMock()
 
@@ -177,7 +177,7 @@ async def test_policy_max_retries_controls_per_tier_attempts():
         fetch_calls.append(engine)
         return _blocked_result(engine, BlockReason.WAF)
 
-    def fake_get_fetcher(engine, *, browser_pool=None):
+    def fake_get_fetcher(engine, *, browser_pool=None, camoufox_ready=None):
         engines_used.append(engine)
         fetcher = MagicMock()
         fetcher.fetch = AsyncMock(side_effect=fake_fetch)

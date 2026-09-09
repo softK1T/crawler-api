@@ -19,7 +19,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     HOME=/home/crawler \
     XDG_CACHE_HOME=/home/crawler/.cache \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    MAX_CONCURRENT_CAMOUFOX=2
 
 RUN groupadd -r crawler \
     && useradd -r -g crawler -m -d /home/crawler crawler \
@@ -37,14 +38,30 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Install Chromium runtime deps manually — avoids ttf-unifont/ttf-ubuntu-font-family
 # missing on Debian Trixie arm64 (Mac M-series). Works on both amd64 and arm64.
+# The gtk/dbus/xt libs are Firefox (camoufox) runtime deps — same stage, one layer.
+# xvfb supplies the virtual X display for camoufox headless="virtual" launches
+# (camoufox recommends a real virtual display over pure headless mode to avoid
+# headless-detection heuristics).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 \
     libpango-1.0-0 libcairo2 libatspi2.0-0 \
+    libgtk-3-0t64 libdbus-glib-1-2 libxt6 libx11-xcb1 libxcb-shm0 \
+    xvfb \
     fonts-liberation fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m playwright install --only-shell chromium \
+    && python -m playwright install chromium \
     && chmod -R a+rx /ms-playwright
+
+# Fetch the camoufox Firefox build at image build time (ADR-020).  The
+# worker self-check launches it at startup — no container-start download.
+# The cache must be owned by the crawler user: camoufox creates runtime
+# dirs (e.g. fontconfig) inside it at launch.
+# NOTE: no `--browserforge` flag — this CLI version rejects unknown options,
+# and the previous `|| true` masked that failure, shipping an image without
+# Firefox. Failures here must break the build.
+RUN python -m camoufox fetch \
+    && chown -R crawler:crawler /home/crawler/.cache/camoufox
 
 # Copy application code.
 COPY app/ ./app/

@@ -93,6 +93,13 @@ services:
       ENABLE_TRACING: "false"
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       MAX_CONCURRENT_BROWSERS: ${MAX_CONCURRENT_BROWSERS:-4}
+      MAX_CONCURRENT_CAMOUFOX: ${MAX_CONCURRENT_CAMOUFOX:-2}
+      # camoufox is premium tier 5/6 in LADDER — escalation never reaches it
+      # without this flag (was previously only an implicit default in config.py).
+      ENABLE_PREMIUM_PROXY_TIERS: ${ENABLE_PREMIUM_PROXY_TIERS:-false}
+      # Firefox sandbox cannot create user namespaces under Docker Desktop's
+      # VM (EPERM).  Matches the existing --no-sandbox Chromium posture.
+      MOZ_DISABLE_CONTENT_SANDBOX: "1"
     command: arq app.worker.arq_worker.WorkerSettings
     healthcheck:
       test: ["CMD-SHELL", "python3 -c 'import redis; r=redis.from_url(\"redis://redis:6379/0\"); r.ping()'"]

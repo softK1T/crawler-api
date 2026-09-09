@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class JobStatus(StrEnum):
@@ -13,13 +13,16 @@ class JobStatus(StrEnum):
 
 
 class JobCreate(BaseModel):
-    url: str
+    # HttpUrl, not str: malformed URLs must be rejected at validation time
+    # (422), never crash the worker while parsing a broken URL.
+    url: HttpUrl
     mode: Literal["static", "stealth", "browser", "camoufox"] = "static"
     callback_url: str | None = None
     idempotency_key: str | None = Field(None, max_length=128)
     use_proxy: bool | None = None
     proxy_country: str | None = Field(None, min_length=2, max_length=2)
     proxy_type: Literal["residential", "datacenter"] | None = None
+    session_key: str | None = Field(None, min_length=1, max_length=128)
     options: dict[str, Any] = {}
 
 
