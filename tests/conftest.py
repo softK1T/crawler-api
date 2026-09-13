@@ -52,6 +52,8 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
     engine = create_async_engine(_postgres_dsn, echo=False)
     async with engine.begin() as conn:
         # Import all models so create_all discovers them.
+        from sqlalchemy import text
+
         import app.models.api_key
         import app.models.application
         import app.models.domain_policy
@@ -66,8 +68,19 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
         import app.models.warc_index  # noqa: F401
         from app.core.db import Base
 
+        # The proxy_usage_daily view (migration 0008) is not part of the
+        # SQLAlchemy metadata — a previous test may have left it behind after
+        # running Alembic, and it would block DROP TABLE request_log.
+        await conn.execute(text("DROP VIEW IF EXISTS proxy_usage_daily"))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        # create_all emits the partitioned parent without any partitions
+        # (the yearly partitions are raw DDL in the Alembic migration).
+        # The DEFAULT partition mirrors migration 0008 so request_log
+        # inserts work in tests for any requested_at value.
+        await conn.execute(
+            text("CREATE TABLE IF NOT EXISTS request_log_default PARTITION OF request_log DEFAULT")
+        )
 
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     session: AsyncSession = session_factory()
@@ -82,6 +95,23 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
             await session.close()
         except Exception:  # noqa: S110
             pass
+        await engine.dispose()
+
+
+@pytest.fixture
+async def db_session_factory(_postgres_dsn: str) -> AsyncGenerator:
+    """Per-test async session FACTORY bound to the Postgres testcontainer.
+
+    Independent of the ``db_session`` fixture's engine — used by
+    persist_request_attempt and ProxyManager, which open their own sessions.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(_postgres_dsn, echo=False)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        yield factory
+    finally:
         await engine.dispose()
 
 

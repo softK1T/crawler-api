@@ -6,6 +6,11 @@ import logging
 import math
 import time
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.services.fetchers.base import AttemptRecorder, AttemptResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +37,62 @@ async def fetch_task(
     callback_url: str | None,
     options: dict,
     trace_id: str | None = None,
+    # Optional — jobs enqueued before per-attempt observability carry only
+    # api_key_prefix; the id is resolved once from the prefix at startup.
+    api_key_id: str | None = None,
 ) -> None:
     """arq task: fetch a URL, archive, and deliver callback."""
     started = time.perf_counter()
     settings = ctx["settings"]
     redis_client = ctx["redis"]
 
-    from app.core.logging_config import bind_context
+    from app.core.logging_config import bind_context, clear_context
 
+    # arq reuses worker tasks — never inherit a previous job's bound context.
+    clear_context()
     bind_context(trace_id=trace_id or job_id, job_id=job_id, application_id=application_id)
 
+    try:
+        await _run_fetch_task(
+            ctx=ctx,
+            started=started,
+            settings=settings,
+            redis_client=redis_client,
+            job_id=job_id,
+            url=url,
+            mode=mode,
+            api_key_prefix=api_key_prefix,
+            application_id=application_id,
+            domain=domain,
+            proxy_pool_id=proxy_pool_id,
+            callback_url=callback_url,
+            options=options,
+            trace_id=trace_id,
+            api_key_id=api_key_id,
+        )
+    finally:
+        clear_context()
+
+
+async def _run_fetch_task(
+    *,
+    ctx: dict,
+    started: float,
+    settings,
+    redis_client,
+    job_id: str,
+    url: str,
+    mode: str,
+    api_key_prefix: str,
+    application_id: str,
+    domain: str,
+    proxy_pool_id: str | None,
+    callback_url: str | None,
+    options: dict,
+    trace_id: str | None,
+    api_key_id: str | None,
+) -> None:
+    """Body of fetch_task — separated so the outer wrapper can clear context."""
     async with ctx["db_factory"]() as db:
         try:
             # 1. Mark running.
@@ -51,6 +102,12 @@ async def fetch_task(
             from app.services.policy_resolver import resolve_policy
 
             policy = await resolve_policy(url, db)
+
+            # 2b. Resolve api_key_id ONCE for the whole job (legacy jobs carry
+            # only the prefix).  Failure is non-fatal: attempt rows persist
+            # NULL and the fetch proceeds.
+            api_key_uuid = await _resolve_api_key_id(db, api_key_id, api_key_prefix)
+            application_uuid = _parse_uuid(application_id)
 
             # 3. Select fetcher — map API mode to engine name.
             from app.services.fetchers import get_fetcher
@@ -97,6 +154,13 @@ async def fetch_task(
                 # on the ladder path (tier 0 for an empty policy).
                 requested_engine=engine if engine != "httpx" else None,
                 camoufox_ready=ctx.get("camoufox_ready"),
+                attempt_recorder=_build_attempt_recorder(
+                    ctx["db_factory"],
+                    job_id=job_id,
+                    api_key_id=api_key_uuid,
+                    application_id=application_uuid,
+                    trace_id=trace_id or job_id,
+                ),
             )
 
             # 5. Block detection metric.
@@ -132,7 +196,7 @@ async def fetch_task(
             if not result.blocked and ctx.get("warc_storage"):
                 warc_index = await ctx["warc_storage"].archive(
                     fetch_result=result,
-                    request_log_id=None,
+                    request_log_id=getattr(result, "_request_log_id", None),
                     db=db,
                     warc_body=warc_body,
                 )
@@ -334,6 +398,93 @@ def _record_latency(status: str, started: float) -> None:
         ).observe(elapsed)
     except Exception:
         pass
+
+
+# ── Attempt observability helpers ─────────────────────────────────────────────
+
+
+def _parse_uuid(value: str | None) -> UUID | None:
+    """Parse a UUID string, returning None for anything invalid."""
+    if not value:
+        return None
+    try:
+        return UUID(value)
+    except (ValueError, TypeError):
+        return None
+
+
+async def _resolve_api_key_id(db, api_key_id: str | None, api_key_prefix: str) -> UUID | None:
+    """Resolve the ApiKey.id for this job, exactly once at task startup.
+
+    Jobs enqueued before per-attempt observability carry only the prefix.
+    Resolution failure is non-fatal: attempt rows persist NULL and the fetch
+    proceeds.
+    """
+    resolved = _parse_uuid(api_key_id)
+    if resolved is not None:
+        return resolved
+    try:
+        from typing import cast
+
+        from sqlalchemy import select
+
+        from app.models.api_key import ApiKey
+
+        row = (
+            await db.execute(select(ApiKey.id).where(ApiKey.prefix == api_key_prefix))
+        ).scalar_one_or_none()
+        return cast("UUID | None", row)
+    except Exception:
+        logger.warning("api_key_id_resolution_failed prefix=%s", api_key_prefix, exc_info=True)
+        return None
+
+
+def _build_attempt_recorder(
+    db_session_factory,
+    *,
+    job_id: str,
+    api_key_id: UUID | None,
+    application_id: UUID | None,
+    trace_id: str | None,
+) -> "AttemptRecorder":
+    """Bind job identity to attempt persistence for fetch_with_retry."""
+    from app.services.request_attempt_log import RequestAttempt, persist_request_attempt
+
+    async def _record(attempt: "AttemptResult") -> UUID | None:
+        return await persist_request_attempt(
+            db_session_factory,
+            RequestAttempt(
+                job_id=job_id,
+                api_key_id=api_key_id,
+                application_id=application_id,
+                trace_id=trace_id,
+                url=attempt.url,
+                domain=attempt.domain,
+                method=attempt.method,
+                attempt_number=attempt.attempt_number,
+                tier_attempt_number=attempt.tier_attempt_number,
+                escalation_tier=attempt.escalation_tier,
+                proxy_id=attempt.proxy_id,
+                proxy_pool_id=attempt.proxy_pool_id,
+                proxy_provider=attempt.proxy_provider,
+                proxy_type=attempt.proxy_type,
+                proxy_country=attempt.proxy_country,
+                proxy_city=attempt.proxy_city,
+                engine=attempt.engine,
+                outcome=attempt.outcome,
+                status_code=attempt.status_code,
+                duration_ms=attempt.duration_ms,
+                bytes_received=attempt.bytes_received,
+                blocked=attempt.blocked,
+                block_reason=attempt.block_reason,
+                error_type=attempt.error_type,
+                error=attempt.error,
+                requested_at=attempt.requested_at,
+                completed_at=attempt.completed_at,
+            ),
+        )
+
+    return _record
 
 
 # ── Worker lifecycle ─────────────────────────────────────────────────────────

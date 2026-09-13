@@ -44,6 +44,97 @@ GET /v1/usage → caller's usage
 GET /v1/usage/applications/{id} → admin view (SCOPE_ADMIN)
 ```
 
+## Request & Proxy Audit (request_log)
+
+PostgreSQL `request_log` is the durable audit history: **one row per transport
+attempt** (one retry-loop iteration), including direct requests and every
+proxy rotation/escalation.  Docker logs and Prometheus are aggregated views —
+never the only source of audit history.  URL is intentionally stored in
+PostgreSQL but intentionally NOT used as a Prometheus label (cardinality).
+
+### A. Last 100 attempts
+```sql
+SELECT
+    requested_at,
+    job_id,
+    attempt_number,
+    escalation_tier,
+    domain,
+    proxy_id,
+    proxy_provider,
+    proxy_type,
+    proxy_country,
+    engine,
+    outcome,
+    status_code,
+    blocked,
+    block_reason,
+    duration_ms,
+    bytes_received,
+    error_type
+FROM request_log
+ORDER BY requested_at DESC
+LIMIT 100;
+```
+
+### B. Proxy usage
+```sql
+SELECT
+    proxy_id,
+    proxy_provider,
+    proxy_type,
+    proxy_country,
+    count(*) AS attempts,
+    count(*) FILTER (WHERE outcome = 'success') AS successes,
+    count(*) FILTER (WHERE blocked) AS blocked,
+    count(*) FILTER (
+        WHERE outcome NOT IN ('success', 'blocked')
+    ) AS failures,
+    round(avg(duration_ms), 2) AS avg_duration_ms,
+    coalesce(sum(bytes_received), 0) AS bytes_received
+FROM request_log
+WHERE proxy_id IS NOT NULL
+GROUP BY
+    proxy_id,
+    proxy_provider,
+    proxy_type,
+    proxy_country
+ORDER BY attempts DESC;
+```
+
+### C. Full job trace
+```sql
+SELECT *
+FROM request_log
+WHERE job_id = :job_id
+ORDER BY attempt_number;
+```
+
+### D. Proxy-to-request history
+```sql
+SELECT
+    requested_at,
+    job_id,
+    attempt_number,
+    url,
+    domain,
+    engine,
+    outcome,
+    status_code,
+    block_reason,
+    error_type
+FROM request_log
+WHERE proxy_id = :proxy_id
+ORDER BY requested_at DESC;
+```
+
+### E. Daily view
+```sql
+SELECT *
+FROM proxy_usage_daily
+ORDER BY usage_date DESC, attempts DESC;
+```
+
 ## Incident Response
 
 ### Elevated block_rate_total on a domain
@@ -74,7 +165,10 @@ GET /v1/usage/applications/{id} → admin view (SCOPE_ADMIN)
 CREATE TABLE request_log_y2028 PARTITION OF request_log
 FOR VALUES FROM ('2028-01-01') TO ('2029-01-01');
 ```
-Run before December of the current year. See ADR-003.
+Run before December of the current year. See ADR-003.  Since migration 0008
+a DEFAULT partition (`request_log_default`) exists, so inserts never fail even
+if a yearly partition is missing — yearly partitions are now a data-management
+optimisation, not an availability requirement.
 
 ### Rotating proxy credentials
 1. Update proxy URLs in `/v1/admin/proxy-pools/{id}/proxies`

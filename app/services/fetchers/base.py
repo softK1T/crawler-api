@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from uuid import UUID
 
@@ -39,6 +42,10 @@ class FetchResult:
     raw_headers: dict[str, str] = field(default_factory=dict)
     # Escalation tier at which this result was produced (set by fetch_with_retry).
     _tier_used: int = 0
+    # Persisted request_log row id of the attempt that produced this result
+    # (set by fetch_with_retry via the attempt recorder).  Private — must not
+    # become part of the public API schema.
+    _request_log_id: UUID | None = field(default=None, repr=False)
 
 
 # ── FetchError ────────────────────────────────────────────────────────────────
@@ -75,6 +82,110 @@ class FetcherProtocol(Protocol):
     ) -> FetchResult: ...
 
 
+# ── Per-attempt observability record ─────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptResult:
+    """Transport-neutral record of ONE fetch attempt (retry-loop iteration).
+
+    Built by fetch_with_retry and handed to the caller-provided
+    ``attempt_recorder`` exactly once per attempt, from a finally block.
+    Deliberately contains no request/response headers, bodies, cookies or
+    proxy URLs — only safe proxy metadata snapshots.
+    """
+
+    url: str
+    domain: str
+    method: str
+    attempt_number: int
+    tier_attempt_number: int
+    escalation_tier: int
+    proxy_id: UUID | None
+    proxy_pool_id: UUID | None
+    proxy_provider: str | None
+    proxy_type: str | None
+    proxy_country: str | None
+    proxy_city: str | None
+    engine: str
+    outcome: str
+    status_code: int | None
+    duration_ms: int
+    bytes_received: int
+    blocked: bool
+    block_reason: str | None
+    error_type: str | None
+    error: str | None
+    requested_at: datetime
+    completed_at: datetime
+
+
+AttemptRecorder = Callable[[AttemptResult], Awaitable[UUID | None]]
+
+
+def classify_fetch_error(exc: FetchError) -> str:
+    """Map a FetchError to a request_log outcome."""
+    if exc.blocked:
+        return "blocked"
+    return "fetch_error"
+
+
+def classify_exception(exc: Exception) -> str:
+    """Map an unexpected exception to a request_log outcome."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return "network_error"
+    name = type(exc).__name__.lower()
+    if any(token in name for token in ("timeout", "timedout", "network", "connection")):
+        return "network_error"
+    return "internal_error"
+
+
+def proxy_failure_reason(exc: BaseException) -> str:
+    """Map an attempt failure to a proxy-health reason (conservative)."""
+    if isinstance(exc, (asyncio.CancelledError, asyncio.TimeoutError)):
+        return "timeout"
+    name = type(exc).__name__.lower()
+    if "timeout" in name or "timedout" in name:
+        return "timeout"
+    return "http_error"
+
+
+async def _report_proxy_attempt(
+    *,
+    proxy,
+    proxy_manager,
+    domain: str,
+    success: bool,
+    reason: str | None,
+    db,
+    engine: str | None,
+    response_time_ms: int | None = None,
+) -> bool:
+    """Call ``report_result`` for the attempt's selected proxy, at most once.
+
+    Returns True when the report succeeded (so callers mark it reported).
+    A proxy-health update failure is logged as an instrumentation error and
+    swallowed — it must never suppress request-attempt persistence or change
+    the attempt's outcome.  Cancellation still propagates.
+    """
+    try:
+        await proxy_manager.report_result(
+            proxy_id=proxy.id,
+            domain=domain,
+            success=success,
+            reason=reason,
+            db=db,
+            response_time_ms=response_time_ms,
+            engine=engine,
+        )
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("proxy_result_report_failed", exc_info=True)
+        return False
+
+
 # ── Retry orchestration ──────────────────────────────────────────────────────
 
 
@@ -99,8 +210,11 @@ class _EscalationState:
     """Mutable escalation state kept across retry-loop iterations."""
 
     tier: int
-    attempts_at_tier: int = 0
+    attempts_at_tier: int = 0  # blocked attempts at tier (drives escalation)
     fetcher: FetcherProtocol | None = None  # current engine instance
+    # Every iteration at the current tier (including network errors), used
+    # only to number rows in request_log.  Reset together with attempts_at_tier.
+    iterations_at_tier: int = 0
 
 
 async def fetch_with_retry(
@@ -120,6 +234,7 @@ async def fetch_with_retry(
     browser_pool: BrowserPool | None = None,
     requested_engine: str | None = None,
     camoufox_ready: bool | None = None,
+    attempt_recorder: AttemptRecorder | None = None,
 ) -> FetchResult:
     """Retry loop with proxy selection, health reporting, jittered backoff,
     and adaptive engine escalation.
@@ -164,6 +279,12 @@ async def fetch_with_retry(
     raises :class:`ProxyPoolUnavailableError` rather than silently falling
     back to a direct connection.  Blocked proxies are tracked in
     ``failed_proxy_ids`` and excluded from subsequent retry picks.
+
+    ``attempt_recorder`` (optional) is invoked exactly once per loop
+    iteration from a finally block with an :class:`AttemptResult` snapshot —
+    including direct, proxied, blocked, timed-out, pool-empty/exhausted,
+    cancelled and unexpected-exception attempts.  Jitter/backoff sleep is
+    excluded from the attempt duration.
     """
     from app.core.errors import ProxyPoolExhaustedError, ProxyPoolUnavailableError
     from app.services.escalation import (
@@ -307,6 +428,24 @@ async def fetch_with_retry(
         current_fetcher = esc.fetcher
         proxy = None
         total_attempts += 1
+        esc.iterations_at_tier += 1
+        tier_attempt_number = esc.iterations_at_tier
+        # Snapshot the attempt identity BEFORE the try: escalation may bump
+        # the tier mid-iteration, and the recorder must reflect the tier and
+        # engine that actually produced this attempt.
+        attempt_tier = esc.tier
+        attempt_engine = tier_def.engine
+        requested_at = datetime.now(UTC)
+        attempt_started = time.perf_counter()
+        # Frozen right before any jitter/backoff sleep so the recorded
+        # duration never includes time we were not trying the network.
+        attempt_end: float | None = None
+
+        result: FetchResult | None = None
+        outcome = "internal_error"
+        error_type: str | None = None
+        error_message: str | None = None
+        proxy_result_reported = False
 
         try:
             from app.core.observability import FETCH_ATTEMPTS_BY_TIER
@@ -361,18 +500,20 @@ async def fetch_with_retry(
 
             # 4. Check for block.
             if result.blocked:
+                outcome = "blocked"
                 last_result = result
                 esc.attempts_at_tier += 1
 
                 if proxy_manager is not None and proxy is not None:
-                    await proxy_manager.report_result(
-                        proxy_id=proxy.id,
+                    proxy_result_reported = await _report_proxy_attempt(
+                        proxy=proxy,
+                        proxy_manager=proxy_manager,
                         domain=domain,
                         success=False,
                         reason=result.block_reason or "http_error",
                         db=db,
-                        response_time_ms=result.elapsed_ms,
                         engine=result.engine,
+                        response_time_ms=result.elapsed_ms,
                     )
                     failed_proxy_ids.add(proxy.id)
 
@@ -400,6 +541,7 @@ async def fetch_with_retry(
                     )
                     esc.tier = nxt
                     esc.attempts_at_tier = 0
+                    esc.iterations_at_tier = 0
                     esc.fetcher = None  # force re-instantiation
                     failed_proxy_ids.clear()  # new proxy_type — reset bans
                     # No sleep between tier bumps — the new engine is the retry.
@@ -413,55 +555,160 @@ async def fetch_with_retry(
                     if nxt is not None and nxt <= max_tier:
                         esc.tier = nxt
                         esc.attempts_at_tier = 0
+                        esc.iterations_at_tier = 0
                         esc.fetcher = None
                         continue
                     return result
 
                 if total_attempts < max_attempts:
+                    attempt_end = time.perf_counter()  # exclude backoff sleep
                     await asyncio.sleep(_jittered_delay(policy))
                     continue
                 return result
 
             # 5. Success.
+            outcome = "success"
             if proxy_manager is not None and proxy is not None:
-                await proxy_manager.report_result(
-                    proxy_id=proxy.id,
+                proxy_result_reported = await _report_proxy_attempt(
+                    proxy=proxy,
+                    proxy_manager=proxy_manager,
                     domain=domain,
                     success=True,
                     reason=None,
                     db=db,
-                    response_time_ms=result.elapsed_ms,
                     engine=result.engine,
+                    response_time_ms=result.elapsed_ms,
                 )
             return result
 
-        except (ProxyPoolUnavailableError, ProxyPoolExhaustedError):
+        except ProxyPoolUnavailableError as exc:
+            outcome = "proxy_pool_empty"
+            error_type = type(exc).__name__
+            error_message = str(exc)
+            raise
+
+        except ProxyPoolExhaustedError as exc:
+            outcome = "proxy_pool_exhausted"
+            error_type = type(exc).__name__
+            error_message = str(exc)
+            raise
+
+        except asyncio.CancelledError as exc:
+            outcome = "cancelled"
+            error_type = type(exc).__name__
+            error_message = "request attempt cancelled"
+            if proxy is not None and proxy_manager is not None and not proxy_result_reported:
+                proxy_result_reported = await _report_proxy_attempt(
+                    proxy=proxy,
+                    proxy_manager=proxy_manager,
+                    domain=domain,
+                    success=False,
+                    reason=proxy_failure_reason(exc),
+                    db=db,
+                    engine=attempt_engine,
+                )
             raise
 
         except FetchError as exc:
             last_error = exc
-            if proxy_manager is not None and proxy is not None:
-                await proxy_manager.report_result(
-                    proxy_id=proxy.id,
-                    domain=domain,
-                    success=False,
-                    reason="http_error",
-                    db=db,
-                    engine=tier_def.engine,
-                )
+            outcome = classify_fetch_error(exc)
+            error_type = type(exc).__name__
+            error_message = str(exc)
+            if proxy is not None and proxy_manager is not None:
+                if not proxy_result_reported:
+                    proxy_result_reported = await _report_proxy_attempt(
+                        proxy=proxy,
+                        proxy_manager=proxy_manager,
+                        domain=domain,
+                        success=False,
+                        reason=proxy_failure_reason(exc),
+                        db=db,
+                        engine=attempt_engine,
+                    )
                 failed_proxy_ids.add(proxy.id)
             if total_attempts < max_attempts:
+                attempt_end = time.perf_counter()  # exclude backoff sleep
                 await asyncio.sleep(_jittered_delay(policy))
                 continue
             raise
 
         except Exception as exc:
             last_error = exc
+            outcome = classify_exception(exc)
+            error_type = type(exc).__name__
+            error_message = str(exc)
             if proxy is not None and proxy_manager is not None:
+                if not proxy_result_reported:
+                    proxy_result_reported = await _report_proxy_attempt(
+                        proxy=proxy,
+                        proxy_manager=proxy_manager,
+                        domain=domain,
+                        success=False,
+                        reason=proxy_failure_reason(exc),
+                        db=db,
+                        engine=attempt_engine,
+                    )
                 failed_proxy_ids.add(proxy.id)
             if total_attempts < max_attempts:
+                attempt_end = time.perf_counter()  # exclude backoff sleep
                 await asyncio.sleep(_jittered_delay(policy))
                 continue
             raise FetchError(str(exc)) from exc
 
+        finally:
+            if attempt_recorder is not None:
+                end = attempt_end if attempt_end is not None else time.perf_counter()
+                duration_ms = max(0, int((end - attempt_started) * 1000))
+                status_code = result.status_code if result is not None else None
+                blocked = result.blocked if result is not None else False
+                block_reason = result.block_reason if result is not None else None
+                if result is not None:
+                    raw_len = len(result.raw_body or b"")
+                    bytes_received = raw_len if raw_len > 0 else len(result.body or b"")
+                else:
+                    bytes_received = 0
+                from app.services.request_attempt_log import proxy_snapshot
+
+                snap = proxy_snapshot(proxy)
+                attempt_record = AttemptResult(
+                    url=url,
+                    domain=domain,
+                    method="GET",
+                    attempt_number=total_attempts,
+                    tier_attempt_number=tier_attempt_number,
+                    escalation_tier=attempt_tier,
+                    proxy_id=snap.proxy_id,
+                    proxy_pool_id=snap.proxy_pool_id,
+                    proxy_provider=snap.provider,
+                    proxy_type=snap.proxy_type,
+                    proxy_country=snap.country,
+                    proxy_city=snap.city,
+                    engine=result.engine if result is not None else attempt_engine,
+                    outcome=outcome,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    bytes_received=bytes_received,
+                    blocked=blocked,
+                    block_reason=block_reason,
+                    error_type=error_type,
+                    error=error_message,
+                    requested_at=requested_at,
+                    completed_at=datetime.now(UTC),
+                )
+                try:
+                    request_log_id = await attempt_recorder(attempt_record)
+                except Exception:
+                    # A recorder bug must never hide the original exception or
+                    # fail the crawl — the attempt itself already happened.
+                    logger.warning("attempt_recorder_failed", exc_info=True)
+                    request_log_id = None
+                if result is not None and request_log_id is not None:
+                    result._request_log_id = request_log_id
+
+    # Attempt ceiling reached.  If a blocked FetchResult exists, return it —
+    # the premium-gate path does the same, and a blocked final response must
+    # still flow through to the caller (and to request_log).  Only raise when
+    # every attempt failed with an exception.
+    if last_result is not None:
+        return last_result
     raise FetchError(str(last_error)) from last_error

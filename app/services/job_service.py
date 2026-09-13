@@ -63,6 +63,10 @@ class JobService:
             url=url,
             mode=mode,
             api_key_prefix=api_key.prefix,
+            # api_key_id lets the worker bind request_log rows to the key
+            # without a per-attempt lookup.  Older queued jobs lack it and
+            # resolve the id once from the prefix at task startup.
+            api_key_id=str(api_key.id),
             application_id=str(api_key.application_id),
             domain=domain,
             proxy_pool_id=str(proxy_pool_id) if proxy_pool_id else None,

@@ -36,6 +36,7 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
+        structlog.contextvars.merge_contextvars,
         structlog.processors.UnicodeDecoder(),
         structlog.processors.JSONRenderer(serializer=json.dumps),
     ],
@@ -45,8 +46,6 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
-_shared_context: dict[str, str] = {}
-
 
 def bind_context(
     *,
@@ -54,7 +53,11 @@ def bind_context(
     job_id: str | None = None,
     application_id: str | None = None,
 ) -> None:
-    """Set thread-local context values for structured logging."""
+    """Bind task-local context values for structured logging.
+
+    Uses contextvars only — concurrent arq jobs cannot leak job_id/
+    application_id into each other's log lines (no process-global state).
+    """
     ctx: dict[str, str] = {}
     if trace_id:
         ctx["trace_id"] = trace_id
@@ -62,8 +65,16 @@ def bind_context(
         ctx["job_id"] = job_id
     if application_id:
         ctx["application_id"] = application_id
-    _shared_context.update(ctx)
     structlog.contextvars.bind_contextvars(**ctx)
+
+
+def clear_context() -> None:
+    """Clear all bound contextvars.
+
+    Called at the start and end of every worker job so a reused arq task
+    never inherits a previous job's trace_id/job_id/application_id.
+    """
+    structlog.contextvars.clear_contextvars()
 
 
 def get_logger(name: str = "crawler-api"):
@@ -96,9 +107,10 @@ class _StructlogHandler(logging.Handler):
                 import traceback
 
                 payload["exc_info"] = traceback.format_exception(*record.exc_info)
-            # Merge any bound context.
-            if _shared_context:
-                payload.update(_shared_context)
+            # Merge any bound contextvars (per-task, never process-global).
+            bound_ctx = structlog.contextvars.get_contextvars()
+            if bound_ctx:
+                payload.update(bound_ctx)
             json_str = json.dumps(payload, default=str)
             sys.stderr.write(json_str + "\n")
             sys.stderr.flush()
