@@ -41,10 +41,10 @@ curl http://localhost:8000/healthz
 | Field | Value |
 |---|---|
 | Tag | `v0.1.0` |
-| Date | 2026-07-29 |
-| Migration head | `a7c55bf575f3` |
-| Tests | 86 passed, 0 failed |
-| verify.sh | OK (second run; cold-start archive timing documented in ADR-013) |
+| Date | 2026-09-13 |
+| Migration head | `0008` |
+| Tests | 285 passed, 0 failed |
+| verify.sh | OK (2026-09-13; per-attempt request_log observability, cancellation-safe persistence) |
 
 **Quick reproduction:**
 ```bash
