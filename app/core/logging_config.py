@@ -83,6 +83,24 @@ def get_logger(name: str = "crawler-api"):
 
 # ── Stdlib bridge ────────────────────────────────────────────────────────────
 
+
+def _redact_value(value: Any) -> Any:
+    """Recursively redact credentials in any string/dict/list/object value.
+
+    Runs BEFORE json.dumps: redacting the serialized JSON string instead
+    would corrupt it — the redact() regexes match ISO-8601 timestamps
+    (host:port:user:pass shape) and swallow closing quotes around trailing
+    credential strings.
+    """
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    return _redact_value(str(value))
+
+
 #: Standard LogRecord attributes — everything else in record.__dict__ came
 #: from extra={...} and carries structured fields we must not silently drop.
 _STD_RECORD_ATTRS = frozenset(
@@ -129,7 +147,7 @@ class _StructlogHandler(logging.Handler):
         try:
             from datetime import UTC, datetime
 
-            msg = redact(record.getMessage())
+            msg = record.getMessage()
             payload: dict[str, Any] = {
                 "event": msg,
                 "logger": record.name,
@@ -144,14 +162,21 @@ class _StructlogHandler(logging.Handler):
             bound_ctx = structlog.contextvars.get_contextvars()
             if bound_ctx:
                 payload.update(bound_ctx)
-            # Merge extra={...} fields (redacted) last, so explicitly logged
-            # values win over bound context.
+            # Merge extra={...} fields last, so explicitly logged values win
+            # over bound context.
             for key, value in record.__dict__.items():
                 if key in _STD_RECORD_ATTRS or key.startswith("_"):
                     continue
-                if isinstance(value, str):
-                    value = redact(value)
                 payload[key] = value
+            # Redact every string value recursively before serialization:
+            # credentials nested inside dicts/lists/objects are rendered via
+            # str() by json.dumps, so redacting only top-level strings would
+            # leak them.  The self-generated timestamp is exempt — redact()'s
+            # host:port:user:pass pattern structurally matches ISO-8601
+            # timestamps and would corrupt it.
+            for key, value in payload.items():
+                if key != "timestamp":
+                    payload[key] = _redact_value(value)
             json_str = json.dumps(payload, default=str)
             sys.stderr.write(json_str + "\n")
             sys.stderr.flush()

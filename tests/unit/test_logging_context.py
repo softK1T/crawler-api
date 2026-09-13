@@ -99,6 +99,43 @@ def test_stdlib_bridge_merges_extra_fields_and_redacts(monkeypatch):
     assert "1.2.3.4:8080:***:***" in payload["proxy_line"]
 
 
+def test_stdlib_bridge_redacts_credentials_in_nested_extra(monkeypatch):
+    """Credentials inside dict/list extra values must be redacted too.
+
+    Regression guard: redacting only string-valued extra fields left nested
+    secrets exposed — json.dumps(default=str) renders dicts/lists verbatim.
+    """
+    import io
+    import json
+    import logging
+    import sys
+
+    from app.core.logging_config import _StructlogHandler
+
+    record = logging.LogRecord(
+        name="probe",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="nested_leak_check",
+        args=(),
+        exc_info=None,
+    )
+    record.__dict__["detail"] = {"proxy_url": "http://user:secret@1.2.3.4:6754"}
+    record.__dict__["items"] = ["http://u:p@5.6.7.8:8080"]
+
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stream)
+    _StructlogHandler().emit(record)
+
+    raw = stream.getvalue()
+    payload = json.loads(raw)
+    assert "secret" not in raw
+    assert "u:p@5.6.7.8" not in raw
+    assert payload["detail"]["proxy_url"] == "http://***:***@1.2.3.4:6754"
+    assert payload["items"] == ["http://***:***@5.6.7.8:8080"]
+
+
 def test_stdlib_bridge_extra_fields_win_over_bound_context(monkeypatch):
     """Explicitly logged fields override bound contextvars."""
     import io

@@ -566,6 +566,51 @@ async def test_task_cancellation_persists_cancelled_row(
 
 
 @pytest.mark.integration
+async def test_cancel_during_finally_on_success_path_is_not_swallowed(
+    db_session, db_session_factory, redis_client, monkeypatch
+):
+    """A cancel arriving while the finally awaits the recorder on a SUCCESSFUL
+    attempt must propagate — otherwise a task asked to die would continue into
+    WARC archival and callback delivery."""
+    import app.services.fetchers as _fetchers
+
+    recorder_started = asyncio.Event()
+    release_recorder = asyncio.Event()
+
+    job_id = _job_id()
+    real_recorder = _recorder(db_session_factory, job_id)
+
+    async def _slow_recorder(attempt):
+        recorder_started.set()
+        await release_recorder.wait()
+        return await real_recorder(attempt)
+
+    stub = _StubFetcher([FetchResult(url=URL, status_code=200, body=b"ok", engine="httpx")])
+    monkeypatch.setattr(_fetchers, "get_fetcher", lambda engine, **kw: stub)
+
+    task = asyncio.create_task(
+        fetch_with_retry(
+            fetcher=stub,
+            url=URL,
+            policy=_policy(),
+            attempt_recorder=_slow_recorder,
+        )
+    )
+    await recorder_started.wait()  # fetch succeeded; finally awaits the recorder
+    task.cancel()  # cancel arrives INSIDE the finally, on the success path
+
+    with pytest.raises(asyncio.CancelledError):
+        await task  # the cancellation must NOT be swallowed
+
+    release_recorder.set()
+    await asyncio.sleep(0.15)  # the shielded recorder persists in the background
+
+    rows = await _log_rows(db_session_factory, job_id)
+    assert len(rows) == 1
+    assert rows[0].outcome == "success"
+
+
+@pytest.mark.integration
 async def test_recorder_survives_recancellation_during_persist(
     db_session, db_session_factory, redis_client, monkeypatch
 ):

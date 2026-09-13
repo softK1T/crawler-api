@@ -713,6 +713,14 @@ async def fetch_with_retry(
                     # The shielded recorder continues in the background; the
                     # cancelled task must still terminate cleanly.
                     request_log_id = None
+                    if outcome != "cancelled":
+                        # The cancellation did NOT originate in the try body —
+                        # a successful/blocked attempt reached the finally and
+                        # got cancelled while persisting.  Swallowing it here
+                        # would let a task asked to die continue into WARC
+                        # archival and callback delivery.  Bare raise inside
+                        # the except re-raises exactly this CancelledError.
+                        raise
                 except Exception:
                     # A recorder bug must never hide the original exception or
                     # fail the crawl — the attempt itself already happened.
