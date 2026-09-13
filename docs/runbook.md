@@ -51,6 +51,8 @@ attempt** (one retry-loop iteration), including direct requests and every
 proxy rotation/escalation.  Docker logs and Prometheus are aggregated views —
 never the only source of audit history.  URL is intentionally stored in
 PostgreSQL but intentionally NOT used as a Prometheus label (cardinality).
+`method` is currently always `'GET'` — a placeholder until a non-GET
+transport path exists; do not trust it in queries yet.
 
 ### A. Last 100 attempts
 ```sql
@@ -135,6 +137,36 @@ FROM proxy_usage_daily
 ORDER BY usage_date DESC, attempts DESC;
 ```
 
+### F. Reconciling proxies.total_requests against request_log
+
+`proxies.total_requests` equals the number of `request_log` rows for that
+proxy whose outcome is NOT `cancelled` / `proxy_pool_empty` /
+`proxy_pool_exhausted` — a cancelled attempt is audited but deliberately
+carries no proxy-health signal because the proxy did not fail, the worker was
+shut down.  (`proxy_pool_empty` / `proxy_pool_exhausted` rows carry NULL
+`proxy_id` and never join a proxy anyway; the filter covers all three so the
+query stays correct if that changes.)
+
+```sql
+SELECT
+    p.id,
+    p.total_requests,
+    p.total_errors,
+    count(rl.id) FILTER (
+        WHERE rl.outcome NOT IN (
+            'cancelled', 'proxy_pool_empty', 'proxy_pool_exhausted'
+        )
+    ) AS countable_attempts,
+    count(rl.id) FILTER (WHERE rl.outcome = 'cancelled') AS cancelled_attempts
+FROM proxies p
+LEFT JOIN request_log rl ON rl.proxy_id = p.id
+GROUP BY p.id, p.total_requests, p.total_errors
+ORDER BY countable_attempts DESC;
+```
+
+`countable_attempts` must equal `total_requests`; a plain `count(*)`
+mismatching by exactly `cancelled_attempts` is expected and legitimate.
+
 ## Monitoring Alerts
 
 `persist_request_attempt` opens an independent DB session per attempt on top of
@@ -160,6 +192,12 @@ Any non-zero rate means rows ARE being lost.  Investigate:
    the structured failure event carries job_id/attempt_number/domain/outcome.
 2. DB pool exhaustion / PostgreSQL health: `docker compose exec db pg_isready`
 3. Disk: `docker compose exec db df -h /var/lib/postgresql/data`
+
+A persistent nonzero `attempt_writes_abandoned` count in worker logs
+(`docker compose logs worker | grep attempt_writes_abandoned`) means the
+5-second shutdown drain is too short for the current load, and rows are
+being lost at restart.  Lengthen the drain window if it recurs across
+restarts.
 
 ## Incident Response
 

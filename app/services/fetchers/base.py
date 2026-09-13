@@ -695,6 +695,11 @@ async def fetch_with_retry(
                 attempt_record = AttemptResult(
                     url=url,
                     domain=domain,
+                    # Placeholder: every attempt is hardcoded to GET until a
+                    # non-GET transport path exists (POST search endpoints,
+                    # GraphQL, form login).  When that happens the real method
+                    # must be plumbed through AttemptResult — until then
+                    # request_log.method is NOT trustworthy.
                     method="GET",
                     attempt_number=total_attempts,
                     tier_attempt_number=tier_attempt_number,
