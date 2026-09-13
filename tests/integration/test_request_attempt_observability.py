@@ -761,6 +761,69 @@ async def test_worker_shutdown_drains_pending_writes(db_session, redis_client):
     assert await drain_pending_attempt_writes(max_wait_s=5.0) == 0
 
 
+# ── 8c. Cancellation is no proxy-health signal ───────────────────────────────
+
+
+@pytest.mark.integration
+async def test_cancellation_does_not_decay_proxy_health(
+    db_session, db_session_factory, redis_client, monkeypatch
+):
+    """Worker restart must not decay healthy proxies: a cancelled attempt
+    carries no signal about proxy health."""
+    import app.services.fetchers as _fetchers
+
+    _, proxy = await _make_pool_and_proxy(db_session)
+    pm = _make_proxy_manager(db_session_factory, redis_client)
+    monkeypatch.setattr(pm, "get_proxy", AsyncMock(side_effect=[proxy]))
+
+    fetch_started = asyncio.Event()
+
+    class _SlowFetcher:
+        async def fetch(
+            self,
+            url,
+            *,
+            proxy=None,
+            headers=None,
+            timeout_s=30.0,
+            follow_redirects=True,
+            max_redirects=10,
+        ):
+            fetch_started.set()
+            await asyncio.Event().wait()  # block until cancelled
+
+    stub = _SlowFetcher()
+    monkeypatch.setattr(_fetchers, "get_fetcher", lambda engine, **kw: stub)
+    job_id = _job_id()
+
+    task = asyncio.create_task(
+        fetch_with_retry(
+            fetcher=stub,
+            url=URL,
+            policy=_policy(use_proxy=True, proxy_type="datacenter"),
+            proxy_manager=pm,
+            db=db_session,
+            attempt_recorder=_recorder(db_session_factory, job_id),
+        )
+    )
+    await fetch_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    rows = await _log_rows(db_session_factory, job_id)
+    assert len(rows) == 1
+    assert rows[0].outcome == "cancelled"
+    assert rows[0].proxy_id == proxy.id
+
+    # The healthy proxy is untouched: no requests, no errors, full health.
+    await db_session.refresh(proxy)
+    assert proxy.total_requests == 0
+    assert proxy.total_errors == 0
+    assert proxy.consecutive_failures == 0
+    assert proxy.health_score == 1.0
+
+
 # ── 9. Backward compatibility ────────────────────────────────────────────────
 
 

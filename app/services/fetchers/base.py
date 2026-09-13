@@ -626,24 +626,9 @@ async def fetch_with_retry(
             outcome = "cancelled"
             error_type = type(exc).__name__
             error_message = "request attempt cancelled"
-            if proxy is not None and proxy_manager is not None and not proxy_result_reported:
-                try:
-                    # shield(): a re-cancellation must not kill the health
-                    # report mid-flight — it keeps running in the background
-                    # while the cancelled task terminates.
-                    proxy_result_reported = await asyncio.shield(
-                        _report_proxy_attempt(
-                            proxy=proxy,
-                            proxy_manager=proxy_manager,
-                            domain=domain,
-                            success=False,
-                            reason=proxy_failure_reason(exc),
-                            db=db,
-                            engine=attempt_engine,
-                        )
-                    )
-                except asyncio.CancelledError:
-                    pass  # the shielded report continues; the task must die
+            # Deliberately NO proxy health report: a cancelled attempt carries
+            # no signal about the proxy's health — counting it as a timeout
+            # would decay perfectly healthy proxies on every worker restart.
             raise
 
         except FetchError as exc:
