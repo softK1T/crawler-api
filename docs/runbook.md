@@ -135,6 +135,32 @@ FROM proxy_usage_daily
 ORDER BY usage_date DESC, attempts DESC;
 ```
 
+## Monitoring Alerts
+
+`persist_request_attempt` opens an independent DB session per attempt on top of
+the job's long-running session (the DB pool is sized explicitly:
+`pool_size=10`, `max_overflow=20` in `app/core/db.py`).  When PostgreSQL or
+the pool is under pressure the crawl itself does NOT fail — audit writes fail
+silently and `crawler_request_log_write_failures_total` rises.  This is
+exactly the failure class the independent-session design can hide, so alert
+on the counter:
+
+```yaml
+- alert: RequestLogWriteFailures
+  expr: increase(crawler_request_log_write_failures_total[5m]) > 0
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "request_log persistence failing — per-attempt audit rows are being lost"
+```
+
+Any non-zero rate means rows ARE being lost.  Investigate:
+1. `docker compose logs worker | grep request_attempt_persist_failed` —
+   the structured failure event carries job_id/attempt_number/domain/outcome.
+2. DB pool exhaustion / PostgreSQL health: `docker compose exec db pg_isready`
+3. Disk: `docker compose exec db df -h /var/lib/postgresql/data`
+
 ## Incident Response
 
 ### Elevated block_rate_total on a domain

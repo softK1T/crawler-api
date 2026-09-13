@@ -508,6 +508,128 @@ async def test_recorder_db_failure_returns_result_and_counts_metric(
     assert "10.0.0.7" not in caplog.text
 
 
+# ── 8b. Real task cancellation ───────────────────────────────────────────────
+
+
+@pytest.mark.integration
+async def test_task_cancellation_persists_cancelled_row(
+    db_session, db_session_factory, redis_client, monkeypatch
+):
+    """task.cancel() during a slow fetch → exactly one outcome=cancelled row.
+
+    Regression guard: cleanup awaits must survive cancellation, otherwise
+    ``docker compose restart worker`` silently loses the last attempt's audit.
+    """
+    import app.services.fetchers as _fetchers
+
+    fetch_started = asyncio.Event()
+
+    class _SlowFetcher:
+        async def fetch(
+            self,
+            url,
+            *,
+            proxy=None,
+            headers=None,
+            timeout_s=30.0,
+            follow_redirects=True,
+            max_redirects=10,
+        ):
+            fetch_started.set()
+            await asyncio.Event().wait()  # block until cancelled
+
+    stub = _SlowFetcher()
+    monkeypatch.setattr(_fetchers, "get_fetcher", lambda engine, **kw: stub)
+    job_id = _job_id()
+
+    task = asyncio.create_task(
+        fetch_with_retry(
+            fetcher=stub,
+            url=URL,
+            policy=_policy(),
+            attempt_recorder=_recorder(db_session_factory, job_id),
+        )
+    )
+    await fetch_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    rows = await _log_rows(db_session_factory, job_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.outcome == "cancelled"
+    assert row.error_type == "CancelledError"
+    assert row.status_code is None
+    assert row.proxy_id is None
+    assert row.completed_at is not None
+
+
+@pytest.mark.integration
+async def test_recorder_survives_recancellation_during_persist(
+    db_session, db_session_factory, redis_client, monkeypatch
+):
+    """A second cancel while the finally block awaits the recorder must not
+    kill the shielded persistence — the row still lands in PostgreSQL."""
+    import app.services.fetchers as _fetchers
+
+    fetch_started = asyncio.Event()
+    recorder_started = asyncio.Event()
+    release_recorder = asyncio.Event()
+
+    class _SlowFetcher:
+        async def fetch(
+            self,
+            url,
+            *,
+            proxy=None,
+            headers=None,
+            timeout_s=30.0,
+            follow_redirects=True,
+            max_redirects=10,
+        ):
+            fetch_started.set()
+            await asyncio.Event().wait()  # block until cancelled
+
+    job_id = _job_id()
+    real_recorder = _recorder(db_session_factory, job_id)
+
+    async def _slow_recorder(attempt):
+        recorder_started.set()
+        await release_recorder.wait()
+        return await real_recorder(attempt)
+
+    stub = _SlowFetcher()
+    monkeypatch.setattr(_fetchers, "get_fetcher", lambda engine, **kw: stub)
+
+    task = asyncio.create_task(
+        fetch_with_retry(
+            fetcher=stub,
+            url=URL,
+            policy=_policy(),
+            attempt_recorder=_slow_recorder,
+        )
+    )
+    await fetch_started.wait()
+    task.cancel()
+    await recorder_started.wait()  # finally reached; shielded recorder running
+    task.cancel()  # re-cancel while the task awaits the shielded recorder
+    await asyncio.sleep(0.02)
+    release_recorder.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The shielded recorder persists in the background — poll until it lands.
+    rows: list = []
+    for _ in range(40):
+        rows = await _log_rows(db_session_factory, job_id)
+        if rows:
+            break
+        await asyncio.sleep(0.05)
+    assert len(rows) == 1
+    assert rows[0].outcome == "cancelled"
+
+
 # ── 9. Backward compatibility ────────────────────────────────────────────────
 
 
@@ -689,7 +811,9 @@ async def test_migration_0008_roundtrip_default_partition_and_view(_postgres_dsn
                 assert view_row["domain"] == "view.example"
                 assert view_row["engine"] == "httpx"
 
-            # Downgrade: view, default partition, indexes, constraint, columns gone.
+            # Downgrade: view/indexes/constraint/columns removed, but the
+            # DEFAULT partition is DETACHED — the relation and its audit
+            # rows must survive as a standalone table.
             await asyncio.to_thread(command.downgrade, cfg, "0007")
 
             async with engine.begin() as conn:
@@ -707,12 +831,33 @@ async def test_migration_0008_roundtrip_default_partition_and_view(_postgres_dsn
                     await conn.execute(text("SELECT to_regclass('proxy_usage_daily')"))
                 ).scalar()
                 assert view is None
+                # Standalone table still exists, detached from the parent.
                 default_part = (
                     await conn.execute(text("SELECT to_regclass('request_log_default')"))
                 ).scalar()
-                assert default_part is None
+                assert default_part is not None
+                attached = (
+                    await conn.execute(
+                        text(
+                            "SELECT count(*) FROM pg_inherits "
+                            "WHERE inhrelid = 'request_log_default'::regclass "
+                            "AND inhparent = 'request_log'::regclass"
+                        )
+                    )
+                ).scalar()
+                assert attached == 0
+                # The out-of-year audit row is preserved.
+                preserved = (
+                    await conn.execute(
+                        text(
+                            "SELECT count(*) FROM request_log_default "
+                            "WHERE domain = 'future.example'"
+                        )
+                    )
+                ).scalar()
+                assert preserved == 1
 
-            # Re-upgrade succeeds cleanly.
+            # Re-upgrade succeeds and re-attaches the preserved table.
             await asyncio.to_thread(command.upgrade, cfg, "head")
             async with engine.begin() as conn:
                 cols = await conn.execute(
@@ -727,6 +872,23 @@ async def test_migration_0008_roundtrip_default_partition_and_view(_postgres_dsn
                     await conn.execute(text("SELECT to_regclass('proxy_usage_daily')"))
                 ).scalar()
                 assert view is not None
+                attached = (
+                    await conn.execute(
+                        text(
+                            "SELECT count(*) FROM pg_inherits "
+                            "WHERE inhrelid = 'request_log_default'::regclass "
+                            "AND inhparent = 'request_log'::regclass"
+                        )
+                    )
+                ).scalar()
+                assert attached == 1
+                # The preserved row is visible through the parent again.
+                via_parent = (
+                    await conn.execute(
+                        text("SELECT count(*) FROM request_log WHERE domain = 'future.example'")
+                    )
+                ).scalar()
+                assert via_parent == 1
         finally:
             settings.database_url = prev_url  # type: ignore[assignment]
             _restore_app_logging()

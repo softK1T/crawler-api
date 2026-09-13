@@ -100,7 +100,24 @@ def upgrade() -> None:
     op.create_index("ix_reqlog_outcome_time", "request_log", ["outcome", "requested_at"])
 
     # ── DEFAULT partition: inserts never fail after the last yearly one ────
-    op.execute("CREATE TABLE request_log_default PARTITION OF request_log DEFAULT")
+    # Re-attach a previously detached table (left behind by a downgrade)
+    # when present; create fresh when absent; no-op when already attached.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF to_regclass('request_log_default') IS NULL THEN
+                CREATE TABLE request_log_default PARTITION OF request_log DEFAULT;
+            ELSIF NOT EXISTS (
+                SELECT 1 FROM pg_inherits
+                WHERE inhrelid = 'request_log_default'::regclass
+                  AND inhparent = 'request_log'::regclass
+            ) THEN
+                ALTER TABLE request_log ATTACH PARTITION request_log_default DEFAULT;
+            END IF;
+        END $$;
+        """
+    )
 
     # ── proxy_usage_daily aggregate view ───────────────────────────────────
     op.execute(
@@ -132,12 +149,30 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Drop view first — it depends on the columns being removed.
     op.execute("DROP VIEW IF EXISTS proxy_usage_daily")
-    # Detach-free removal: the DEFAULT partition holds no data worth keeping
-    # in a downgrade, and the parent stays intact for the other partitions.
-    op.execute("DROP TABLE IF EXISTS request_log_default")
+    # Drop the partitioned indexes BEFORE detaching: their per-partition
+    # children (including the DEFAULT partition's) go with them, so a later
+    # re-upgrade can recreate the same index names without collisions.
     op.drop_index("ix_reqlog_outcome_time", table_name="request_log")
     op.drop_index("ix_reqlog_proxy_time", table_name="request_log")
     op.drop_index("ix_reqlog_job_attempt", table_name="request_log")
+    # DETACH, never DROP: every row with requested_at outside the yearly
+    # partitions lives in the DEFAULT partition (all traffic after 2027),
+    # and a downgrade must not erase audit history.  The table survives as a
+    # standalone relation — a re-upgrade re-attaches it.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_inherits
+                WHERE inhrelid = 'request_log_default'::regclass
+                  AND inhparent = 'request_log'::regclass
+            ) THEN
+                ALTER TABLE request_log DETACH PARTITION request_log_default;
+            END IF;
+        END $$;
+        """
+    )
     op.drop_constraint("ck_request_log_outcome", "request_log", type_="check")
     op.drop_column("request_log", "completed_at")
     op.drop_column("request_log", "proxy_pool_id")

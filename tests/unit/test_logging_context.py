@@ -56,3 +56,75 @@ async def test_clear_context_removes_bound_values():
     clear_context()
     assert structlog.contextvars.get_contextvars().get("job_id") is None
     assert structlog.contextvars.get_contextvars().get("application_id") is None
+
+
+def test_stdlib_bridge_merges_extra_fields_and_redacts(monkeypatch):
+    """extra={...} fields must survive the stdlib bridge (Defect 2 regression).
+
+    Previously emit() built the payload only from getMessage()/name/level and
+    contextvars — extra fields like job_id/proxy_id/outcome were silently
+    dropped from ``request_attempt_persist_failed`` diagnostics.
+    """
+    import io
+    import json
+    import logging
+    import sys
+
+    from app.core.logging_config import _StructlogHandler
+
+    record = logging.LogRecord(
+        name="app.services.request_attempt_log",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="request_attempt_persist_failed",
+        args=(),
+        exc_info=None,
+    )
+    record.__dict__["job_id"] = "job-extra-1"
+    record.__dict__["outcome"] = "network_error"
+    record.__dict__["proxy_line"] = "1.2.3.4:8080:user:supersecret"
+
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stream)
+    handler = _StructlogHandler()
+    handler.emit(record)
+
+    payload = json.loads(stream.getvalue())
+    assert payload["event"] == "request_attempt_persist_failed"
+    assert payload["job_id"] == "job-extra-1"
+    assert payload["outcome"] == "network_error"
+    # Credentials in extra fields are redacted like the message.
+    assert "supersecret" not in payload["proxy_line"]
+    assert "1.2.3.4:8080:***:***" in payload["proxy_line"]
+
+
+def test_stdlib_bridge_extra_fields_win_over_bound_context(monkeypatch):
+    """Explicitly logged fields override bound contextvars."""
+    import io
+    import json
+    import logging
+    import sys
+
+    from app.core.logging_config import _StructlogHandler, bind_context, clear_context
+
+    bind_context(job_id="job-from-context")
+    try:
+        record = logging.LogRecord(
+            name="probe",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="probe",
+            args=(),
+            exc_info=None,
+        )
+        record.__dict__["job_id"] = "job-from-extra"
+
+        stream = io.StringIO()
+        monkeypatch.setattr(sys, "stderr", stream)
+        _StructlogHandler().emit(record)
+        payload = json.loads(stream.getvalue())
+        assert payload["job_id"] == "job-from-extra"
+    finally:
+        clear_context()

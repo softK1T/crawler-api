@@ -83,6 +83,35 @@ def get_logger(name: str = "crawler-api"):
 
 # ── Stdlib bridge ────────────────────────────────────────────────────────────
 
+#: Standard LogRecord attributes — everything else in record.__dict__ came
+#: from extra={...} and carries structured fields we must not silently drop.
+_STD_RECORD_ATTRS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "message",
+    }
+)
+
 
 class _StructlogHandler(logging.Handler):
     """Bridge: format stdlib log records as JSON and write directly to stderr.
@@ -90,6 +119,10 @@ class _StructlogHandler(logging.Handler):
     Writes JSON directly to stderr rather than routing through structlog's
     LoggerFactory, which would feed back into the stdlib logging system and
     cause infinite recursion (ADR-013).
+
+    Non-standard attributes passed via ``extra={...}`` are merged into the
+    JSON payload (with redaction) — they carry the structured fields needed
+    for incident diagnosis (job_id, proxy_id, outcome, domain, ...).
     """
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -111,6 +144,14 @@ class _StructlogHandler(logging.Handler):
             bound_ctx = structlog.contextvars.get_contextvars()
             if bound_ctx:
                 payload.update(bound_ctx)
+            # Merge extra={...} fields (redacted) last, so explicitly logged
+            # values win over bound context.
+            for key, value in record.__dict__.items():
+                if key in _STD_RECORD_ATTRS or key.startswith("_"):
+                    continue
+                if isinstance(value, str):
+                    value = redact(value)
+                payload[key] = value
             json_str = json.dumps(payload, default=str)
             sys.stderr.write(json_str + "\n")
             sys.stderr.flush()
