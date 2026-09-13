@@ -10,6 +10,7 @@ import asyncio
 import logging
 import uuid
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -129,6 +130,42 @@ def _recorder(db_session_factory, job_id: str, **identity):
         application_id=identity.get("application_id"),
         trace_id=identity.get("trace_id", job_id),
     )
+
+
+def _attempt_record(**overrides):
+    """Minimal transport-neutral AttemptResult for direct drain tests."""
+    from datetime import UTC, datetime
+
+    from app.services.fetchers.base import AttemptResult
+
+    now = datetime.now(UTC)
+    fields: dict[str, Any] = {
+        "url": URL,
+        "domain": DOMAIN,
+        "method": "GET",
+        "attempt_number": 1,
+        "tier_attempt_number": 1,
+        "escalation_tier": 0,
+        "proxy_id": None,
+        "proxy_pool_id": None,
+        "proxy_provider": None,
+        "proxy_type": None,
+        "proxy_country": None,
+        "proxy_city": None,
+        "engine": "httpx",
+        "outcome": "cancelled",
+        "status_code": None,
+        "duration_ms": 5,
+        "bytes_received": 0,
+        "blocked": False,
+        "block_reason": None,
+        "error_type": "CancelledError",
+        "error": "request attempt cancelled",
+        "requested_at": now,
+        "completed_at": now,
+    }
+    fields.update(overrides)
+    return AttemptResult(**fields)
 
 
 # ── 1. Direct success ────────────────────────────────────────────────────────
@@ -602,8 +639,12 @@ async def test_cancel_during_finally_on_success_path_is_not_swallowed(
     with pytest.raises(asyncio.CancelledError):
         await task  # the cancellation must NOT be swallowed
 
+    # Worker shutdown drains the shielded write instead of hoping the
+    # background task survives — no polling, immediate check after drain.
+    from app.services.fetchers.base import drain_pending_attempt_writes
+
     release_recorder.set()
-    await asyncio.sleep(0.15)  # the shielded recorder persists in the background
+    assert await drain_pending_attempt_writes(max_wait_s=5.0) == 0
 
     rows = await _log_rows(db_session_factory, job_id)
     assert len(rows) == 1
@@ -664,15 +705,60 @@ async def test_recorder_survives_recancellation_during_persist(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    # The shielded recorder persists in the background — poll until it lands.
-    rows: list = []
-    for _ in range(40):
-        rows = await _log_rows(db_session_factory, job_id)
-        if rows:
-            break
-        await asyncio.sleep(0.05)
+    # Worker shutdown drains the shielded write instead of hoping the
+    # background task survives — no polling, immediate check after drain.
+    from app.services.fetchers.base import drain_pending_attempt_writes
+
+    assert await drain_pending_attempt_writes(max_wait_s=5.0) == 0
+
+    rows = await _log_rows(db_session_factory, job_id)
     assert len(rows) == 1
     assert rows[0].outcome == "cancelled"
+
+
+@pytest.mark.integration
+async def test_drain_reports_abandoned_writes(db_session, redis_client):
+    """A shielded write that outlives the drain timeout is REPORTED, not lost
+    silently — shutdown logs attempt_writes_abandoned count=N."""
+    from app.services.fetchers.base import _spawn_shielded_write, drain_pending_attempt_writes
+
+    release = asyncio.Event()
+
+    async def _never_finishing_recorder(attempt):
+        await release.wait()
+        return None
+
+    _spawn_shielded_write(_never_finishing_recorder(_attempt_record()))
+
+    abandoned = await drain_pending_attempt_writes(max_wait_s=0.05)
+    assert abandoned == 1
+
+    release.set()
+    assert await drain_pending_attempt_writes(max_wait_s=5.0) == 0
+
+
+@pytest.mark.integration
+async def test_worker_shutdown_drains_pending_writes(db_session, redis_client):
+    """shutdown() must wait for tracked attempt writes before any teardown."""
+    from app.services.fetchers.base import _spawn_shielded_write, drain_pending_attempt_writes
+    from app.worker.tasks.fetch_task import shutdown
+
+    recorder_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow_write(attempt):
+        recorder_started.set()
+        await release.wait()
+
+    _spawn_shielded_write(_slow_write(_attempt_record()))
+
+    shutdown_task = asyncio.create_task(shutdown({"redis": SimpleNamespace(aclose=AsyncMock())}))
+    await recorder_started.wait()
+    assert not shutdown_task.done(), "shutdown must wait for pending attempt writes"
+    release.set()
+    await shutdown_task
+
+    assert await drain_pending_attempt_writes(max_wait_s=5.0) == 0
 
 
 # ── 9. Backward compatibility ────────────────────────────────────────────────

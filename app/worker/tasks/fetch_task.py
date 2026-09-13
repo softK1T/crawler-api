@@ -566,7 +566,19 @@ async def startup(ctx: dict) -> None:
 
 
 async def shutdown(ctx: dict) -> None:
-    """arq worker shutdown — drain browser pool, flush WARC, close Redis."""
+    """arq worker shutdown — drain attempt writes, browser pool, WARC, Redis."""
+    # Drain shielded attempt writes BEFORE anything that could kill them
+    # (Redis close, executor shutdown, engine disposal at process exit) —
+    # otherwise a closing event loop silently drops the last audit rows.
+    try:
+        from app.services.fetchers.base import drain_pending_attempt_writes
+
+        abandoned = await drain_pending_attempt_writes(max_wait_s=5.0)
+        if abandoned:
+            logger.warning("attempt_writes_abandoned count=%d", abandoned)
+    except Exception:
+        logger.warning("Attempt-write drain failed", exc_info=True)
+
     # Drain browser pool.
     if ctx.get("browser_pool"):
         try:

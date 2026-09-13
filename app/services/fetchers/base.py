@@ -186,6 +186,35 @@ async def _report_proxy_attempt(
         return False
 
 
+# ── Shielded attempt-write drain ─────────────────────────────────────────────
+
+#: Fire-and-forget attempt persistence spawned during cancellation cleanup.
+#: Nothing awaits these tasks except the worker-shutdown drain — without it a
+#: closing event loop silently drops the last audit rows.
+_PENDING_ATTEMPT_WRITES: set[asyncio.Task[UUID | None]] = set()
+
+
+def _spawn_shielded_write(coro: Awaitable[UUID | None]) -> asyncio.Task[UUID | None]:
+    """Spawn and track a persistence task for explicit shutdown drain."""
+    task = cast("asyncio.Task[UUID | None]", asyncio.ensure_future(coro))
+    _PENDING_ATTEMPT_WRITES.add(task)
+    task.add_done_callback(_PENDING_ATTEMPT_WRITES.discard)
+    return task
+
+
+async def drain_pending_attempt_writes(max_wait_s: float = 5.0) -> int:
+    """Await tracked attempt writes; return how many are still unfinished.
+
+    Called from worker shutdown BEFORE Redis/executor/engine teardown so a
+    closing event loop cannot silently drop cancelled attempts' audit rows.
+    """
+    pending = list(_PENDING_ATTEMPT_WRITES)
+    if not pending:
+        return 0
+    _done, not_done = await asyncio.wait(pending, timeout=max_wait_s)
+    return len(not_done)
+
+
 # ── Retry orchestration ──────────────────────────────────────────────────────
 
 
@@ -704,11 +733,13 @@ async def fetch_with_retry(
                     completed_at=datetime.now(UTC),
                 )
                 try:
-                    # shield(): during cancellation a bare await here would be
-                    # interrupted immediately and the attempt row would never
-                    # reach PostgreSQL.  The shielded recorder keeps persisting
-                    # in the background even if this task is cancelled again.
-                    request_log_id = await asyncio.shield(attempt_recorder(attempt_record))
+                    # Spawn as a TRACKED task and shield it: a bare await here
+                    # would be interrupted immediately during cancellation,
+                    # and an untracked shielded coroutine could be killed
+                    # silently when the event loop closes.  Tracked writes are
+                    # drained by worker shutdown before any teardown.
+                    write_task = _spawn_shielded_write(attempt_recorder(attempt_record))
+                    request_log_id = await asyncio.shield(write_task)
                 except asyncio.CancelledError:
                     # The shielded recorder continues in the background; the
                     # cancelled task must still terminate cleanly.
