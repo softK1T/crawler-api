@@ -84,21 +84,47 @@ def get_logger(name: str = "crawler-api"):
 # ── Stdlib bridge ────────────────────────────────────────────────────────────
 
 
-def _redact_value(value: Any) -> Any:
-    """Recursively redact credentials in any string/dict/list/object value.
+#: Scalars json.dumps encodes natively — passed through unchanged so
+#: numeric/boolean log fields keep their JSON types (jq selects, Loki metric
+#: queries, alerting on duration_ms/status_code).  bool is listed BEFORE int:
+#: bool subclasses int, and the order documents the intent explicitly.
+_JSON_SAFE_SCALARS = (bool, int, float)
+
+#: Nesting depth at which redaction stops recursing and stringifies —
+#: guards against self-referential structures blowing the stack.
+_MAX_REDACT_DEPTH = 6
+
+
+def _redact_value(value: Any, _depth: int = 0) -> Any:
+    """Recursively redact credentials without changing JSON-native types.
+
+    None/bool/int/float pass through unchanged — stringifying them would
+    break downstream numeric/boolean filtering and change the type contract
+    of already-shipped fields (status_code, blocked, duration_ms, ...).
+    str values are redacted; dict keys AND values are redacted (a key can
+    carry a credential); lists/tuples/sets/frozensets recurse into a list.
+    Anything json.dumps cannot encode natively (UUID, datetime, Decimal,
+    Enum, ...) is stringified and redacted as a fallback.
 
     Runs BEFORE json.dumps: redacting the serialized JSON string instead
     would corrupt it — the redact() regexes match ISO-8601 timestamps
     (host:port:user:pass shape) and swallow closing quotes around trailing
     credential strings.
     """
+    if value is None or isinstance(value, _JSON_SAFE_SCALARS):
+        return value
     if isinstance(value, str):
         return redact(value)
+    if _depth >= _MAX_REDACT_DEPTH:
+        return redact(str(value))
     if isinstance(value, dict):
-        return {key: _redact_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_value(item) for item in value]
-    return _redact_value(str(value))
+        return {
+            redact(key) if isinstance(key, str) else key: _redact_value(item, _depth + 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_redact_value(item, _depth + 1) for item in value]
+    return redact(str(value))
 
 
 #: Standard LogRecord attributes — everything else in record.__dict__ came
