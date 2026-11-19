@@ -6,9 +6,10 @@ per-attempt observability and asynchronous batches are included.
 
 ## Fresh installation
 
-Requires Git and Docker with a current Compose v2 plugin. Host Python and a
-manually created .env are not required. Internet access is required for the
-first build to install dependencies and both browsers.
+Requires Git and Docker with a current Compose v2 plugin on Linux x86_64. Host
+Python and a manually created .env are not required. Internet access is required
+for the first build to install dependencies and both browsers. Native ARM64
+builds are not supported by the currently pinned Camoufox artifact.
 
 ```bash
 git clone https://github.com/softK1T/crawler-api.git
@@ -24,6 +25,24 @@ The default docker-compose.yml builds entirely from this repository's Dockerfile
 There is no dependency on a developer's existing local application image, home
 folder, external override file or preinstalled browser. PostgreSQL and Redis
 are pulled from their public images.
+
+### Pinned Camoufox runtime
+
+The upstream releases API became unavailable. Instead of calling camoufox fetch,
+the Dockerfile downloads the recovered Linux x86_64 installation from this
+repository's release runtime-camoufox-159.0-beta.42-linux-x86_64. The Python
+package remains camoufox 0.4.11; browser metadata is 159.0-beta.42.
+
+Archive: camoufox-linux-x86_64.tar.gz (approximately 1.36 GB compressed).
+SHA256: `549445fd1a070901cfb7e3f1309e0613f6dd117180d1cd01edd2df61606f9804`.
+The build verifies this hardcoded checksum before filtered extraction and checks
+the browser metadata and executable. The worker still must pass its real browser
+launch self-check; file verification alone is not a successful browser test.
+The archive came from the previously working deployment, not an independently
+verified upstream signature. Do not overwrite the release asset; use a new
+versioned release and reviewed checksum for future changes. No browser download
+is performed by this Dockerfile at container startup. A verified ARM64 archive
+and platform-specific pin are needed before claiming native ARM64 support.
 
 Startup creates a persistent random database password, waits for PostgreSQL and
 Redis, applies Alembic migrations and creates a local administrator key. API and
