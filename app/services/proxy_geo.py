@@ -1,4 +1,5 @@
 """Bounded HTTPS exit-IP probe. No target-site requests or direct fallback."""
+
 import asyncio
 import ipaddress
 import socket
@@ -36,8 +37,12 @@ async def discover_exit_ip(proxy_url: str, endpoint: str, timeout_s: float) -> s
 
         async with AsyncSession(trust_env=False) as session:
             response = await session.get(
-                endpoint, proxy=pinned, timeout=timeout_s, verify=True,
-                allow_redirects=False, content_callback=collect,
+                endpoint,
+                proxy=pinned,
+                timeout=timeout_s,
+                verify=True,
+                allow_redirects=False,
+                content_callback=collect,
             )
         if response.status_code != 200:
             raise ValueError("probe_http_error")
@@ -48,9 +53,16 @@ def lookup_country(path: str, exit_ip: str) -> str | None:
     import maxminddb
 
     with maxminddb.open_database(path) as reader:
-        entry = reader.get(exit_ip) or {}
+        entry = reader.get(exit_ip)
+
     # Do not substitute registered_country: it is not exit-IP geolocation.
-    return entry.get("country", {}).get("iso_code")
+    if not isinstance(entry, dict):
+        return None
+    country = entry.get("country")
+    if not isinstance(country, dict):
+        return None
+    code = country.get("iso_code")
+    return code if isinstance(code, str) else None
 
 
 def check_database(path: str) -> None:

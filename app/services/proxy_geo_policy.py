@@ -1,7 +1,8 @@
 """Pure country/discovery policy shared by worker and proxy selection."""
-from datetime import UTC, datetime, timedelta
+
 import ipaddress
 import re
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -21,8 +22,14 @@ def country_code(value: str) -> str:
 
 def probe_endpoint(url: str) -> str:
     parsed = urlsplit(url)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username
-            or parsed.password or parsed.fragment or parsed.port not in (None, 443)):
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or parsed.port not in (None, 443)
+    ):
         raise ValueError("invalid_probe_endpoint")
     public_ip(parsed.hostname)
     return url
@@ -30,9 +37,14 @@ def probe_endpoint(url: str) -> str:
 
 def pin_proxy(url: str, addresses: list[str]) -> str:
     parsed = urlsplit(url)
-    if (parsed.scheme not in {"http", "https", "socks5", "socks5h", "socks4", "socks4a"}
-            or not parsed.hostname or parsed.port is None
-            or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+    if (
+        parsed.scheme not in {"http", "https", "socks5", "socks5h", "socks4", "socks4a"}
+        or not parsed.hostname
+        or parsed.port is None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("invalid_proxy_url")
     if not addresses:
         raise ValueError("proxy_dns_empty")
@@ -52,8 +64,9 @@ def parse_exit_ip(body: bytes) -> str:
     return public_ip(matches[0].strip())
 
 
-def selection_matches(proxy, *, pool_id=None, country=None, city=None,
-                      proxy_type=None, now=None) -> bool:
+def selection_matches(
+    proxy, *, pool_id=None, country=None, city=None, proxy_type=None, now=None
+) -> bool:
     now = now or datetime.now(UTC)
     if not proxy.is_active:
         return False
@@ -68,15 +81,19 @@ def selection_matches(proxy, *, pool_id=None, country=None, city=None,
     if proxy_type is not None and proxy.proxy_type != proxy_type:
         return False
     if getattr(proxy, "geo_enabled", False):
-        if (proxy.geo_status not in {"verified", "mismatch"}
-                or proxy.geo_checked_at is None or proxy.geo_next_check_at is None
-                or proxy.geo_next_check_at <= now):
+        if (
+            proxy.geo_status not in {"verified", "mismatch"}
+            or proxy.geo_checked_at is None
+            or proxy.geo_next_check_at is None
+            or proxy.geo_next_check_at <= now
+        ):
             return False
     return True
 
 
-def apply_observation(proxy, *, now, retry_s: int, ttl_s: int,
-                      exit_ip=None, country=None, error=None) -> None:
+def apply_observation(
+    proxy, *, now, retry_s: int, ttl_s: int, exit_ip=None, country=None, error=None
+) -> None:
     proxy.geo_attempted_at = now
     if error is not None:
         proxy.geo_status = "failed"
@@ -97,6 +114,8 @@ def apply_observation(proxy, *, now, retry_s: int, ttl_s: int,
     if proxy.country != code:
         proxy.city = None
     proxy.country = code
-    proxy.geo_status = "mismatch" if proxy.declared_country and proxy.declared_country != code else "verified"
+    proxy.geo_status = (
+        "mismatch" if proxy.declared_country and proxy.declared_country != code else "verified"
+    )
     proxy.geo_checked_at = now
     proxy.geo_next_check_at = now + timedelta(seconds=ttl_s)

@@ -1,4 +1,5 @@
 """Offline tests; also runnable with python -m unittest discover -s tests -p test_proxy_geo_unit.py."""
+
 import asyncio
 import sys
 import types
@@ -23,13 +24,24 @@ NOW = datetime(2026, 11, 19, tzinfo=UTC)
 
 
 def proxy(**changes):
-    values = dict(
-        id=uuid4(), pool_id=uuid4(), is_active=True, cooldown_until=None,
-        country="PL", city="Warsaw", proxy_type="datacenter", geo_enabled=False,
-        declared_country=None, detected_country=None, exit_ip=None,
-        geo_status="unmanaged", geo_checked_at=None, geo_next_check_at=None,
-        geo_last_error=None, geo_attempted_at=None,
-    )
+    values = {
+        "id": uuid4(),
+        "pool_id": uuid4(),
+        "is_active": True,
+        "cooldown_until": None,
+        "country": "PL",
+        "city": "Warsaw",
+        "proxy_type": "datacenter",
+        "geo_enabled": False,
+        "declared_country": None,
+        "detected_country": None,
+        "exit_ip": None,
+        "geo_status": "unmanaged",
+        "geo_checked_at": None,
+        "geo_next_check_at": None,
+        "geo_last_error": None,
+        "geo_attempted_at": None,
+    }
     values.update(changes)
     return SimpleNamespace(**values)
 
@@ -45,9 +57,17 @@ class GeoPolicyTests(unittest.TestCase):
 
     def test_non_public_addresses_rejected(self):
         for value in (
-            "127.0.0.1", "10.1.2.3", "169.254.169.254", "192.168.1.1",
-            "100.64.0.1", "::1", "fc00::1", "fe80::1", "224.0.0.1",
-            "::ffff:127.0.0.1", "0.0.0.0",
+            "127.0.0.1",
+            "10.1.2.3",
+            "169.254.169.254",
+            "192.168.1.1",
+            "100.64.0.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "224.0.0.1",
+            "::ffff:127.0.0.1",
+            "0.0.0.0",  # noqa: S104 -- rejection test input, not a listening socket
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 public_ip(value)
@@ -56,11 +76,15 @@ class GeoPolicyTests(unittest.TestCase):
         self.assertEqual(public_ip("1.1.1.1"), "1.1.1.1")
 
     def test_endpoint_requires_public_https_ip(self):
-        self.assertEqual(probe_endpoint("https://1.1.1.1/cdn-cgi/trace"),
-                         "https://1.1.1.1/cdn-cgi/trace")
+        self.assertEqual(
+            probe_endpoint("https://1.1.1.1/cdn-cgi/trace"), "https://1.1.1.1/cdn-cgi/trace"
+        )
         for value in (
-            "http://1.1.1.1/", "https://127.0.0.1/", "https://example.com/",
-            "https://user:pass@1.1.1.1/", "https://1.1.1.1:8443/",
+            "http://1.1.1.1/",
+            "https://127.0.0.1/",
+            "https://example.com/",
+            "https://user:pass@1.1.1.1/",
+            "https://1.1.1.1:8443/",
             "https://1.1.1.1/#fragment",
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -78,8 +102,11 @@ class GeoPolicyTests(unittest.TestCase):
 
     def test_invalid_proxy_urls_rejected(self):
         for value in (
-            "file:///etc/passwd", "http://1.1.1.1", "http://1.1.1.1:80/path",
-            "http://1.1.1.1:80/?x=1", "http://1.1.1.1:80/#x",
+            "file:///etc/passwd",
+            "http://1.1.1.1",
+            "http://1.1.1.1:80/path",
+            "http://1.1.1.1:80/?x=1",
+            "http://1.1.1.1:80/#x",
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 pin_proxy(value, ["1.1.1.1"])
@@ -94,8 +121,12 @@ class GeoPolicyTests(unittest.TestCase):
         self.assertEqual(parse_exit_ip(b"fl=123\nip=8.8.8.8\nloc=US\n"), "8.8.8.8")
 
     def test_bad_exit_responses_rejected(self):
-        for body in (b"ip=127.0.0.1", b"<html>blocked</html>",
-                     b"ip=8.8.8.8\nip=1.1.1.1", b"x" * 16385):
+        for body in (
+            b"ip=127.0.0.1",
+            b"<html>blocked</html>",
+            b"ip=8.8.8.8\nip=1.1.1.1",
+            b"x" * 16385,
+        ):
             with self.subTest(body=body[:30]), self.assertRaises(ValueError):
                 parse_exit_ip(body)
 
@@ -105,7 +136,9 @@ class GeoPolicyTests(unittest.TestCase):
     def test_all_sticky_constraints(self):
         p = proxy()
         for filters in (
-            {"pool_id": uuid4()}, {"country": "DE"}, {"city": "Berlin"},
+            {"pool_id": uuid4()},
+            {"country": "DE"},
+            {"city": "Berlin"},
             {"proxy_type": "residential"},
         ):
             with self.subTest(filters=filters):
@@ -113,47 +146,54 @@ class GeoPolicyTests(unittest.TestCase):
 
     def test_inactive_or_cooling_proxy_excluded(self):
         self.assertFalse(selection_matches(proxy(is_active=False), now=NOW))
-        self.assertFalse(selection_matches(
-            proxy(cooldown_until=NOW + timedelta(seconds=1)), now=NOW,
-        ))
+        self.assertFalse(
+            selection_matches(
+                proxy(cooldown_until=NOW + timedelta(seconds=1)),
+                now=NOW,
+            )
+        )
 
     def test_pending_failed_and_unknown_excluded(self):
         for status in ("pending", "failed", "unknown"):
             with self.subTest(status=status):
-                self.assertFalse(selection_matches(
-                    proxy(geo_enabled=True, geo_status=status), now=NOW,
-                ))
+                self.assertFalse(
+                    selection_matches(
+                        proxy(geo_enabled=True, geo_status=status),
+                        now=NOW,
+                    )
+                )
 
     def test_verified_and_mismatch_require_freshness(self):
         for status in ("verified", "mismatch"):
-            p = proxy(geo_enabled=True, geo_status=status,
-                      geo_checked_at=NOW, geo_next_check_at=NOW + timedelta(seconds=1))
+            p = proxy(
+                geo_enabled=True,
+                geo_status=status,
+                geo_checked_at=NOW,
+                geo_next_check_at=NOW + timedelta(seconds=1),
+            )
             self.assertTrue(selection_matches(p, now=NOW))
             self.assertFalse(selection_matches(p, now=NOW + timedelta(seconds=1)))
 
     def test_observation_updates_country_and_preserves_declaration(self):
         p = proxy()
-        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600,
-                          exit_ip="8.8.8.8", country="DE")
-        self.assertEqual((p.country, p.detected_country, p.declared_country),
-                         ("DE", "DE", "PL"))
+        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600, exit_ip="8.8.8.8", country="DE")
+        self.assertEqual((p.country, p.detected_country, p.declared_country), ("DE", "DE", "PL"))
         self.assertEqual(p.geo_status, "mismatch")
         self.assertIsNone(p.city)
 
     def test_geo_does_not_activate_or_reclassify(self):
         p = proxy(is_active=False, country=None)
-        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600,
-                          exit_ip="8.8.8.8", country="PL")
+        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600, exit_ip="8.8.8.8", country="PL")
         self.assertFalse(p.is_active)
         self.assertEqual(p.proxy_type, "datacenter")
         self.assertEqual(p.geo_status, "verified")
 
     def test_failure_preserves_last_success(self):
         p = proxy()
-        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600,
-                          exit_ip="8.8.8.8", country="PL")
-        apply_observation(p, now=NOW + timedelta(seconds=1), retry_s=60,
-                          ttl_s=3600, error="TimeoutError")
+        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600, exit_ip="8.8.8.8", country="PL")
+        apply_observation(
+            p, now=NOW + timedelta(seconds=1), retry_s=60, ttl_s=3600, error="TimeoutError"
+        )
         self.assertEqual(p.country, "PL")
         self.assertEqual(p.exit_ip, "8.8.8.8")
         self.assertEqual(p.geo_checked_at, NOW)
@@ -161,8 +201,7 @@ class GeoPolicyTests(unittest.TestCase):
 
     def test_unknown_country_preserves_history_but_excludes_selection(self):
         p = proxy(geo_enabled=True, geo_checked_at=NOW)
-        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600,
-                          exit_ip="8.8.8.8", country=None)
+        apply_observation(p, now=NOW, retry_s=60, ttl_s=3600, exit_ip="8.8.8.8", country=None)
         self.assertEqual(p.country, "PL")
         self.assertEqual(p.geo_status, "unknown")
         self.assertFalse(selection_matches(p, now=NOW))
@@ -192,15 +231,17 @@ class GeoProbeTests(unittest.IsolatedAsyncioTestCase):
 
         root = types.ModuleType("curl_cffi")
         requests = types.ModuleType("curl_cffi.requests")
-        requests.AsyncSession = Session
-        root.requests = requests
+        requests.__dict__["AsyncSession"] = Session
+        root.__dict__["requests"] = requests
         return calls, {"curl_cffi": root, "curl_cffi.requests": requests}
 
     async def test_proxy_is_explicit_tls_verified_no_redirects_or_environment(self):
         calls, modules = self.transport()
         with patch.dict(sys.modules, modules):
             result = await discover_exit_ip(
-                "http://8.8.4.4:8080", "https://1.1.1.1/cdn-cgi/trace", 1,
+                "http://8.8.4.4:8080",
+                "https://1.1.1.1/cdn-cgi/trace",
+                1,
             )
         self.assertEqual(result, "8.8.8.8")
         self.assertFalse(calls[0][1]["trust_env"])
