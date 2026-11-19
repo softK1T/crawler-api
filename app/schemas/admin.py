@@ -92,7 +92,7 @@ class DomainPolicyResponse(BaseModel):
 
 class ProxyPoolCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
-    provider: Literal["webshare", "custom", "residential"]
+    provider: Literal["webshare", "custom", "residential", "public-candidates"]
 
 
 _PROXY_URL_RE = re.compile(r"^https?://[^@]+:[^@]+@[^:]+:\d+$")
