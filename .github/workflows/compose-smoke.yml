@@ -47,6 +47,25 @@ jobs:
           echo "::add-mask::$KEY_AGAIN"
           test "$KEY" = "$KEY_AGAIN"
           dc exec -T api python scripts/stack_runtime.py alembic current | grep '0009'
+      - name: Restore a backup into a disposable database
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          dc() { docker compose -p ci -f docker-compose.yml "$@"; }
+          TMP=$(mktemp -d)
+          trap 'rm -rf "$TMP"' EXIT
+          SQL="SELECT (SELECT count(*) FROM api_keys)::text || ':' || (SELECT count(*) FROM proxy_pools)::text;"
+          SOURCE=$(dc exec -T postgres psql -U crawler -d crawler -At -v ON_ERROR_STOP=1 -c "$SQL")
+          dc exec -T postgres pg_dump -U crawler -d crawler -Fc > "$TMP/database.dump"
+          test -s "$TMP/database.dump"
+          dc exec -T postgres createdb -U crawler ci_restore_verify
+          dc exec -T postgres pg_restore -U crawler --dbname=ci_restore_verify --exit-on-error < "$TMP/database.dump"
+          dc exec -T postgres psql -U crawler -d ci_restore_verify -At -v ON_ERROR_STOP=1 -c 'SELECT version_num FROM alembic_version;' | grep -x '0009'
+          RESTORED=$(dc exec -T postgres psql -U crawler -d ci_restore_verify -At -v ON_ERROR_STOP=1 -c "$SQL")
+          test "$SOURCE" = "$RESTORED"
+          dc exec -T postgres dropdb -U crawler ci_restore_verify
+          echo "Restore drill passed: migration and selected row counts match"
       - name: Diagnostics on failure
         if: failure()
         run: |

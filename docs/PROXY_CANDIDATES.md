@@ -1,105 +1,123 @@
-# Public proxy candidate checks
+# Proxy candidates and ten-page acceptance
 
-This feature is opt-in. It checks one bounded HTTPS control request through a
-proxy, records its exit IP/country and activates passing imported candidates.
-It does not prove anonymity, browser compatibility or access to any shop.
+## Contract
 
-## Deployment prerequisites
+The checker performs a bounded HTTPS control request through each enrolled proxy.
+It measures exit IP and country; it does not establish anonymity, residential
+classification, browser compatibility or access to OLX or any other site.
+The default Compose enables the checker. Other deployments must explicitly set
+PROXY_CHECK_ENABLED=true in the worker and apply migration 0009 first.
 
-Apply migration 0009 before starting updated API/worker code. Test migrations
-on a disposable database first. Preserve the existing Camoufox/browser cache;
-this feature does not require fetching or updating browser binaries. No
-deployment is performed by committing this code.
+Defaults: control endpoint https://1.1.1.1/cdn-cgi/trace, 8-second probe timeout,
+concurrency 4, batch size 20, success TTL 21600 seconds and retry delay 600 seconds.
+Cron checks once per minute. Large imports need multiple passes. Without an MMDB,
+country comes from trace loc, not colo; the endpoint is not a geolocation SLA.
+A licensed GeoLite2-Country database may be mounted read-only using
+PROXY_CHECK_DATABASE_PATH. Do not commit or redistribute that database casually.
 
-Worker environment:
+## Correct API routes
 
-```env
-PROXY_CHECK_ENABLED=true
-PROXY_CHECK_ENDPOINT=https://1.1.1.1/cdn-cgi/trace
-PROXY_CHECK_TIMEOUT_S=8
-PROXY_CHECK_CONCURRENCY=4
-PROXY_CHECK_BATCH_SIZE=20
-PROXY_CHECK_TTL_S=21600
-PROXY_CHECK_RETRY_S=600
+There is no shared /v1 prefix for these routes. All candidate operations need admin:
+
+- POST /admin/proxy-pools with name and provider=public-candidates.
+- POST /proxy/candidates/import with pool_id and proxies (1..500 URL strings).
+- GET /proxy/candidates/pools/{pool_id}/results?limit=500&offset=0.
+- GET /proxy/candidates/pools/{pool_id}/stats.
+- POST /proxy/candidates/pools/{pool_id}/recheck.
+- PATCH /proxy/candidates/{proxy_id}/enabled with {"enabled":false} or true.
+
+Accepted candidate hosts are public IP literals, not DNS gateway names. Supply
+full HTTP/HTTPS/SOCKS URLs; URL-encode authentication. Never paste real credential
+URLs into chat. New records are inactive, managed, pending and type unknown.
+Global uniqueness is (provider, URL): duplicates are not moved to another pool or
+reactivated. Reimport/recheck does not unpause a manually paused candidate.
+Use enabled=false rather than changing is_active alone to persist a pause.
+Existing paid-provider rows are not automatically enrolled by the importer.
+
+Results omit proxy URLs and credentials. A valid HTTPS response with unknown
+country may activate a candidate, but it cannot match PL. Failure disables it;
+stale checks are excluded. Sticky and normal selections apply the same pool,
+country, type, cooldown and managed-check freshness requirements.
+
+## Real acceptance: operator-supplied inputs
+
+Status: this is a procedure, not a claim a live OLX run has passed. Run in an
+isolated test stack, with authorized proxies and ten chosen permitted public
+URLs. Review site terms and robots.txt. Do not use login, seller contact data,
+private APIs, CAPTCHA bypass or repeated retries against a refusal.
+The sequence is:
+
+1. Start the canonical stack. Capture its administrative key privately:
+
+```bash
+API_KEY=$(docker compose exec -T api python scripts/stack_runtime.py key)
+BASE=http://127.0.0.1:8000
 ```
 
-Without PROXY_CHECK_DATABASE_PATH, country comes from client-location `loc`
-in the HTTPS trace response, not data-center `colo`. This diagnostic endpoint
-is not a guaranteed stable geolocation API. Missing/invalid country leaves
-country=NULL while a valid exit-IP response still passes. Optionally mount
-a licensed GeoLite2-Country MMDB read-only and set PROXY_CHECK_DATABASE_PATH.
-Database download/licensing/updates are the operator's responsibility. Bad
-configured database or endpoint fails preflight without changing candidates.
-Geolocation is approximate and rotating gateways are not country guarantees.
+2. Create a separate application and fetch-only key through /v1/applications and
+/v1/keys if testing tenancy; the bootstrap key supplies admin/keys privileges.
+Check missing-key requests return 401 and fetch-only access to admin routes 403.
 
-## Import
+3. Create a candidate pool, save its returned UUID and import your private URL
+array through /proxy/candidates/import. Do not assume an imported count means
+working proxies. Wait for results with check_status=ready, is_active=true,
+check_auto_activate=true, country=PL and unexpired check_due_at. If no PL proxy
+passes, stop; do not relax the country or fall back to direct access silently.
 
-Create a separate active pool using existing POST /v1/admin/proxy-pools:
+4. Snapshot any existing olx.pl domain policy before changing it. Policies/pools
+are global; a new application does not isolate them. POST /admin/domain-policies
+is an upsert and can replace configuration. For an isolated single-attempt test:
 
 ```json
-{"name":"public-candidates-001","provider":"public-candidates"}
+{
+  "domain": "olx.pl",
+  "proxy_pool_id": "<returned pool UUID>",
+  "engine": "httpx",
+  "respect_robots": true,
+  "max_retries": 1,
+  "max_escalation_attempts": 1,
+  "escalation_tier": 0,
+  "tier_locked": true
+}
 ```
 
-The pool is active, but imported proxy records start inactive (quarantine).
-POST /v1/proxy/candidates/import with admin scope:
+5. POST /batches/ with exactly ten distinct actual URLs, mode=static and:
 
 ```json
-{"pool_id":"<pool UUID>","proxies":["http://8.8.8.8:3128","socks5://1.1.1.1:1080"]}
+{"use_proxy":true,"proxy_country":"PL","proxy_type":"unknown"}
 ```
 
-Addresses above illustrate syntax only; they are not verified proxies. Maximum
-500 entries per request. Accepts public IP literals only, HTTP/HTTPS, SOCKS4/4a,
-SOCKS5/5h and optional URL-encoded authentication. Type is unknown, not inferred
-as datacenter/residential. Duplicates by (provider, URL) are not moved, updated
-or reactivated. Existing Webshare/provider rows are not enrolled.
+Place this object inside options, not at the top level. unknown is the current
+candidate type and a string worker override in options, not an inferred commercial
+proxy class. A datacenter/residential filter will not select these candidates.
+The domain policy binds the pool; options.proxy_pool_id is not a supported pool
+selector. A domain engine policy can override the request's mode.
 
-## Management
+6. Save batch_id and job_ids. Poll GET /batches/{batch_id}/status until all ten jobs
+are terminal, then save GET /batches/{batch_id}/results to a private JSON file.
+An HTTP failure while submitting a batch is not permission to submit it again
+blindly: admission is not an atomic transaction with all queue writes.
 
-All new endpoints require admin scope:
+7. For each job verify completed, HTTP 2xx, blocked=false, intended proxy_id/pool,
+expected engine and attempt budget. Decode body_b64, compare decoded length with
+body_bytes and SHA256 with content_sha256, then inspect actual page content.
+Check request_log for the job_id to confirm all transport attempts and proxy
+metadata, not just the final result. Protect URLs, HTML and errors as potentially
+sensitive data. Ten completed jobs are not ten valid pages.
 
-- GET /v1/proxy/candidates/pools/{pool_id}/stats
-- GET /v1/proxy/candidates/pools/{pool_id}/results?limit=100&offset=0
-- POST /v1/proxy/candidates/pools/{pool_id}/recheck
-- PATCH /v1/proxy/candidates/{proxy_id}/enabled with {"enabled":false} pauses
-  and disables; true resumes checking, not immediate activation.
+8. Restore the previous policy only after all test jobs finish. Do not restore it
+while queued jobs may still read it. Revoke temporary application keys using a
+different key with keys scope; self-revocation is forbidden. Retain safe audit IDs.
 
-Use this pause endpoint rather than changing is_active alone. Reimport and
-recheck do not unpause manually paused candidates. Result APIs never return
-proxy URLs or credentials. Known country is stored in Proxy.country; unknown
-country can be selected only without a country requirement. A datacenter-only
-request will not select unknown-type public proxies. Omitting proxy_type
-allows them but does not override existing pool/tenant selection rules.
+WORKER_MAX_JOBS=1 limits that worker, not global domain traffic. Batch admission
+checks the domain once; rate_limit_rps does not prove per-page pacing. One weighted
+picker may reuse an IP. HTTPX failure does not by itself establish a broken queue
+or a need for browser fallback. A separate, explicit browser acceptance run is
+needed after establishing the base path.
 
-## Checks and safeguards
+## Automated coverage
 
-The minute cron polls a durable DB queue. Bounded batch/concurrency, per-probe
-and total-pass timeouts, row locks and a transaction advisory lock prevent
-unbounded work and duplicate passes. Pausing waits for any in-flight row lock
-and cannot be undone by that pass. Pass timeout rolls back writes. Expired
-checks are excluded from selection. Only managed, unpaused candidates may be
-automatically activated. Failure disables the candidate and schedules retry;
-only exception categories, not credential-bearing messages, are recorded.
-Successful HTTPS with unknown country activates but clears current country
-to prevent stale routing. Sticky and ordinary selection share constraints.
-
-HTTPS verification stays enabled, redirects/environment proxy fallback are
-disabled, response size is limited to 16 KiB, proxy DNS results are public and
-pinned, endpoint is a public HTTPS IP literal. No direct fallback or automatic
-per-probe retry. Do not send sensitive sessions through public proxies.
-
-## Verification
-
-```sh
-python -m unittest discover -s tests -p test_proxy_geo_unit.py -v
-python -m unittest discover -s tests -p test_proxy_candidates_unit.py -v
-ruff check app tests
-ruff format --check app tests
-mypy app/ tests/
-pytest tests/integration/test_proxy_candidates.py -v
-```
-
-Integration tests use disposable Postgres/Redis fixtures or TEST_DATABASE_URL
-and TEST_REDIS_URL; never point them at production. Probes are mocked. Actual
-curl/TLS and control endpoint behavior require a deployment smoke test.
-Migration round trips also require a disposable DB. Downgrade removes check
-metadata but retains enum member unknown to avoid corrupting surviving rows.
+Unit/integration tests cover normalization, activation, pause, freshness and
+selection, using mocked probes. Unified CI covers clean startup and pool creation,
+not successful real proxies or target-site access. Use disposable DB/Redis for
+pytest; fixtures delete data. Do not execute tests against the server deployment.

@@ -1,75 +1,53 @@
-# Ubuntu interview baseline
+# Ubuntu deployment guide
 
-## Components
+## New installation
 
-API, arq worker, PostgreSQL and Redis.
-Engines: httpx, curl_cffi, Playwright Chromium and Camoufox Firefox.
-WARC, callbacks, premium proxy tiers, proxy sync and tracing are disabled.
-API is published on loopback only.
+Use the repository's default docker-compose.yml and README.md. On Linux x86_64:
 
-## Existing server deployment
+```bash
+git clone --branch interview-stable https://github.com/softK1T/crawler-api.git
+cd crawler-api
+docker compose up -d --build --wait
+```
 
-Git checkout: /home/kit/projects/crawler-api
-Active Compose directory: /home/kit/crawler-stack.eBCDGC
+After release changes are merged, the ordinary clone of master can be used.
+Do not combine compose.ubuntu.yaml with the default file. The former is a legacy
+standalone template for externally managed credentials and prebuilt images,
+not the required installation path. See docs/runbook.md for current operations.
 
-These are separate directories. A git pull does not update containers.
-Do not start another stack from the checkout accidentally.
+## Existing external server: recorded state, not an automatic migration
 
-Run management commands from the active Compose directory:
+As observed on 2026-11-19:
+- Compose project: crawler-smoke-1795031146-2996236.
+- Directory: /home/kit/crawler-stack.eBCDGC.
+- Files: compose.yaml and compose.proxy-a21a48e.yaml in that directory.
+- API/worker image: crawler-api:proxy-a21a48e (code a21a48e).
+- Database revision: 0009.
+- API binding: 127.0.0.1:32770 -> 8000.
+- Readiness reported DB, Redis, worker, Playwright and Camoufox OK; S3 disabled.
 
-- docker compose ps -a
-- docker compose logs --tail=80 api worker
-- docker compose port api 8000
-- docker compose exec -T worker arq --check app.worker.arq_worker.WorkerSettings
+These values are a dated operational record, not portable defaults. Later Git
+commits do not update these running containers. Manage this stack explicitly:
 
-The active stack uses a dynamically assigned API port.
-The worker healthcheck must use arq --check, not the API HTTP endpoint.
+```bash
+docker compose --project-directory /home/kit/crawler-stack.eBCDGC \
+  -p crawler-smoke-1795031146-2996236 \
+  -f /home/kit/crawler-stack.eBCDGC/compose.yaml \
+  -f /home/kit/crawler-stack.eBCDGC/compose.proxy-a21a48e.yaml ps -a
+```
 
-## Repository template
+Do not start a replacement stack from another checkout assuming its fresh empty
+volumes contain the same data. Do not use down -v or replace the database password.
+Before adopting the new canonical stack:
+1. Inventory actual mounts, database identity, queue DB, image IDs and secrets privately.
+2. Quiesce API submissions, finish active jobs and make a current backup.
+3. Restore into an isolated project with a different port; preserve or explicitly
+   migrate existing API keys, credentials, proxy pools and domain policies.
+4. Validate auth, ownership, migrations, browsers, attempt audit and representative jobs.
+5. Switch traffic only after validation, retain rollback assets and record final paths.
 
-compose.ubuntu.yaml is a standalone template.
-Do not combine it with docker-compose.yml.
-
-Variables:
-- POSTGRES_PASSWORD: required; use a long random hexadecimal password.
-- CRAWLER_IMAGE: default crawler-api:interview-ubuntu-check.
-- API_PORT: default 8000; bound to 127.0.0.1.
-
-Build the application image separately before using the template.
-For a fresh deployment: start PostgreSQL and Redis, apply Alembic migrations,
-then start API and worker. Bootstrap credentials privately: bootstrap_dev.py
-prints the raw API key.
-
-When adopting the template for an existing deployment, preserve the Compose
-project name and database credentials. Do not create replacement volumes.
-
-## Safety
-
-Keep .env, passwords and API keys outside Git.
-Never run tests against deployment PostgreSQL or Redis:
-test fixtures drop tables and flush Redis.
-Do not run docker compose down -v unless data deletion is intentional.
-Dependencies are not fully locked; retain the verified image for rollback.
-
-## Verification
-
-Regression run on macOS: 281 passed, 1 deselected.
-Native browser integration file excluded.
-Ruff, formatting and Mypy passed.
-
-Ubuntu checks performed:
-- Four engines completed jobs through API and worker.
-- Batch completion, results, ownership and size limit.
-- Missing, empty and short API keys returned 401.
-- Rotation privilege checks, expiry inheritance and overlap.
-- Both browser guards blocked loopback navigation and image subresources.
-- A reachable local server provided positive control for guard checks.
-
-The later image built from commit a844264 passed browser smoke and API
-startup/authentication checks. The complete earlier end-to-end suite
-was not repeated on that image.
-
-This is a demonstration baseline, not a complete production security audit.
-DNS rebinding, redirect coverage, sandboxing, network-level egress isolation
-and load testing require further verification.
-GitHub Actions status must be checked separately.
+The session's backup directory was /home/kit/crawler-backup-a21a48e.AYbVZ9.
+A dated backup is not a current backup once more writes occur. Its archive read
+check was successful; a production restore or migration was not thereby performed.
+Never paste full environment files, keys, credentials archives or raw proxy URLs
+into issues or logs. This guide does not claim public-production security readiness.
