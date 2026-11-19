@@ -2,8 +2,7 @@
 # Existing external deployments must be migrated separately, with their data preserved.
 x-app: &app
   image: crawler-api:local
-  build:
-    context: .
+  pull_policy: never
   entrypoint: ["python", "scripts/stack_runtime.py"]
   init: true
 
@@ -82,6 +81,8 @@ services:
 
   api:
     <<: *app
+    build:
+      context: .
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment: *app-env
     volumes:

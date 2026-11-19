@@ -13,6 +13,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Verify a single shared-image build producer
+        run: |
+          docker compose -p ci -f docker-compose.yml config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; builders=[n for n,v in s.items() if v.get("build")]; names=("api","worker","initialize","secrets"); assert builders==["api"],builders; assert {s[n]["image"] for n in names}=={"crawler-api:local"}; assert all(s[n].get("pull_policy")=="never" for n in names); print("Single build producer: api; shared local image: OK")'
       - uses: docker/setup-buildx-action@v3
       - name: Build the application image once
         uses: docker/build-push-action@v6
