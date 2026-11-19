@@ -15,11 +15,26 @@ S3_DATA = Path("/var/lib/crawler-s3")
 SPOOL = Path("/var/lib/crawler/warc-spool")
 
 
+def pristine_s3_data(root: Path) -> bool:
+    """Allow an empty volume or only empty directories shipped in the S3 image."""
+    if root.is_symlink() or not root.is_dir():
+        return False
+    allowed = {".rustfs", ".rustfs/events", ".rustfs/audit", "logs"}
+    for path in root.rglob("*"):
+        if (
+            path.is_symlink()
+            or not path.is_dir()
+            or path.relative_to(root).as_posix() not in allowed
+        ):
+            return False
+    return True
+
+
 def seed_s3() -> None:
     S3_SECRETS.mkdir(parents=True, exist_ok=True)
     source = S3_SECRETS / "credentials.json"
     if not source.exists():
-        if any(S3_DATA.iterdir()) or any(S3_SECRETS.iterdir()):
+        if not pristine_s3_data(S3_DATA) or any(S3_SECRETS.iterdir()):
             raise RuntimeError("S3 data or partial secrets exist; restore original credentials")
         credentials = {
             "access_key": secrets.token_hex(10).upper(),
