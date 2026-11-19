@@ -36,6 +36,7 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
+        structlog.contextvars.merge_contextvars,
         structlog.processors.UnicodeDecoder(),
         structlog.processors.JSONRenderer(serializer=json.dumps),
     ],
@@ -45,8 +46,6 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
-_shared_context: dict[str, str] = {}
-
 
 def bind_context(
     *,
@@ -54,7 +53,11 @@ def bind_context(
     job_id: str | None = None,
     application_id: str | None = None,
 ) -> None:
-    """Set thread-local context values for structured logging."""
+    """Bind task-local context values for structured logging.
+
+    Uses contextvars only — concurrent arq jobs cannot leak job_id/
+    application_id into each other's log lines (no process-global state).
+    """
     ctx: dict[str, str] = {}
     if trace_id:
         ctx["trace_id"] = trace_id
@@ -62,8 +65,16 @@ def bind_context(
         ctx["job_id"] = job_id
     if application_id:
         ctx["application_id"] = application_id
-    _shared_context.update(ctx)
     structlog.contextvars.bind_contextvars(**ctx)
+
+
+def clear_context() -> None:
+    """Clear all bound contextvars.
+
+    Called at the start and end of every worker job so a reused arq task
+    never inherits a previous job's trace_id/job_id/application_id.
+    """
+    structlog.contextvars.clear_contextvars()
 
 
 def get_logger(name: str = "crawler-api"):
@@ -73,19 +84,70 @@ def get_logger(name: str = "crawler-api"):
 # ── Stdlib bridge ────────────────────────────────────────────────────────────
 
 
+def _redact_value(value: Any) -> Any:
+    """Recursively redact credentials in any string/dict/list/object value.
+
+    Runs BEFORE json.dumps: redacting the serialized JSON string instead
+    would corrupt it — the redact() regexes match ISO-8601 timestamps
+    (host:port:user:pass shape) and swallow closing quotes around trailing
+    credential strings.
+    """
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    return _redact_value(str(value))
+
+
+#: Standard LogRecord attributes — everything else in record.__dict__ came
+#: from extra={...} and carries structured fields we must not silently drop.
+_STD_RECORD_ATTRS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "message",
+    }
+)
+
+
 class _StructlogHandler(logging.Handler):
     """Bridge: format stdlib log records as JSON and write directly to stderr.
 
     Writes JSON directly to stderr rather than routing through structlog's
     LoggerFactory, which would feed back into the stdlib logging system and
     cause infinite recursion (ADR-013).
+
+    Non-standard attributes passed via ``extra={...}`` are merged into the
+    JSON payload (with redaction) — they carry the structured fields needed
+    for incident diagnosis (job_id, proxy_id, outcome, domain, ...).
     """
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             from datetime import UTC, datetime
 
-            msg = redact(record.getMessage())
+            msg = record.getMessage()
             payload: dict[str, Any] = {
                 "event": msg,
                 "logger": record.name,
@@ -96,9 +158,25 @@ class _StructlogHandler(logging.Handler):
                 import traceback
 
                 payload["exc_info"] = traceback.format_exception(*record.exc_info)
-            # Merge any bound context.
-            if _shared_context:
-                payload.update(_shared_context)
+            # Merge any bound contextvars (per-task, never process-global).
+            bound_ctx = structlog.contextvars.get_contextvars()
+            if bound_ctx:
+                payload.update(bound_ctx)
+            # Merge extra={...} fields last, so explicitly logged values win
+            # over bound context.
+            for key, value in record.__dict__.items():
+                if key in _STD_RECORD_ATTRS or key.startswith("_"):
+                    continue
+                payload[key] = value
+            # Redact every string value recursively before serialization:
+            # credentials nested inside dicts/lists/objects are rendered via
+            # str() by json.dumps, so redacting only top-level strings would
+            # leak them.  The self-generated timestamp is exempt — redact()'s
+            # host:port:user:pass pattern structurally matches ISO-8601
+            # timestamps and would corrupt it.
+            for key, value in payload.items():
+                if key != "timestamp":
+                    payload[key] = _redact_value(value)
             json_str = json.dumps(payload, default=str)
             sys.stderr.write(json_str + "\n")
             sys.stderr.flush()

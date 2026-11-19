@@ -1,5 +1,5 @@
 # Stage 1: builder — compile Python dependencies.
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -13,14 +13,18 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir ".[browser]"
 
 # Stage 2: runtime — minimal production image.
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
+
+# The recovered browser artifact is Linux x86_64 only. Do not install it on ARM64.
+RUN test "$(dpkg --print-architecture)" = amd64 \
+    || (echo "Pinned Camoufox runtime currently requires Linux amd64" >&2; exit 1)
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     HOME=/home/crawler \
     XDG_CACHE_HOME=/home/crawler/.cache \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    MAX_CONCURRENT_CAMOUFOX=2
+    MAX_CONCURRENT_CAMOUFOX=1
 
 RUN groupadd -r crawler \
     && useradd -r -g crawler -m -d /home/crawler crawler \
@@ -32,45 +36,37 @@ RUN groupadd -r crawler \
 
 WORKDIR /opt/crawler-api
 
-# Copy installed packages from builder.
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Install Chromium runtime deps manually — avoids ttf-unifont/ttf-ubuntu-font-family
-# missing on Debian Trixie arm64 (Mac M-series). Works on both amd64 and arm64.
-# The gtk/dbus/xt libs are Firefox (camoufox) runtime deps — same stage, one layer.
-# xvfb supplies the virtual X display for camoufox headless="virtual" launches
-# (camoufox recommends a real virtual display over pure headless mode to avoid
-# headless-detection heuristics).
+# Runtime libraries for Chromium and Camoufox; Xvfb supports virtual display mode.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libxkbcommon0 \
-    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     libpango-1.0-0 libcairo2 libatspi2.0-0 \
-    libgtk-3-0t64 libdbus-glib-1-2 libxt6 libx11-xcb1 libxcb-shm0 \
+    libgtk-3-0 libdbus-glib-1-2 libxt6 libx11-xcb1 libxcb-shm0 \
     xvfb \
     fonts-liberation fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* \
     && python -m playwright install chromium \
     && chmod -R a+rx /ms-playwright
 
-# Fetch the camoufox Firefox build at image build time (ADR-020).  The
-# worker self-check launches it at startup — no container-start download.
-# The cache must be owned by the crawler user: camoufox creates runtime
-# dirs (e.g. fontconfig) inside it at launch.
-# NOTE: no `--browserforge` flag — this CLI version rejects unknown options,
-# and the previous `|| true` masked that failure, shipping an image without
-# Firefox. Failures here must break the build.
-RUN python -m camoufox fetch \
-    && chown -R crawler:crawler /home/crawler/.cache/camoufox
+# Pinned recovered installation: do not query the unavailable upstream releases API.
+# Verify the compressed bytes before extracting. A changed release asset fails closed.
+RUN curl --fail --location --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 1800 \
+      --output /tmp/camoufox.tar.gz \
+      https://github.com/softK1T/crawler-api/releases/download/runtime-camoufox-159.0-beta.42-linux-x86_64/camoufox-linux-x86_64.tar.gz \
+    && printf '%s  %s\n' '549445fd1a070901cfb7e3f1309e0613f6dd117180d1cd01edd2df61606f9804' '/tmp/camoufox.tar.gz' | sha256sum --check --strict - \
+    && python -c 'import json, os, pathlib, sys, tarfile; archive = tarfile.open("/tmp/camoufox.tar.gz", "r:gz"); archive.extractall("/home/crawler/.cache", filter="data"); archive.close(); cache = pathlib.Path("/home/crawler/.cache/camoufox"); metadata = json.loads((cache / "version.json").read_text()); expected = {"version": "159.0", "release": "beta.42"}; metadata == expected or sys.exit("Unexpected Camoufox version"); any(p.is_file() and os.access(p, os.X_OK) for p in (cache / "camoufox", cache / "camoufox-bin")) or sys.exit("Camoufox executable missing or not executable"); print("Pinned Camoufox 159.0-beta.42 verified")' \
+    && chown -R crawler:crawler /home/crawler/.cache/camoufox \
+    && rm /tmp/camoufox.tar.gz
 
-# Copy application code.
 COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
 COPY scripts/ ./scripts/
 COPY pyproject.toml .
 
-# Drop privileges.
 USER crawler
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

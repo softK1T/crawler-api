@@ -32,7 +32,7 @@ ALL_SCOPES = frozenset({SCOPE_FETCH, SCOPE_ARCHIVE, SCOPE_ADMIN, SCOPE_KEYS})
 
 
 async def resolve_api_key(
-    x_api_key: str = Header(..., alias="X-API-Key"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     db: AsyncSession = Depends(get_db),
 ) -> ApiKey:
     """Resolve and validate an API key from the X-API-Key header.
@@ -44,7 +44,7 @@ async def resolve_api_key(
     5. Return the ORM row.
     """
     # Edge case: key too short for prefix extraction.
-    if len(x_api_key) < 8:
+    if not x_api_key or len(x_api_key) < 8:
         raise AuthenticationError
 
     prefix = x_api_key[:8]

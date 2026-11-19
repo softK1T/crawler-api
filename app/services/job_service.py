@@ -50,7 +50,11 @@ class JobService:
         )
 
         now = datetime.now(UTC).isoformat()
-        status_data = {"status": "pending", "created_at": now}
+        status_data = {
+            "status": "pending",
+            "created_at": now,
+            "application_id": str(api_key.application_id),
+        }
         await self._redis.set(
             f"job:{job_id}:status",
             json.dumps(status_data),
@@ -63,6 +67,10 @@ class JobService:
             url=url,
             mode=mode,
             api_key_prefix=api_key.prefix,
+            # api_key_id lets the worker bind request_log rows to the key
+            # without a per-attempt lookup.  Older queued jobs lack it and
+            # resolve the id once from the prefix at task startup.
+            api_key_id=str(api_key.id),
             application_id=str(api_key.application_id),
             domain=domain,
             proxy_pool_id=str(proxy_pool_id) if proxy_pool_id else None,
@@ -96,6 +104,13 @@ class JobService:
         if not raw:
             raise NotFoundError(detail="Job not found")
         return json.loads(raw)
+
+    async def assert_owner(self, job_id: str, application_id: UUID) -> None:
+        from app.core.errors import NotFoundError
+
+        data = await self.get_status_data(job_id)
+        if data.get("application_id") != str(application_id):
+            raise NotFoundError(detail="Job not found")
 
     async def get_status(self, job_id: str) -> None:
         """Return job status enum.  Raises NotFoundError if key is missing."""

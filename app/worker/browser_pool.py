@@ -12,6 +12,8 @@ from typing import Any
 
 from playwright.async_api import async_playwright
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_BROWSERS = int(os.getenv("MAX_CONCURRENT_BROWSERS", "4"))
@@ -100,6 +102,8 @@ class BrowserPool:
             ctx = await self._browser.new_context(
                 proxy=proxy,
                 viewport={"width": w, "height": h},
+                service_workers="block",
+                accept_downloads=False,
                 locale="pl-PL",
                 timezone_id="Europe/Warsaw",
                 user_agent=ua or self._default_ua(),
@@ -120,4 +124,5 @@ class BrowserPool:
 
 
 # Module-level singleton — created once at import, started in worker startup.
-browser_pool = BrowserPool()
+
+browser_pool = BrowserPool(max_concurrent=settings.browser_pool_size)

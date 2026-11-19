@@ -4,6 +4,7 @@ Fresh browser context per job (ADR-014 invariant).  The pool reuses a
 single Chromium process with a semaphore to cap concurrent contexts.
 """
 
+import asyncio
 import logging
 import time
 from urllib.parse import urlsplit, urlunsplit
@@ -82,30 +83,28 @@ class PlaywrightFetcher:
             )
 
         try:
-            async with self._pool.context(proxy=proxy_config) as ctx:
+            async with asyncio.timeout(timeout_s), self._pool.context(proxy=proxy_config) as ctx:
                 page = await ctx.new_page()
 
-                # SSRF interception: validate response.url on every navigation.
-                async def _check_response(response):
-                    try:
-                        await validate_url_async(response.url)
-                    except URLGuardError:
-                        logger.warning(
-                            "[playwright] SSRF blocked navigation to %s — aborting",
-                            response.url,
-                        )
+                from app.services.fetchers.browser_guard import install_browser_guard
 
-                page.on("response", _check_response)
+                await install_browser_guard(ctx)
+                if headers:
+                    await page.set_extra_http_headers(headers)
 
                 response = await page.goto(
                     url,
                     timeout=timeout_s * 1000,
-                    wait_until="networkidle",
+                    wait_until="domcontentloaded",
                 )
+                await page.wait_for_timeout(500)
                 final_url = page.url
                 status_code = response.status if response else 200
 
                 body = (await page.content()).encode("utf-8")
+                from app.services.fetchers.browser_guard import check_browser_body
+
+                check_browser_body(body)
 
                 block_reason = detect_block_reason(status_code, {}, body)
                 blocked = block_reason is not None

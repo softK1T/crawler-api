@@ -71,6 +71,28 @@ WARC_DLQ_ENTRIES = Gauge(
     "WARC files pending re-upload",
 )
 
+# Per-attempt transport observability.  PostgreSQL request_log is the durable
+# detailed source; these are aggregated once per ATTEMPT (not per job).
+# No url/job_id/trace_id/proxy_id/application_id/error/city labels — they
+# would create unbounded high-cardinality series.
+REQUEST_ATTEMPTS_TOTAL = Counter(
+    "crawler_request_attempts_total",
+    "Crawler transport attempts by outcome, engine and proxy",
+    ["outcome", "engine", "proxied", "proxy_provider", "proxy_type"],
+)
+
+REQUEST_ATTEMPT_DURATION_MS = Histogram(
+    "crawler_request_attempt_duration_ms",
+    "Per-attempt transport duration in milliseconds",
+    ["outcome", "engine", "proxied"],
+    buckets=(10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, float("inf")),
+)
+
+REQUEST_LOG_WRITE_FAILURES_TOTAL = Counter(
+    "crawler_request_log_write_failures_total",
+    "Failed request_log persistence attempts",
+)
+
 # ── DEDUP_RATIO tracking ─────────────────────────────────────────────────────
 _total_records: int = 0
 _revisit_records: int = 0
@@ -174,6 +196,36 @@ def record_archive_metrics(*, bytes_written: int, is_revisit: bool) -> None:
     if is_revisit:
         _revisit_records += 1
     _update_dedup_ratio()
+
+
+def record_attempt_metrics(
+    *,
+    outcome: str,
+    engine: str,
+    proxied: bool,
+    proxy_provider: str | None,
+    proxy_type: str | None,
+    duration_ms: int,
+) -> None:
+    """Record one transport attempt in the aggregated attempt metrics.
+
+    Called once per retry-loop iteration from the request-attempt persistence
+    path, so every attempt is counted even when the request_log write fails.
+    """
+    try:
+        proxied_label = "true" if proxied else "false"
+        REQUEST_ATTEMPTS_TOTAL.labels(
+            outcome=outcome,
+            engine=engine,
+            proxied=proxied_label,
+            proxy_provider=proxy_provider or "none",
+            proxy_type=proxy_type or "none",
+        ).inc()
+        REQUEST_ATTEMPT_DURATION_MS.labels(
+            outcome=outcome, engine=engine, proxied=proxied_label
+        ).observe(duration_ms)
+    except Exception:
+        logger.warning("Failed to record attempt metrics", exc_info=True)
 
 
 ESCALATION_TIER_CURRENT = Gauge(

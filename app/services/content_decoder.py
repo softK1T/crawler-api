@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import zlib
 
 import brotli
 import zstandard
+
+from app.core.url_guard import MAX_BODY_BYTES, BodyTooLarge
 
 _SUPPORTED = {"br", "gzip", "x-gzip", "deflate", "zstd", "identity", ""}
 
@@ -46,11 +49,39 @@ def _looks_like_text(b: bytes) -> bool:
     )
 
 
+def _decode_brotli(raw: bytes) -> bytes:
+    decoder = brotli.Decompressor()
+    out = bytearray()
+    data = raw
+    while True:
+        chunk = decoder.process(data, output_buffer_limit=MAX_BODY_BYTES + 1 - len(out))
+        out.extend(chunk)
+        if len(out) > MAX_BODY_BYTES:
+            raise BodyTooLarge("Decoded response exceeds body limit")
+        if decoder.is_finished():
+            return bytes(out)
+        if decoder.can_accept_more_data():
+            raise brotli.error("Incomplete brotli response")
+        data = b""
+
+
+def _decode_deflate(raw: bytes, wbits: int) -> bytes:
+    decoder = zlib.decompressobj(wbits)
+    body = decoder.decompress(raw, MAX_BODY_BYTES + 1)
+    if len(body) > MAX_BODY_BYTES or decoder.unconsumed_tail:
+        raise BodyTooLarge("Decoded response exceeds body limit")
+    if not decoder.eof:
+        raise zlib.error("Incomplete deflate response")
+    return body
+
+
 def decode_body(raw: bytes, encoding: str | None) -> tuple[bytes, str | None]:
     """Decode *raw* bytes according to *encoding*.
 
     Returns ``(decoded_bytes, detected_encoding)``.
     """
+    if len(raw) > MAX_BODY_BYTES:
+        raise BodyTooLarge("Response exceeds body limit")
     enc = (encoding or "").strip().lower().split(",")[0].strip()
 
     if enc not in _SUPPORTED:
@@ -62,7 +93,7 @@ def decode_body(raw: bytes, encoding: str | None) -> tuple[bytes, str | None]:
             # Brotli has no reliable magic — try it as fallback for non-text bytes.
             if not _looks_like_text(raw):
                 try:
-                    return brotli.decompress(raw), "br"
+                    return _decode_brotli(raw), "br"
                 except brotli.error:
                     pass
             return raw, None
@@ -70,16 +101,26 @@ def decode_body(raw: bytes, encoding: str | None) -> tuple[bytes, str | None]:
 
     try:
         if enc == "br":
-            return brotli.decompress(raw), "br"
+            return _decode_brotli(raw), "br"
         if enc in ("gzip", "x-gzip"):
-            return gzip.decompress(raw), enc
+            with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
+                body = stream.read(MAX_BODY_BYTES + 1)
+            if len(body) > MAX_BODY_BYTES:
+                raise BodyTooLarge("Decoded response exceeds body limit")
+            return body, enc
         if enc == "deflate":
             try:
-                return zlib.decompress(raw), "deflate"
+                return _decode_deflate(raw, zlib.MAX_WBITS), "deflate"
             except zlib.error:
-                return zlib.decompress(raw, -zlib.MAX_WBITS), "deflate"
+                return _decode_deflate(raw, -zlib.MAX_WBITS), "deflate"
         if enc == "zstd":
-            return zstandard.ZstdDecompressor().decompress(raw), "zstd"
+            with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(raw)) as stream:
+                body = stream.read(MAX_BODY_BYTES + 1)
+            if len(body) > MAX_BODY_BYTES:
+                raise BodyTooLarge("Decoded response exceeds body limit")
+            return body, "zstd"
+    except BodyTooLarge:
+        raise
     except Exception as exc:
         raise ContentDecodingFailed(f"CONTENT_DECODING_FAILED: encoding={enc}: {exc}") from exc
 

@@ -62,6 +62,7 @@ class BatchService:
         batch_info = {
             "batch_id": batch_id,
             "job_ids": job_ids,
+            "application_id": str(api_key.application_id),
             "created_at": time.time(),
             "total_count": len(urls),
         }
@@ -70,10 +71,14 @@ class BatchService:
         return BatchResponse(batch_id=batch_id, job_ids=job_ids, total_count=len(urls))
 
     @staticmethod
-    async def get_batch_status(batch_id: str, redis_client) -> BatchStatusResponse | None:
+    async def get_batch_status(
+        batch_id: str, redis_client, application_id=None
+    ) -> BatchStatusResponse | None:
         """Aggregate per-job status into a batch-level progress report."""
         batch_info = await asyncio.to_thread(storage.get_batch_info, batch_id)
-        if not batch_info:
+        if not batch_info or (
+            application_id is not None and batch_info.get("application_id") != str(application_id)
+        ):
             return None
 
         job_svc = JobService(redis_client)
@@ -104,10 +109,12 @@ class BatchService:
         )
 
     @staticmethod
-    async def get_batch_results(batch_id: str, redis_client) -> dict | None:
+    async def get_batch_results(batch_id: str, redis_client, application_id=None) -> dict | None:
         """Collect finished job results for the batch."""
         batch_info = await asyncio.to_thread(storage.get_batch_info, batch_id)
-        if not batch_info:
+        if not batch_info or (
+            application_id is not None and batch_info.get("application_id") != str(application_id)
+        ):
             return None
 
         job_svc = JobService(redis_client)

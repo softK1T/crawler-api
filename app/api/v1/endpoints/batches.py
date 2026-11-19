@@ -23,6 +23,30 @@ async def create_crawl_batch(
     api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
     db: AsyncSession = Depends(get_db),
 ):
+    if len(request.urls) > settings.max_batch_size:
+        raise HTTPException(
+            status_code=422, detail=f"At most {settings.max_batch_size} URLs per batch"
+        )
+    if request.callback_url and not settings.enable_callbacks:
+        raise HTTPException(status_code=422, detail="Callbacks are disabled")
+
+    # Each URL consumes per-key admission, not just one token per batch.
+    limiter = req.app.state.rate_limiter
+    quota = await limiter.check_application(
+        api_key.application_id, settings.default_monthly_quota, cost=len(request.urls)
+    )
+    if not quota["allowed"]:
+        raise HTTPException(status_code=429, detail="Application quota exceeded")
+    admission = await limiter.check_key(
+        api_key.prefix, limit=settings.key_rate_limit_rpm, cost=len(request.urls)
+    )
+    if not admission["allowed"]:
+        raise HTTPException(
+            status_code=429,
+            detail="Key rate limit exceeded",
+            headers={"Retry-After": str(math.ceil(admission["retry_after_s"]))},
+        )
+
     # SSRF validation.
     if settings.ssrf_enabled:
         for url in request.urls:
@@ -50,9 +74,7 @@ async def create_crawl_batch(
             )
 
     # Enqueue one real fetch_task per URL via the shared JobService.
-    import redis.asyncio as aioredis
-
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
+    redis_client = req.app.state.redis
     return await BatchService.create_batch(
         urls=[str(url) for url in request.urls],
         mode=request.mode,
@@ -71,7 +93,10 @@ async def get_batch_status(
     import redis.asyncio as aioredis
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    result = await BatchService.get_batch_status(batch_id, redis_client)
+    try:
+        result = await BatchService.get_batch_status(batch_id, redis_client, api_key.application_id)
+    finally:
+        await redis_client.aclose()
     if not result:
         raise HTTPException(status_code=404, detail="Batch not found")
     return result
@@ -85,7 +110,12 @@ async def get_batch_results(
     import redis.asyncio as aioredis
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    results = await BatchService.get_batch_results(batch_id, redis_client)
+    try:
+        results = await BatchService.get_batch_results(
+            batch_id, redis_client, api_key.application_id
+        )
+    finally:
+        await redis_client.aclose()
     if not results:
         raise HTTPException(status_code=404, detail="Batch not found")
     return results

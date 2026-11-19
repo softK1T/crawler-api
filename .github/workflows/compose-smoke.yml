@@ -1,0 +1,76 @@
+# Internal reusable stage. CI is the only automatic workflow entrypoint.
+name: Docker build and smoke (reusable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the application image once
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: crawler-api:local
+          cache-from: type=gha,scope=crawler-linux-amd64,timeout=3m
+          cache-to: type=gha,scope=crawler-linux-amd64,mode=max,timeout=3m,ignore-error=true
+      - name: Verify both browser runtimes using the same image
+        run: docker run --rm --shm-size=1g --memory=3g --env DATABASE_URL=postgresql+asyncpg://test:test@localhost/test crawler-api:local python scripts/browser_smoke.py
+      - name: Start a fresh stack without rebuilding the application
+        run: docker compose -p ci -f docker-compose.yml up -d --no-build --pull missing --wait --wait-timeout 300
+      - name: Verify readiness, credentials, migration and candidate pool API
+        shell: bash
+        run: |
+          set -euo pipefail
+          dc() { docker compose -p ci -f docker-compose.yml "$@"; }
+          KEY=$(dc exec -T api python scripts/stack_runtime.py key)
+          echo "::add-mask::$KEY"
+          curl -fsS http://127.0.0.1:8000/readyz | jq -e '.status == "ready" and .checks.playwright == "ok" and .checks.camoufox == "ok"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/v1/keys)" = 401
+          curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8000/v1/keys | jq -e 'length == 1'
+          curl -fsS -X POST http://127.0.0.1:8000/admin/proxy-pools -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"name":"ci-candidates","provider":"public-candidates"}' | jq -e '.provider == "public-candidates"'
+          dc exec -T api python scripts/stack_runtime.py alembic current | grep '0009'
+          dc run --rm --no-deps --pull never -T --interactive=false initialize </dev/null
+          KEY_AGAIN=$(dc exec -T api python scripts/stack_runtime.py key)
+          echo "::add-mask::$KEY_AGAIN"
+          test "$KEY" = "$KEY_AGAIN"
+          dc exec -T api python scripts/stack_runtime.py alembic current | grep '0009'
+      - name: Restore a backup into a disposable database
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          dc() { docker compose -p ci -f docker-compose.yml "$@"; }
+          TMP=$(mktemp -d)
+          trap 'rm -rf "$TMP"' EXIT
+          SQL="SELECT (SELECT count(*) FROM api_keys)::text || ':' || (SELECT count(*) FROM proxy_pools)::text;"
+          SOURCE=$(dc exec -T postgres psql -U crawler -d crawler -At -v ON_ERROR_STOP=1 -c "$SQL")
+          dc exec -T postgres pg_dump -U crawler -d crawler -Fc > "$TMP/database.dump"
+          test -s "$TMP/database.dump"
+          dc exec -T postgres createdb -U crawler ci_restore_verify
+          dc exec -T postgres pg_restore -U crawler --dbname=ci_restore_verify --exit-on-error < "$TMP/database.dump"
+          dc exec -T postgres psql -U crawler -d ci_restore_verify -At -v ON_ERROR_STOP=1 -c 'SELECT version_num FROM alembic_version;' | grep -x '0009'
+          RESTORED=$(dc exec -T postgres psql -U crawler -d ci_restore_verify -At -v ON_ERROR_STOP=1 -c "$SQL")
+          test "$SOURCE" = "$RESTORED"
+          dc exec -T postgres dropdb -U crawler ci_restore_verify
+          echo "Restore drill passed: migration and selected row counts match"
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -p ci -f docker-compose.yml ps -a
+          docker compose -p ci -f docker-compose.yml logs --no-color --tail=100
+      - name: Remove disposable CI stack
+        if: always()
+        run: docker compose -p ci -f docker-compose.yml down -v --remove-orphans

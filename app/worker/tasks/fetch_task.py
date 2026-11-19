@@ -6,6 +6,11 @@ import logging
 import math
 import time
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.services.fetchers.base import AttemptRecorder, AttemptResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +37,62 @@ async def fetch_task(
     callback_url: str | None,
     options: dict,
     trace_id: str | None = None,
+    # Optional — jobs enqueued before per-attempt observability carry only
+    # api_key_prefix; the id is resolved once from the prefix at startup.
+    api_key_id: str | None = None,
 ) -> None:
     """arq task: fetch a URL, archive, and deliver callback."""
     started = time.perf_counter()
     settings = ctx["settings"]
     redis_client = ctx["redis"]
 
-    from app.core.logging_config import bind_context
+    from app.core.logging_config import bind_context, clear_context
 
+    # arq reuses worker tasks — never inherit a previous job's bound context.
+    clear_context()
     bind_context(trace_id=trace_id or job_id, job_id=job_id, application_id=application_id)
 
+    try:
+        await _run_fetch_task(
+            ctx=ctx,
+            started=started,
+            settings=settings,
+            redis_client=redis_client,
+            job_id=job_id,
+            url=url,
+            mode=mode,
+            api_key_prefix=api_key_prefix,
+            application_id=application_id,
+            domain=domain,
+            proxy_pool_id=proxy_pool_id,
+            callback_url=callback_url,
+            options=options,
+            trace_id=trace_id,
+            api_key_id=api_key_id,
+        )
+    finally:
+        clear_context()
+
+
+async def _run_fetch_task(
+    *,
+    ctx: dict,
+    started: float,
+    settings,
+    redis_client,
+    job_id: str,
+    url: str,
+    mode: str,
+    api_key_prefix: str,
+    application_id: str,
+    domain: str,
+    proxy_pool_id: str | None,
+    callback_url: str | None,
+    options: dict,
+    trace_id: str | None,
+    api_key_id: str | None,
+) -> None:
+    """Body of fetch_task — separated so the outer wrapper can clear context."""
     async with ctx["db_factory"]() as db:
         try:
             # 1. Mark running.
@@ -51,6 +102,12 @@ async def fetch_task(
             from app.services.policy_resolver import resolve_policy
 
             policy = await resolve_policy(url, db)
+
+            # 2b. Resolve api_key_id ONCE for the whole job (legacy jobs carry
+            # only the prefix).  Failure is non-fatal: attempt rows persist
+            # NULL and the fetch proceeds.
+            api_key_uuid = await _resolve_api_key_id(db, api_key_id, api_key_prefix)
+            application_uuid = _parse_uuid(application_id)
 
             # 3. Select fetcher — map API mode to engine name.
             from app.services.fetchers import get_fetcher
@@ -97,6 +154,13 @@ async def fetch_task(
                 # on the ladder path (tier 0 for an empty policy).
                 requested_engine=engine if engine != "httpx" else None,
                 camoufox_ready=ctx.get("camoufox_ready"),
+                attempt_recorder=_build_attempt_recorder(
+                    ctx["db_factory"],
+                    job_id=job_id,
+                    api_key_id=api_key_uuid,
+                    application_id=application_uuid,
+                    trace_id=trace_id or job_id,
+                ),
             )
 
             # 5. Block detection metric.
@@ -114,8 +178,12 @@ async def fetch_task(
 
             raw_for_decode = result.raw_body or result.body
             content_encoding = (result.raw_headers or result.headers).get("content-encoding")
+            from app.core.url_guard import BodyTooLarge
+
             try:
                 api_body, original_encoding = decode_body(raw_for_decode, content_encoding)
+            except BodyTooLarge:
+                raise
             except Exception:
                 api_body = result.body
                 original_encoding = content_encoding
@@ -132,7 +200,7 @@ async def fetch_task(
             if not result.blocked and ctx.get("warc_storage"):
                 warc_index = await ctx["warc_storage"].archive(
                     fetch_result=result,
-                    request_log_id=None,
+                    request_log_id=getattr(result, "_request_log_id", None),
                     db=db,
                     warc_body=warc_body,
                 )
@@ -160,16 +228,24 @@ async def fetch_task(
             # 8. Policy learner — write escalation outcome back to DB.
             from app.services.policy_learner import record_outcome
 
-            await record_outcome(
-                result=result,
-                policy=policy,
-                db=db,
-                engine_used=result.engine,
-                tier_used=getattr(result, "_tier_used", 0),
-            )
+            try:
+                await record_outcome(
+                    result=result,
+                    policy=policy,
+                    db=db,
+                    engine_used=result.engine,
+                    tier_used=getattr(result, "_tier_used", 0),
+                )
+            except Exception:
+                await db.rollback()
+                logger.warning("Policy learning failed after completed fetch", exc_info=True)
 
             # 9. Usage counter upsert.
-            await _upsert_usage(db, application_id, len(result.body))
+            try:
+                await _upsert_usage(db, application_id, len(result.body))
+            except Exception:
+                await db.rollback()
+                logger.warning("Usage accounting failed after completed fetch", exc_info=True)
 
             # 8b. Cost metric — only for proxied fetches.
             if result.proxy_id is not None:
@@ -183,7 +259,7 @@ async def fetch_task(
             _record_latency("completed", started)
 
             # 10. Callback.
-            if callback_url and settings.callback_hmac_secret:
+            if settings.enable_callbacks and callback_url and settings.callback_hmac_secret:
                 _schedule_callback(
                     job_id=job_id,
                     status="completed",
@@ -196,7 +272,7 @@ async def fetch_task(
             await _set_error(redis_client, job_id, "Worker shutdown", settings.job_result_ttl_s)
             await _upsert_usage(db, application_id, 0)
             _record_latency("failed", started)
-            if callback_url and settings.callback_hmac_secret:
+            if settings.enable_callbacks and callback_url and settings.callback_hmac_secret:
                 _schedule_callback(
                     job_id=job_id,
                     status="failed",
@@ -211,7 +287,7 @@ async def fetch_task(
             await _set_error(redis_client, job_id, str(exc), settings.job_result_ttl_s)
             await _upsert_usage(db, application_id, 0)
             _record_latency("failed", started)
-            if callback_url and settings.callback_hmac_secret:
+            if settings.enable_callbacks and callback_url and settings.callback_hmac_secret:
                 _schedule_callback(
                     job_id=job_id,
                     status="failed",
@@ -229,13 +305,14 @@ async def _set_status(redis_client, job_id: str, status: str, ttl: int, result_d
     # Preserve created_at from the original status payload.
     raw = await redis_client.get(f"job:{job_id}:status")
     created_at = now
+    existing = {}
     if raw:
         try:
             existing = json.loads(raw)
             created_at = existing.get("created_at", now)
         except json.JSONDecodeError:
             pass
-    payload = {"status": status, "updated_at": now, "created_at": created_at}
+    payload = {**existing, "status": status, "updated_at": now, "created_at": created_at}
     if result_data is not None:
         payload["result"] = result_data
     await redis_client.set(f"job:{job_id}:status", json.dumps(payload), ex=ttl)
@@ -245,13 +322,16 @@ async def _set_error(redis_client, job_id: str, error: str, ttl: int) -> None:
     now = datetime.now(UTC).isoformat()
     raw = await redis_client.get(f"job:{job_id}:status")
     created_at = now
+    existing = {}
     if raw:
         try:
             existing = json.loads(raw)
             created_at = existing.get("created_at", now)
         except json.JSONDecodeError:
             pass
-    payload = {"status": "failed", "updated_at": now, "created_at": created_at}
+    if existing.get("status") == "completed":
+        return
+    payload = {**existing, "status": "failed", "updated_at": now, "created_at": created_at}
     await redis_client.set(f"job:{job_id}:status", json.dumps(payload), ex=ttl)
     await redis_client.set(f"job:{job_id}:error", error, ex=ttl)
 
@@ -321,6 +401,7 @@ async def _upsert_usage(db, application_id: str, body_bytes: int) -> None:
         )
         await db.commit()
     except Exception:
+        await db.rollback()
         logger.warning("Usage counter upsert failed for app=%s", application_id, exc_info=True)
 
 
@@ -334,6 +415,93 @@ def _record_latency(status: str, started: float) -> None:
         ).observe(elapsed)
     except Exception:
         pass
+
+
+# ── Attempt observability helpers ─────────────────────────────────────────────
+
+
+def _parse_uuid(value: str | None) -> UUID | None:
+    """Parse a UUID string, returning None for anything invalid."""
+    if not value:
+        return None
+    try:
+        return UUID(value)
+    except (ValueError, TypeError):
+        return None
+
+
+async def _resolve_api_key_id(db, api_key_id: str | None, api_key_prefix: str) -> UUID | None:
+    """Resolve the ApiKey.id for this job, exactly once at task startup.
+
+    Jobs enqueued before per-attempt observability carry only the prefix.
+    Resolution failure is non-fatal: attempt rows persist NULL and the fetch
+    proceeds.
+    """
+    resolved = _parse_uuid(api_key_id)
+    if resolved is not None:
+        return resolved
+    try:
+        from typing import cast
+
+        from sqlalchemy import select
+
+        from app.models.api_key import ApiKey
+
+        row = (
+            await db.execute(select(ApiKey.id).where(ApiKey.prefix == api_key_prefix))
+        ).scalar_one_or_none()
+        return cast("UUID | None", row)
+    except Exception:
+        logger.warning("api_key_id_resolution_failed prefix=%s", api_key_prefix, exc_info=True)
+        return None
+
+
+def _build_attempt_recorder(
+    db_session_factory,
+    *,
+    job_id: str,
+    api_key_id: UUID | None,
+    application_id: UUID | None,
+    trace_id: str | None,
+) -> "AttemptRecorder":
+    """Bind job identity to attempt persistence for fetch_with_retry."""
+    from app.services.request_attempt_log import RequestAttempt, persist_request_attempt
+
+    async def _record(attempt: "AttemptResult") -> UUID | None:
+        return await persist_request_attempt(
+            db_session_factory,
+            RequestAttempt(
+                job_id=job_id,
+                api_key_id=api_key_id,
+                application_id=application_id,
+                trace_id=trace_id,
+                url=attempt.url,
+                domain=attempt.domain,
+                method=attempt.method,
+                attempt_number=attempt.attempt_number,
+                tier_attempt_number=attempt.tier_attempt_number,
+                escalation_tier=attempt.escalation_tier,
+                proxy_id=attempt.proxy_id,
+                proxy_pool_id=attempt.proxy_pool_id,
+                proxy_provider=attempt.proxy_provider,
+                proxy_type=attempt.proxy_type,
+                proxy_country=attempt.proxy_country,
+                proxy_city=attempt.proxy_city,
+                engine=attempt.engine,
+                outcome=attempt.outcome,
+                status_code=attempt.status_code,
+                duration_ms=attempt.duration_ms,
+                bytes_received=attempt.bytes_received,
+                blocked=attempt.blocked,
+                block_reason=attempt.block_reason,
+                error_type=attempt.error_type,
+                error=attempt.error,
+                requested_at=attempt.requested_at,
+                completed_at=attempt.completed_at,
+            ),
+        )
+
+    return _record
 
 
 # ── Worker lifecycle ─────────────────────────────────────────────────────────
@@ -383,39 +551,68 @@ async def startup(ctx: dict) -> None:
         circuit_breaker_threshold=settings.circuit_breaker_threshold,
         circuit_breaker_timeout_s=settings.circuit_breaker_timeout_s,
     )
-    ctx["warc_storage"] = await create_warc_storage(settings)
+    ctx["warc_storage"] = await create_warc_storage(settings) if settings.enable_warc else None
 
     # Verify Chromium can actually launch (not just exist on disk).
     # Fail startup if missing — browser-mode jobs must not silently degrade.
     try:
-        version = await verify_chromium()
-        await browser_pool.start()
+        async with asyncio.timeout(30):
+            version = await verify_chromium()
+            await browser_pool.start()
         ctx["browser_pool"] = browser_pool
         ctx["browser_ready"] = True
         logger.info("chromium_selfcheck_passed version=%s", version)
-    except ChromiumMissingError:
+    except (ChromiumMissingError, TimeoutError):
+        await browser_pool.stop()
         ctx["browser_ready"] = False
         logger.error("browser_selfcheck_failed error=PLAYWRIGHT_CHROMIUM_MISSING")
+        await ctx["redis"].aclose()
         raise
 
-    # Verify Camoufox can launch too.  Unlike Chromium this is NOT fatal:
-    # Firefox is only needed at ladder tiers 5-6, so a failure marks
-    # camoufox_ready=False and CamoufoxFetcher fails fast per-request.
+    # The interview baseline requires both engines. Optional deployments may
+    # set REQUIRE_CAMOUFOX=false and expose degraded capabilities explicitly.
     try:
         from app.worker.camoufox_check import CamoufoxMissingError, verify_camoufox
 
-        camoufox_version = await verify_camoufox()
+        async with asyncio.timeout(60):
+            camoufox_version = await verify_camoufox()
         ctx["camoufox_ready"] = True
         logger.info("camoufox_selfcheck_passed version=%s", camoufox_version)
-    except CamoufoxMissingError as exc:
+    except (CamoufoxMissingError, TimeoutError) as exc:
         ctx["camoufox_ready"] = False
         logger.error("camoufox_selfcheck_failed error=%s", exc)
+        if settings.require_camoufox:
+            await browser_pool.stop()
+            await ctx["redis"].aclose()
+            raise
 
+    await publish_worker_health(ctx)
     logger.info("arq worker startup complete")
 
 
+async def publish_worker_health(ctx: dict) -> None:
+    """Publish short-lived engine capability heartbeat after successful startup."""
+    payload = {
+        "playwright": bool(ctx.get("browser_ready")),
+        "camoufox": bool(ctx.get("camoufox_ready")),
+    }
+    await ctx["redis"].set("crawler:worker:capabilities", json.dumps(payload), ex=45)
+
+
 async def shutdown(ctx: dict) -> None:
-    """arq worker shutdown — drain browser pool, flush WARC, close Redis."""
+    """arq worker shutdown — drain attempt writes, browser pool, WARC, Redis."""
+    # Drain shielded attempt writes BEFORE anything that could kill them
+    # (Redis close, executor shutdown, engine disposal at process exit) —
+    # otherwise a closing event loop silently drops the last audit rows.
+    try:
+        from app.services.fetchers.base import drain_pending_attempt_writes
+
+        abandoned = await drain_pending_attempt_writes(max_wait_s=5.0)
+        if abandoned:
+            logger.warning("attempt_writes_abandoned count=%d", abandoned)
+    except Exception:
+        logger.warning("Attempt-write drain failed", exc_info=True)
+
     # Drain browser pool.
     if ctx.get("browser_pool"):
         try:

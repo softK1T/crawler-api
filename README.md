@@ -1,132 +1,67 @@
 # Crawler API
 
-Multi-tenant web scraping platform with per-domain policies, proxy pool management, rate limiting, WARC archival, and async job processing.
+### Fetch pages. Control proxies. Inspect every attempt.
 
-## Architecture
+FastAPI + arq worker + PostgreSQL + Redis. HTTPX/curl_cffi for HTTP;
+Playwright Chromium and Camoufox Firefox for browser execution.
+
+[Documentation](docs/README.md) · [User guide](docs/USER_GUIDE.md) ·
+[API](docs/API.md) · [Operations](docs/runbook.md) · [CI](docs/CI.md)
+
+> [!IMPORTANT]
+> Release candidate: these guides describe interview-stable / PR #19, not the
+> older master branch. Existing external deployments are not migrated by git pull.
+
+## Start
+
+Linux x86_64, Git, Docker with current Compose v2, Internet access and space for
+browser images are required. No mandatory .env or host Python.
+
+```bash
+git clone --branch interview-stable https://github.com/softK1T/crawler-api.git
+cd crawler-api
+docker compose up -d --build --wait
+curl -fsS http://127.0.0.1:8000/readyz
+```
+
+After merge into master, omit --branch. First build downloads dependencies and
+browsers; later Docker-cache hits can be faster, not necessarily download-free.
 
 ```mermaid
-graph LR
-    Client --> API
-    API --> RedisQueue[Redis Queue]
-    RedisQueue --> Worker
-    Worker --> Fetchers
-    Fetchers --> ProxyManager[Proxy Manager]
-    Worker --> WarcStorage[WARC Storage]
-    Worker --> Postgres[(PostgreSQL)]
-    API --> Redis[(Redis)]
-    API --> S3[(MinIO / S3)]
+flowchart LR
+    Client --> API[FastAPI]
+    API --> Redis[Redis / arq]
+    Redis --> Worker
+    Worker --> Engines[HTTP and browser engines]
+    Engines --> Target[Permitted target]
+    Worker --> DB[(PostgreSQL audit)]
 ```
 
-- **API** (FastAPI): REST endpoints for job submission, archive retrieval, usage stats, admin.
-- **Worker** (arq): Async fetch tasks with policy resolution, proxy selection, WARC archival, callbacks.
-- **PostgreSQL**: Tenants, applications, API keys, domain policies, proxy pools, usage counters, WARC index, partitioned request logs.
-- **Redis**: Rate limiter (Lua sliding-window), job queue, circuit breaker state, sticky sessions.
-- **MinIO/S3**: WARC file storage with byte-range reads for random-access retrieval.
-- **Prometheus**: 8 metrics exposed at `/metrics` for latency, block rate, queue depth, proxy health, WARC bytes, costs.
-
-## Getting Started
-
-Prerequisites: Docker, docker-compose, Python 3.12.
+Startup generates/persists a DB password, waits for services, applies migrations,
+initializes the administrator key and checks real browser capabilities.
+API: http://127.0.0.1:8000 · Swagger: http://127.0.0.1:8000/docs
 
 ```bash
-cp .env.example .env
-# Fill required fields: DATABASE_URL, REDIS_URL, API_KEYS_RAW
-docker compose up -d
-./scripts/verify.sh   # Stage 13: runs full verification
-curl http://localhost:8000/healthz
+API_KEY=$(docker compose exec -T api python scripts/stack_runtime.py key)
+curl -fsS http://127.0.0.1:8000/v1/keys -H "X-API-Key: $API_KEY"
 ```
 
-## Verified State
+Do not print/commit the key or enable shell tracing. Issue narrower client keys.
 
-| Field | Value |
+| Included | Optional / not established |
 |---|---|
-| Tag | `v0.1.0` |
-| Date | 2026-07-29 |
-| Migration head | `a7c55bf575f3` |
-| Tests | 86 passed, 0 failed |
-| verify.sh | OK (second run; cold-start archive timing documented in ADR-013) |
+| Scoped keys, jobs, batches, domain policy | WARC/S3 and callbacks off by default |
+| Four engines, health and attempt audit | Provider sync/premium tiers off |
+| Candidate import/checker; bring your own proxies | No guarantee of target-site access |
+| Automatic migrations and persistent secrets | Native ARM64 not supported |
 
-**Quick reproduction:**
-```bash
-docker compose build --no-cache
-docker compose up -d
-docker compose exec api alembic upgrade head
-docker compose exec api python3 scripts/bootstrap_dev.py  # prints API key
-./scripts/verify.sh
-```
+Camoufox 159.0-beta.42 is a recovered Linux x86_64 installation in this project's
+release, checksum-pinned in Dockerfile. No upstream camoufox fetch is used.
+The archive is about 1.36 GB; checksum is not an upstream signature.
 
-For operations, see [docs/runbook.md](docs/runbook.md).
+> [!WARNING]
+> Never run pytest against deployment DB/Redis or use down -v unless intentionally
+> deleting data. Loopback baseline is not a completed production security audit.
 
-## Documentation
-
-| Document | Purpose |
-|---|---|
-| [`docs/PROJECT-HISTORY.md`](docs/PROJECT-HISTORY.md) | 15-stage rebuild narrative, architecture, bugs found, deferred items |
-| [`docs/AI-ASSISTED-DEVELOPMENT.md`](docs/AI-ASSISTED-DEVELOPMENT.md) | Working method, agent failure modes, transferable rules |
-| [`docs/runbook.md`](docs/runbook.md) | Operations: proxy sync cron, DLQ inspection, browser mode |
-| [`docs/decisions/`](docs/decisions/) | Architecture Decision Records (ADR-001 through ADR-015) |
-| [`docs/SESSION-SUMMARY.md`](docs/SESSION-SUMMARY.md) | Quick reference pointer |
-
-## API Examples
-
-```bash
-# Submit async fetch
-curl -X POST http://localhost:8000/v1/fetch \
-  -H "X-API-Key: crw_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://example.com","mode":"static"}'
-
-# Poll result
-curl http://localhost:8000/v1/jobs/{job_id} -H "X-API-Key: crw_live_..."
-
-# Archive search
-curl "http://localhost:8000/v1/archive?url=https://example.com&from=2026-01-01" \
-  -H "X-API-Key: crw_live_..."
-
-# Usage stats
-curl http://localhost:8000/v1/usage -H "X-API-Key: crw_live_..."
-
-# Admin: create domain policy
-curl -X POST http://localhost:8000/v1/admin/domain-policies \
-  -H "X-API-Key: crw_live_..." \
-  -d '{"domain":"example.com","engine":"playwright","rate_limit_rps":2.0}'
-```
-
-## Metrics
-
-| Metric | Description |
-|---|---|
-| crawler_block_rate_total | Blocked fetches by domain/engine/reason |
-| crawler_request_latency_ms | Request/worker latency histogram |
-| crawler_queue_depth | Async job queue depth |
-| crawler_proxy_health_score | Current proxy health per proxy |
-| crawler_warc_bytes_total | WARC bytes written (response/revisit) |
-| crawler_dedup_ratio | Revisit ratio over total records |
-| crawler_proxy_cost_eur_total | Estimated proxy traffic cost |
-| crawler_rate_limit_hits_total | Rate limit denials by layer |
-
-## Scaling & Failure Modes
-
-**What breaks at 100x:**
-- Single Redis bottleneck for rate limiting + queue + circuit breaker.
-- DB writes per request (proxy health, usage counters) — batch writes needed.
-- WARC 1 GB in-memory buffer — frequent rotation and S3 uploads.
-- Browser-per-fetch (Playwright) — 100 concurrent browsers exhaust 8 GB RAM.
-
-**Mitigations at 10x:** Redis Cluster or separate Redis instances. Batch proxy health writes. Increase WARC rotation threshold.
-
-**Mitigations at 100x:** PostgreSQL read replicas. Browser pool with pre-warmed instances. Distributed queue (move arq to multi-worker with Redis Cluster).
-
-## Legal & Ethics
-
-- Respect `robots.txt` when `respect_robots=True` in domain policy.
-- Comply with target site Terms of Service.
-- Avoid scraping personal data without consent or legitimate interest.
-- Honor takedown and removal requests.
-- WARC archives and logs may contain sensitive third-party content; handle accordingly.
-
-## AI Usage
-
-- AI-assisted code generation (Claude Code) for architecture design, ADRs, and implementation.
-- No automated in-production decision-making beyond rate limiting and proxy selection.
-- All ADRs and architectural decisions must be reviewed by a human operator before production deployment.
+Continue with [the documentation map](docs/README.md). For an existing external
+server read [UBUNTU.md](UBUNTU.md), not a fresh-install recipe.
