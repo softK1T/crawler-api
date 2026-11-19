@@ -25,6 +25,7 @@ dependencies = [
     "lxml>=5.0.0",
     "html2text>=2024.2.26",
     "curl-cffi>=0.7.0",
+    "maxminddb>=2.6,<4",
     "argon2-cffi>=23.1.0",
     "tldextract>=5.1.0",
     "warcio>=1.7.4",
