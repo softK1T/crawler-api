@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from app.services.proxy_geo_policy import parse_exit_ip, pin_proxy, probe_endpoint
 
 
-async def discover_exit_ip(proxy_url: str, endpoint: str, timeout_s: float) -> str:
+async def fetch_trace_body(proxy_url: str, endpoint: str, timeout_s: float) -> bytes:
     from curl_cffi.requests import AsyncSession
 
     endpoint = probe_endpoint(endpoint)
@@ -46,7 +46,7 @@ async def discover_exit_ip(proxy_url: str, endpoint: str, timeout_s: float) -> s
             )
         if response.status_code != 200:
             raise ValueError("probe_http_error")
-        return parse_exit_ip(bytes(body))
+        return bytes(body)
 
 
 def lookup_country(path: str, exit_ip: str) -> str | None:
@@ -71,3 +71,7 @@ def check_database(path: str) -> None:
     with maxminddb.open_database(path) as reader:
         if "Country" not in reader.metadata().database_type:
             raise ValueError("country_database_required")
+
+
+async def discover_exit_ip(proxy_url: str, endpoint: str, timeout_s: float) -> str:
+    return parse_exit_ip(await fetch_trace_body(proxy_url, endpoint, timeout_s))

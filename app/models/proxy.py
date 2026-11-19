@@ -16,6 +16,7 @@ class ProxyType(StrEnum):
     datacenter = "datacenter"
     mobile = "mobile"
     isp = "isp"
+    unknown = "unknown"
 
 
 class Proxy(Base):
@@ -24,6 +25,7 @@ class Proxy(Base):
         Index("ix_proxy_pool_health", "pool_id", "health_score"),
         Index("ix_proxy_cooldown", "cooldown_until"),
         Index("ix_proxy_country", "country"),
+        Index("ix_proxy_candidate_due", "check_managed", "check_due_at"),
         UniqueConstraint("provider", "url", name="uq_proxy_provider_url"),
     )
 
@@ -63,6 +65,21 @@ class Proxy(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    check_managed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    check_auto_activate: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    check_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unmanaged", server_default="unmanaged"
+    )
+    exit_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    country_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    check_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    check_last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    check_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return f"<Proxy id={self.id} country={self.country!r} type={self.proxy_type} score={self.health_score}>"
