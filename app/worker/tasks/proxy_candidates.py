@@ -1,4 +1,4 @@
-"""Minute cron for opt-in public candidate pools. No browser or shop requests."""
+"""Half-minute cron for opt-in public candidate pools. No browser or shop requests."""
 
 import asyncio
 import logging
@@ -30,6 +30,9 @@ async def check_proxy_candidates(ctx: dict) -> dict:
 
     from app.core.config import settings
 
+    # Bound the worst case (every probe times out) to about 25 seconds per pass.
+    batch_limit = min(cfg.batch_size, cfg.concurrency * max(1, int(25 // cfg.timeout_s)))
+
     try:
         async with asyncio.timeout(min(75, max(1, settings.worker_job_timeout_s - 10))):
             async with AsyncSessionLocal() as db:
@@ -49,7 +52,7 @@ async def check_proxy_candidates(ctx: dict) -> dict:
                                 or_(Proxy.check_due_at.is_(None), Proxy.check_due_at <= func.now()),
                             )
                             .order_by(Proxy.check_due_at.asc().nullsfirst(), Proxy.id)
-                            .limit(cfg.batch_size)
+                            .limit(batch_limit)
                             .with_for_update(of=Proxy, skip_locked=True)
                         )
                     )

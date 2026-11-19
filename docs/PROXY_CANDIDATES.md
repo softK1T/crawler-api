@@ -8,9 +8,9 @@ classification, browser compatibility or access to OLX or any other site.
 The default Compose enables the checker. Other deployments must explicitly set
 PROXY_CHECK_ENABLED=true in the worker and apply migration 0009 first.
 
-Defaults: control endpoint https://1.1.1.1/cdn-cgi/trace, 8-second probe timeout,
-concurrency 4, batch size 20, success TTL 21600 seconds and retry delay 600 seconds.
-Cron checks once per minute. Large imports need multiple passes. Without an MMDB,
+Defaults: control endpoint https://1.1.1.1/cdn-cgi/trace, 5-second probe timeout,
+concurrency 50, batch size 250, success TTL 21600 seconds and retry delay 600 seconds.
+Cron checks twice per minute and caps each pass near 25 seconds. Large imports need multiple passes. Without an MMDB,
 country comes from trace loc, not colo; the endpoint is not a geolocation SLA.
 A licensed GeoLite2-Country database may be mounted read-only using
 PROXY_CHECK_DATABASE_PATH. Do not commit or redistribute that database casually.

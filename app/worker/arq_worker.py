@@ -17,7 +17,7 @@ class WorkerSettings:
     functions = [fetch_task]
     cron_jobs = [
         arq_cron(publish_worker_health, second={0, 15, 30, 45}),
-        arq_cron(check_proxy_candidates, second=5),
+        arq_cron(check_proxy_candidates, second={5, 35}),
         arq_cron(retry_warc_uploads, second=25, run_at_startup=True),
     ] + (
         [arq_cron(sync_proxies, minute={0, 30}, run_at_startup=True)]
