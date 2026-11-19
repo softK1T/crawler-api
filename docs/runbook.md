@@ -112,4 +112,4 @@ docker compose -p crawler-current -f docker-compose.yml exec -T worker python sc
 
 This writes synthetic records, tests gzip readback and simulated S3/DB failures, and checks replay. It does not fetch a live target or certify whole-system disaster recovery. Do not point pytest at deployment databases/Redis: fixtures can drop tables and flush data.
 
-[WARC durability details](LOCAL-S3.md) · [Legacy external Ubuntu stack](../UBUNTU.md)
+[WARC durability details](LOCAL-S3.md)

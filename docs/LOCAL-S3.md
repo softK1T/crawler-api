@@ -2,7 +2,6 @@
 
 This is the authoritative archival guide for canonical `docker-compose.yml`;
 it supersedes the optional/default-off description in CONFIGURATION.md.
-Do not combine it with legacy `compose.ubuntu.yaml` (still WARC-disabled).
 
 ## Defaults and security
 
