@@ -162,8 +162,11 @@ class ProxyManager:
                 async with self._db_factory() as db:
                     sticky_proxy = await db.get(Proxy, sticky_id)
                     if sticky_proxy is not None and candidate_matches(
-                        sticky_proxy, pool_id=effective_pool, country=country,
-                        city=city, proxy_type=proxy_type,
+                        sticky_proxy,
+                        pool_id=effective_pool,
+                        country=country,
+                        city=city,
+                        proxy_type=proxy_type,
                     ):
                         return sticky_proxy
                 await self._delete_sticky(domain, sticky_key)
@@ -183,15 +186,25 @@ class ProxyManager:
             all_proxies = result.scalars().all()
 
             eligible = [
-                p for p in all_proxies
-                if p.id not in _excluded and candidate_matches(
-                    p, pool_id=effective_pool, country=country, city=city, proxy_type=proxy_type,
+                p
+                for p in all_proxies
+                if p.id not in _excluded
+                and candidate_matches(
+                    p,
+                    pool_id=effective_pool,
+                    country=country,
+                    city=city,
+                    proxy_type=proxy_type,
                 )
             ]
             if not eligible:
                 logger.warning(
                     "No eligible proxies for pool=%s domain=%s country=%s city=%s excluded=%d",
-                    effective_pool, domain, country, city, len(_excluded),
+                    effective_pool,
+                    domain,
+                    country,
+                    city,
+                    len(_excluded),
                 )
                 return None
 

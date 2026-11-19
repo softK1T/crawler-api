@@ -60,8 +60,13 @@ class CandidateTests(unittest.TestCase):
     def test_success_activates_and_tags(self):
         p = candidate()
         record_check(
-            p, now=NOW, ttl_s=3600, retry_s=60,
-            exit_ip="8.8.4.4", country="PL", source="cloudflare-trace",
+            p,
+            now=NOW,
+            ttl_s=3600,
+            retry_s=60,
+            exit_ip="8.8.4.4",
+            country="PL",
+            source="cloudflare-trace",
         )
         self.assertTrue(p.is_active)
         self.assertEqual(p.country, "PL")
@@ -72,7 +77,12 @@ class CandidateTests(unittest.TestCase):
     def test_unknown_country_active_only_without_country_filter(self):
         p = candidate(country="DE", city="Berlin")
         record_check(
-            p, now=NOW, ttl_s=3600, retry_s=60, exit_ip="8.8.4.4", country=None,
+            p,
+            now=NOW,
+            ttl_s=3600,
+            retry_s=60,
+            exit_ip="8.8.4.4",
+            country=None,
         )
         self.assertTrue(p.is_active)
         self.assertIsNone(p.country)
@@ -96,7 +106,12 @@ class CandidateTests(unittest.TestCase):
     def test_paused_candidate_never_reactivated(self):
         p = candidate(check_auto_activate=False, check_status="paused")
         record_check(
-            p, now=NOW, ttl_s=60, retry_s=60, exit_ip="8.8.4.4", country="PL",
+            p,
+            now=NOW,
+            ttl_s=60,
+            retry_s=60,
+            exit_ip="8.8.4.4",
+            country="PL",
         )
         self.assertFalse(p.is_active)
         self.assertEqual(p.check_status, "paused")
@@ -104,7 +119,12 @@ class CandidateTests(unittest.TestCase):
     def test_unmanaged_proxy_never_modified(self):
         p = candidate(check_managed=False)
         record_check(
-            p, now=NOW, ttl_s=60, retry_s=60, exit_ip="8.8.4.4", country="PL",
+            p,
+            now=NOW,
+            ttl_s=60,
+            retry_s=60,
+            exit_ip="8.8.4.4",
+            country="PL",
         )
         self.assertFalse(p.is_active)
         self.assertIsNone(p.country)
@@ -112,7 +132,12 @@ class CandidateTests(unittest.TestCase):
     def test_pool_and_type_constraints(self):
         p = candidate()
         record_check(
-            p, now=NOW, ttl_s=60, retry_s=60, exit_ip="8.8.4.4", country="PL",
+            p,
+            now=NOW,
+            ttl_s=60,
+            retry_s=60,
+            exit_ip="8.8.4.4",
+            country="PL",
         )
         self.assertFalse(candidate_matches(p, pool_id=uuid4(), now=NOW))
         self.assertFalse(candidate_matches(p, proxy_type="datacenter", now=NOW))
@@ -120,7 +145,11 @@ class CandidateTests(unittest.TestCase):
     def test_geolocation_failure_does_not_fail_https(self):
         p = candidate()
         record_check(
-            p, now=NOW, ttl_s=60, retry_s=60, exit_ip="8.8.4.4",
+            p,
+            now=NOW,
+            ttl_s=60,
+            retry_s=60,
+            exit_ip="8.8.4.4",
             geo_error="LookupError",
         )
         self.assertTrue(p.is_active)

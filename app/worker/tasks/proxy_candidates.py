@@ -36,22 +36,26 @@ async def check_proxy_candidates(ctx: dict) -> dict:
                 if not await db.scalar(text("SELECT pg_try_advisory_xact_lock(714028312)")):
                     return {"status": "busy"}
                 rows = (
-                    await db.execute(
-                        select(Proxy)
-                        .join(ProxyPool, Proxy.pool_id == ProxyPool.id)
-                        .where(
-                            Proxy.provider == PROVIDER,
-                            ProxyPool.provider == PROVIDER,
-                            ProxyPool.is_active.is_(True),
-                            Proxy.check_managed.is_(True),
-                            Proxy.check_auto_activate.is_(True),
-                            or_(Proxy.check_due_at.is_(None), Proxy.check_due_at <= func.now()),
+                    (
+                        await db.execute(
+                            select(Proxy)
+                            .join(ProxyPool, Proxy.pool_id == ProxyPool.id)
+                            .where(
+                                Proxy.provider == PROVIDER,
+                                ProxyPool.provider == PROVIDER,
+                                ProxyPool.is_active.is_(True),
+                                Proxy.check_managed.is_(True),
+                                Proxy.check_auto_activate.is_(True),
+                                or_(Proxy.check_due_at.is_(None), Proxy.check_due_at <= func.now()),
+                            )
+                            .order_by(Proxy.check_due_at.asc().nullsfirst(), Proxy.id)
+                            .limit(cfg.batch_size)
+                            .with_for_update(of=Proxy, skip_locked=True)
                         )
-                        .order_by(Proxy.check_due_at.asc().nullsfirst(), Proxy.id)
-                        .limit(cfg.batch_size)
-                        .with_for_update(of=Proxy, skip_locked=True)
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 semaphore = asyncio.Semaphore(cfg.concurrency)
 
                 async def probe(proxy):
@@ -86,9 +90,15 @@ async def check_proxy_candidates(ctx: dict) -> dict:
                 now = datetime.now(UTC)
                 for proxy, exit_ip, country, source, error, geo_error in results:
                     record_check(
-                        proxy, now=now, ttl_s=cfg.ttl_s, retry_s=cfg.retry_s,
-                        exit_ip=exit_ip, country=country, source=source,
-                        error=error, geo_error=geo_error,
+                        proxy,
+                        now=now,
+                        ttl_s=cfg.ttl_s,
+                        retry_s=cfg.retry_s,
+                        exit_ip=exit_ip,
+                        country=country,
+                        source=source,
+                        error=error,
+                        geo_error=geo_error,
                     )
                 await db.commit()
                 return {"status": "processed", "count": len(rows)}

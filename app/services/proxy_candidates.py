@@ -48,8 +48,16 @@ def candidate_matches(proxy, **filters) -> bool:
 
 
 def record_check(
-    proxy, *, now, ttl_s, retry_s, exit_ip=None,
-    country=None, source=None, error=None, geo_error=None,
+    proxy,
+    *,
+    now,
+    ttl_s,
+    retry_s,
+    exit_ip=None,
+    country=None,
+    source=None,
+    error=None,
+    geo_error=None,
 ) -> None:
     # Only records explicitly enrolled by the candidate importer may be mutated.
     if not proxy.check_managed or not proxy.check_auto_activate:

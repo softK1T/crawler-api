@@ -108,17 +108,21 @@ async def recheck_candidates(
 ):
     await candidate_pool(db, pool_id)
     rows = (
-        await db.execute(
-            select(Proxy)
-            .where(
-                Proxy.pool_id == pool_id,
-                Proxy.provider == PROVIDER,
-                Proxy.check_managed.is_(True),
-                Proxy.check_auto_activate.is_(True),
+        (
+            await db.execute(
+                select(Proxy)
+                .where(
+                    Proxy.pool_id == pool_id,
+                    Proxy.provider == PROVIDER,
+                    Proxy.check_managed.is_(True),
+                    Proxy.check_auto_activate.is_(True),
+                )
+                .with_for_update()
             )
-            .with_for_update()
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for proxy in rows:
         proxy.is_active = False
         proxy.check_status = "pending"
@@ -140,9 +144,9 @@ async def candidate_stats(
                 Proxy.country,
                 Proxy.check_status,
                 func.count().label("total"),
-                func.count().filter(
-                    Proxy.is_active.is_(True), Proxy.check_due_at > func.now()
-                ).label("fresh_active"),
+                func.count()
+                .filter(Proxy.is_active.is_(True), Proxy.check_due_at > func.now())
+                .label("fresh_active"),
             )
             .where(Proxy.pool_id == pool_id, Proxy.provider == PROVIDER)
             .group_by(Proxy.country, Proxy.check_status)
@@ -164,12 +168,21 @@ async def candidate_results(
     rows = (
         await db.execute(
             select(
-                Proxy.id, Proxy.country, Proxy.exit_ip, Proxy.country_source,
-                Proxy.check_status, Proxy.check_error, Proxy.check_last_at,
-                Proxy.check_due_at, Proxy.is_active, Proxy.check_auto_activate,
+                Proxy.id,
+                Proxy.country,
+                Proxy.exit_ip,
+                Proxy.country_source,
+                Proxy.check_status,
+                Proxy.check_error,
+                Proxy.check_last_at,
+                Proxy.check_due_at,
+                Proxy.is_active,
+                Proxy.check_auto_activate,
             )
             .where(Proxy.pool_id == pool_id, Proxy.provider == PROVIDER)
-            .order_by(Proxy.id).offset(offset).limit(limit)
+            .order_by(Proxy.id)
+            .offset(offset)
+            .limit(limit)
         )
     ).all()
     return {"items": [dict(row._mapping) for row in rows], "limit": limit, "offset": offset}
