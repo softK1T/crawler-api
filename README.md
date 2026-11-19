@@ -1,23 +1,23 @@
 # Crawler API
 
-Сервис получения веб-страниц через HTTP и браузеры с очередью задач, управлением прокси и WARC-архивом в локальном S3.
+A web-page retrieval service with HTTP and browser engines, asynchronous jobs, proxy management, and WARC archives in local S3-compatible storage.
 
-Стек: FastAPI → Redis/arq → worker; PostgreSQL хранит настройки, ключи, аудит и индекс архивов; RustFS — объекты WARC.
+Stack: FastAPI, Redis/arq workers, PostgreSQL for configuration/audit/archive indexes, and RustFS for WARC objects.
 
-## Возможности
+## Features
 
-- Четыре режима: `static` — HTTPX, `stealth` — curl_cffi, `browser` — Playwright/Chromium, `camoufox` — Camoufox/Firefox.
-- Одиночные и пакетные задачи, опрос результатов, ожидание одиночной задачи до 30 секунд.
-- Доменные политики, escalation tiers, прокси-пулы, health/cooldown и circuit breaker; импорт и фоновая проверка кандидатов.
-- Tenants, приложения, API-ключи со scopes, ротация и статистика использования.
-- WARC/S3: дисковый журнал перед отправкой, повторная доставка и восстановление индекса после ошибок S3/БД.
-- SSRF-проверки, rate limiting, readiness и Prometheus-метрики. Успешный доступ к любому сайту не гарантируется.
+- Four modes: `static` (HTTPX), `stealth` (curl_cffi), `browser` (Playwright/Chromium), and `camoufox` (Camoufox/Firefox).
+- Single and batch jobs, result polling, and optional waiting for a single job for up to 30 seconds.
+- Domain policies, escalation tiers, proxy pools, health/cooldown tracking, circuit breakers, and background candidate checks.
+- Tenants, applications, scoped API keys, key rotation, and usage statistics.
+- WARC archival with a persistent write-ahead spool, S3 delivery retries, and index recovery after S3/database failures.
+- SSRF checks, rate limiting, readiness checks, and Prometheus metrics. Access to any particular target site is not guaranteed.
 
-## Деплой
+## Deployment
 
-Нужны Linux x86_64, Git, Docker с Compose v2, интернет для первой сборки и место под браузеры и архивы. Нативный ARM64 текущим образом не поддерживается. Обязательного `.env` нет.
+Requirements: Linux x86_64, Git, Docker with Compose v2, internet access for the initial build, and disk space for browsers and archives. Native ARM64 is not supported by the current image. No mandatory `.env` file or host Python installation is required.
 
-Свежая установка из `master`:
+Fresh installation from `master`:
 
 ```bash
 git clone --branch master https://github.com/softK1T/crawler-api.git
@@ -28,17 +28,17 @@ docker compose -p crawler-current -f docker-compose.yml up -d --no-build --pull 
 curl --fail-with-body http://127.0.0.1:8000/readyz
 ```
 
-Выполняй следующий шаг только после успешного предыдущего. Общий образ собирает только `api`. При старте создаются постоянные секреты, выполняются миграции и подготовка администратора. Завершение `secrets` и `initialize` с кодом 0 нормально; API, worker, PostgreSQL, Redis и S3 должны работать.
+Continue only after each preceding command succeeds. Only `api` builds the shared application image. Startup prepares persistent secrets, runs migrations, and initializes the administrator key. `secrets` and `initialize` should exit with code 0; API, worker, PostgreSQL, Redis, and S3 should remain running.
 
-| Компонент | Адрес / хранение |
+| Component | Address / storage |
 |---|---|
-| API | `http://127.0.0.1:8000`; порт хоста меняется через `API_PORT` |
-| Swagger / ReDoc | `/docs` / `/redoc`; схемы запросов и ответов — `/openapi.json` |
-| S3 | `http://s3:9000` внутри Docker; bucket `crawler-warc`, регион `us-east-1` |
-| Консоль S3 | `http://127.0.0.1:9001`; порт хоста — `S3_CONSOLE_PORT` |
-| Постоянные тома | `postgres-data`, `redis-data`, `runtime-secrets`, `s3-data`, `s3-secrets`, `warc-spool` с префиксом Compose-проекта |
+| API | `http://127.0.0.1:8000`; change the host port with `API_PORT` |
+| Swagger / ReDoc | `/docs` / `/redoc`; request and response schemas at `/openapi.json` |
+| S3 API | Docker-internal `http://s3:9000`; bucket `crawler-warc`, region `us-east-1` |
+| S3 console | `http://127.0.0.1:9001`; change the host port with `S3_CONSOLE_PORT` |
+| Persistent volumes | `postgres-data`, `redis-data`, `runtime-secrets`, `s3-data`, `s3-secrets`, `warc-spool`, prefixed with the Compose project name |
 
-Обновление существующего канонического стека — из каталога проекта, с тем же именем Compose-проекта:
+Update an existing canonical stack from its project directory, preserving the Compose project name:
 
 ```bash
 git pull --ff-only origin master
@@ -47,133 +47,137 @@ docker compose -p crawler-current -f docker-compose.yml pull s3
 docker compose -p crawler-current -f docker-compose.yml up -d --no-build --pull never --wait --wait-timeout 300
 ```
 
-Не меняй имя проекта при обновлении: это может подключить другие тома. Не объединяй `docker-compose.yml` с устаревшим самостоятельным `compose.ubuntu.yaml`. Миграция внешней установки требует отдельного плана.
+Changing the project name may select different volumes. Do not combine `docker-compose.yml` with the legacy standalone `compose.ubuntu.yaml`. Migrating an external deployment requires a separate plan.
 
-Если запуск упал, сначала смотри состояние и лог конкретного сервиса, а не удаляй данные:
+If startup fails, inspect the failing service instead of deleting data:
 
 ```bash
 docker compose -p crawler-current -f docker-compose.yml ps -a
 docker compose -p crawler-current -f docker-compose.yml logs --no-color --tail=120 secrets
 ```
 
-## Использование
+## Usage
 
-Все защищённые методы принимают заголовок `X-API-Key`. Получить существующий bootstrap-ключ в переменную, не выводя его:
+Protected endpoints require an `X-API-Key` header. Load the existing bootstrap key without printing it:
 
 ```bash
 API_KEY=$(docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/stack_runtime.py key)
 curl --fail-with-body http://127.0.0.1:8000/v1/keys -H "X-API-Key: $API_KEY"
 ```
 
-Не включай `set -x`, не коммить ключи и не присылай их вместе с логами. Для клиентов выпускай отдельные ключи с минимальными scopes. Новый `raw_key` при выпуске/ротации возвращается один раз. `admin` не заменяет автоматически остальные scopes.
+Do not enable `set -x`, commit credentials, or include them in shared logs. Issue separate least-privilege keys for clients. A newly issued or rotated `raw_key` is returned once. The `admin` scope does not automatically grant other scopes.
 
-Пример запроса без прокси:
+Fetch without a proxy:
 
 ```bash
-curl --fail-with-body http://127.0.0.1:8000/v1/fetch   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json'   -d '{"url":"https://example.org/","mode":"static","use_proxy":false,"options":{"sync":true}}'
+curl --fail-with-body http://127.0.0.1:8000/v1/fetch -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' -d '{"url":"https://example.org/","mode":"static","use_proxy":false,"options":{"sync":true}}'
 ```
 
-Без `options.sync` метод возвращает `202` и `job_id`. С `sync=true` ожидает до 30 секунд: завершённая задача возвращается с HTTP 200, иначе — 202; продолжай опрашивать `GET /v1/jobs/{job_id}`. HTTP 200 не заменяет проверку поля `status`: задача может быть `failed`. Идемпотентность задаётся полем JSON `idempotency_key`, не заголовком.
+Without `options.sync`, submission returns HTTP 202 and a `job_id`. With `sync=true`, the API waits for up to 30 seconds, returning HTTP 200 for a terminal job or 202 otherwise. Continue polling `GET /v1/jobs/{job_id}` when needed. Always inspect `status`: HTTP 200 can contain a failed job. Idempotency uses the JSON field `idempotency_key`, not a request header.
 
-| Настройка канонического Compose | Значение по умолчанию |
+| Canonical Compose setting | Default |
 |---|---|
-| WARC / локальный S3 | Включены |
-| Проверка кандидатов прокси | Включена; кандидатов нужно импортировать |
-| Webshare sync / premium proxy tiers | Выключены; включаются явно через `PROXY_SYNC_ENABLED` / `ENABLE_PREMIUM_PROXY_TIERS`; sync требует `WEBSHARE_API_KEY` |
-| Worker / Chromium pool | `WORKER_MAX_JOBS=2` / 1 браузер |
-| Callbacks / tracing | Выключены; для включения нужны изменения окружения контейнеров и соответствующие секреты/сервисы |
+| WARC / local S3 | Enabled |
+| Proxy candidate checker | Enabled; candidates must be imported |
+| Webshare sync / premium proxy tiers | Disabled; explicitly enable `PROXY_SYNC_ENABLED` / `ENABLE_PREMIUM_PROXY_TIERS`; sync also requires `WEBSHARE_API_KEY` |
+| Worker jobs / Chromium pool | `WORKER_MAX_JOBS=2` / one browser |
+| Callbacks / tracing | Disabled; enabling requires container environment changes and the relevant credentials/services |
 
-Произвольные переменные из `.env` не попадают в контейнеры автоматически: Compose должен явно их передавать. Геолокация кандидата не подтверждает тип прокси или доступ к целевому сайту.
+Arbitrary `.env` variables are not automatically forwarded into containers: Compose must explicitly pass them. Candidate geolocation does not establish proxy type or guarantee target-site access.
 
-## Эндпоинты
+## Endpoints
 
-Пути указаны полностью, включая завершающий `/`. «Ключ» означает любой действующий API-ключ; дополнительные ограничения области данных сохраняются. `fetch`, `archive`, `keys`, `admin` — требуемые scopes. Схемы тел и все параметры смотри в `/docs` или `/openapi.json` текущего экземпляра.
+Paths below are complete, including trailing slashes. **Key** means any valid API key; resource ownership restrictions still apply. `fetch`, `archive`, `keys`, and `admin` are required scopes. See `/docs` or `/openapi.json` on the running instance for request bodies and complete parameter schemas.
 
-### Получение страниц, пакеты и архив
+### Fetching, batches, and archives
 
-| Метод | Путь | Доступ | Назначение |
+| Method | Path | Access | Purpose |
 |---|---|---|---|
-| POST | `/v1/fetch` | `fetch` | Создать одиночную задачу |
-| GET | `/v1/jobs/{job_id}` | Ключ, своё приложение | Статус, результат или ошибка задачи |
-| POST | `/batches/` | `fetch` | Создать пакет задач |
-| GET | `/batches/{batch_id}/status` | `fetch`, своё приложение | Состояние пакета |
-| GET | `/batches/{batch_id}/results` | `fetch`, своё приложение | Результаты пакета |
-| GET | `/v1/archive/` | `archive` | Список записей: `url`, `from`, `to`, `page`, `per_page` |
-| GET | `/v1/archive/{entry_id}` | `archive` | Содержимое записи, тело в `body_b64`; ID записи, не задачи |
+| POST | `/v1/fetch` | `fetch` | Submit a single fetch job |
+| GET | `/v1/jobs/{job_id}` | Key, own application | Read job status, result, or error |
+| POST | `/batches/` | `fetch` | Submit a batch of jobs |
+| GET | `/batches/{batch_id}/status` | `fetch`, own application | Read batch status |
+| GET | `/batches/{batch_id}/results` | `fetch`, own application | Read batch results |
+| GET | `/v1/archive/` | `archive` | List archive entries; filters: `url`, `from`, `to`, `page`, `per_page` |
+| GET | `/v1/archive/{entry_id}` | `archive` | Read archived content as `body_b64`; use an archive entry ID, not a job ID |
 
-Архивные маршруты регистрируются только при `ENABLE_WARC=true`. Не считай scope `archive` гарантией изоляции архивов между приложениями: текущие запросы архива не фильтруют записи по приложению; выдавай его только доверенным клиентам.
+Archive routes are registered only when `ENABLE_WARC=true`. The `archive` scope is not an application-isolation guarantee: current archive queries do not filter by application. Grant it only to trusted clients.
 
-### Tenants, приложения, проекты и ключи
+### Tenants, applications, projects, and keys
 
-| Метод | Путь | Доступ | Назначение |
+| Method | Path | Access | Purpose |
 |---|---|---|---|
-| POST | `/v1/tenants` | `admin` | Создать tenant |
-| GET | `/v1/tenants` | `admin` | Список tenants |
-| GET | `/v1/tenants/{tenant_id}` | `admin` | Получить tenant |
-| POST | `/projects/` | `admin` | Альтернативный маршрут создания tenant, не отдельная сущность |
-| GET | `/projects/` | `admin` | Список tenants без обёртки пагинации `/v1/tenants` |
-| POST | `/v1/applications` | `admin` | Создать приложение внутри tenant |
-| GET | `/v1/applications` | Ключ | Свои приложения; администратору — все |
-| GET | `/v1/applications/{app_id}` | Ключ | Своё приложение; администратору — любое |
-| PATCH | `/v1/applications/{app_id}` | `admin` | Изменить имя, owner label или активность |
-| POST | `/v1/keys` | `keys` | Выпустить ключ с проверкой выдаваемых scopes и приложения |
-| GET | `/v1/keys` | Ключ | Метаданные ключей своего приложения |
-| DELETE | `/v1/keys/{key_id}` | `keys` | Отозвать ключ; не текущий ключ аутентификации |
-| POST | `/v1/keys/{key_id}/rotate` | `keys` | Выпустить преемника с периодом перекрытия |
+| POST | `/v1/tenants` | `admin` | Create a tenant |
+| GET | `/v1/tenants` | `admin` | List tenants |
+| GET | `/v1/tenants/{tenant_id}` | `admin` | Read a tenant |
+| POST | `/projects/` | `admin` | Alternative tenant creation route; not a separate entity |
+| GET | `/projects/` | `admin` | List tenants without the `/v1/tenants` pagination wrapper |
+| POST | `/v1/applications` | `admin` | Create an application within a tenant |
+| GET | `/v1/applications` | Key | List own application; administrators can list all |
+| GET | `/v1/applications/{app_id}` | Key | Read own application; administrators can read any |
+| PATCH | `/v1/applications/{app_id}` | `admin` | Update name, owner label, or active status |
+| POST | `/v1/keys` | `keys` | Issue a key subject to scope and application checks |
+| GET | `/v1/keys` | Key | List key metadata for the caller's application |
+| DELETE | `/v1/keys/{key_id}` | `keys` | Revoke a key other than the authenticating key |
+| POST | `/v1/keys/{key_id}/rotate` | `keys` | Issue a successor with an overlap period |
 
-Для операций над ключами другого приложения дополнительно нужен `admin`. Выдача scope `keys` тоже требует `admin`; выдавать scopes шире собственных нельзя.
+Cross-application key operations additionally require `admin`. Granting the `keys` scope also requires `admin`; callers cannot issue scopes they do not hold.
 
-### Доменные политики и создание прокси-пулов
+### Domain policies and proxy-pool creation
 
-| Метод | Путь | Доступ | Назначение |
+| Method | Path | Access | Purpose |
 |---|---|---|---|
-| POST | `/admin/domain-policies` | `admin` | Создать или обновить политику домена |
-| GET | `/admin/domain-policies` | `admin` | Список политик |
-| GET | `/admin/domain-policies/{policy_id}` | `admin` | Получить политику |
-| PATCH | `/admin/domain-policies/{policy_id}` | `admin` | Изменить политику |
-| DELETE | `/admin/domain-policies/{policy_id}` | `admin` | Удалить политику |
-| POST | `/admin/domain-policies/{policy_id}/pin-tier` | `admin` | Зафиксировать tier 0–6 или снять блокировку; `tier` и `locked` — query-параметры |
-| POST | `/admin/proxy-pools` | `admin` | Создать прокси-пул |
-| POST | `/admin/proxy-pools/{pool_id}/proxies` | `admin` | Добавить прокси в пул |
+| POST | `/admin/domain-policies` | `admin` | Create or update a domain policy |
+| GET | `/admin/domain-policies` | `admin` | List policies |
+| GET | `/admin/domain-policies/{policy_id}` | `admin` | Read a policy |
+| PATCH | `/admin/domain-policies/{policy_id}` | `admin` | Update a policy |
+| DELETE | `/admin/domain-policies/{policy_id}` | `admin` | Delete a policy |
+| POST | `/admin/domain-policies/{policy_id}/pin-tier` | `admin` | Pin tier 0-6 or unlock it; `tier` and `locked` are query parameters |
+| POST | `/admin/proxy-pools` | `admin` | Create a proxy pool |
+| POST | `/admin/proxy-pools/{pool_id}/proxies` | `admin` | Add a proxy to a pool |
 
-### Прокси и проверка кандидатов
+### Proxies and candidate checks
 
-| Метод | Путь | Доступ | Назначение |
+| Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/proxy/pools` | Ключ | Активные пулы |
-| GET | `/proxy/pools/{pool_id}/stats` | Ключ | Health-статистика пула |
-| GET | `/proxy/proxies` | `admin` | Список прокси, фильтры `pool_id`, `country` |
-| GET | `/proxy/proxies/{proxy_id}/events` | `admin` | События прокси |
-| POST | `/proxy/health` | `admin` | Записать результат использования прокси |
-| POST | `/proxy/reset/{proxy_id}` | `admin` | Сбросить health и cooldown |
-| DELETE | `/proxy/circuit-breaker/{domain}` | `admin` | Сбросить circuit breaker домена |
-| POST | `/proxy/admin/proxies` | `admin` | Массово импортировать структурированные записи прокси |
-| POST | `/proxy/candidates/import` | `admin` | Импортировать до 500 URL в активный пул `public-candidates` |
-| PATCH | `/proxy/candidates/{proxy_id}/enabled` | `admin` | Разрешить проверку/автоактивацию или поставить на паузу |
-| POST | `/proxy/candidates/pools/{pool_id}/recheck` | `admin` | Поставить разрешённых кандидатов на повторную проверку |
-| GET | `/proxy/candidates/pools/{pool_id}/stats` | `admin` | Сводка по странам и статусам |
-| GET | `/proxy/candidates/pools/{pool_id}/results` | `admin` | Результаты проверки с `limit` и `offset` |
+| GET | `/proxy/pools` | Key | List active pools |
+| GET | `/proxy/pools/{pool_id}/stats` | Key | Read pool health statistics |
+| GET | `/proxy/proxies` | `admin` | List proxies; filters: `pool_id`, `country` |
+| GET | `/proxy/proxies/{proxy_id}/events` | `admin` | Read proxy events |
+| POST | `/proxy/health` | `admin` | Report a proxy request outcome |
+| POST | `/proxy/reset/{proxy_id}` | `admin` | Reset health and cooldown |
+| DELETE | `/proxy/circuit-breaker/{domain}` | `admin` | Reset a domain's circuit breaker |
+| POST | `/proxy/admin/proxies` | `admin` | Bulk-import structured proxy records |
+| POST | `/proxy/candidates/import` | `admin` | Import up to 500 URLs into an active `public-candidates` pool |
+| PATCH | `/proxy/candidates/{proxy_id}/enabled` | `admin` | Enable checking/automatic activation or pause a candidate |
+| POST | `/proxy/candidates/pools/{pool_id}/recheck` | `admin` | Schedule enabled candidates for rechecking |
+| GET | `/proxy/candidates/pools/{pool_id}/stats` | `admin` | Summarize countries and check statuses |
+| GET | `/proxy/candidates/pools/{pool_id}/results` | `admin` | List check results with `limit` and `offset` |
 
-### Использование и служебные маршруты
+### Usage and service endpoints
 
-| Метод | Путь | Доступ | Назначение |
+| Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/v1/usage/` | Ключ | Статистика своего приложения, `from_month` / `to_month` |
-| GET | `/v1/usage/applications/{application_id}` | `admin` | Статистика выбранного приложения |
-| GET | `/healthz` | Без ключа | Процесс API отвечает; не проверка зависимостей |
-| GET | `/readyz` | Без ключа | Готовность БД, Redis, worker, браузеров и включённого S3 |
-| GET | `/metrics` | Без ключа | Prometheus; путь настраивается через `METRICS_PATH` |
-| GET | `/docs` | Без ключа | Swagger UI |
-| GET | `/redoc` | Без ключа | ReDoc |
-| GET | `/openapi.json` | Без ключа | OpenAPI-схема |
-| GET | `/docs/oauth2-redirect` | Без ключа | Вспомогательный redirect Swagger, не API входа |
+| GET | `/v1/usage/` | Key | Read own application's usage; `from_month` / `to_month` filters |
+| GET | `/v1/usage/applications/{application_id}` | `admin` | Read a selected application's usage |
+| GET | `/healthz` | Public | API process liveness, not dependency readiness |
+| GET | `/readyz` | Public | Check DB, Redis, worker, browsers, and enabled S3 |
+| GET | `/metrics` | Public | Prometheus metrics; path configurable via `METRICS_PATH` |
+| GET | `/docs` | Public | Swagger UI |
+| GET | `/redoc` | Public | ReDoc |
+| GET | `/openapi.json` | Public | OpenAPI schema |
+| GET | `/docs/oauth2-redirect` | Public | Swagger helper redirect, not a login API |
 
-## Хранение и безопасность
+## Storage and security
 
-- Redis хранит временные результаты задач; постоянный архив — WARC в S3 плюс индекс PostgreSQL. Новый WARC содержит один полный ответ; дедупликация через revisit не используется.
-- При отказе S3/БД задача получает ошибку, а записанный дисковый журнал остаётся для повторной доставки. Восстановление архива не меняет статус уже упавшей задачи. Журнал ограничен 5 GiB; при заполнении новые записи отклоняются, старые не вытесняются.
-- Не запускай `down -v`, `prune` и тесты против рабочих БД/Redis. Тома не защищают от потери диска: нужен согласованный backup БД, S3, секретов и журнала вне сервера.
-- API и S3-консоль доступны только на loopback, S3 API — внутри Docker. Для внешнего доступа нужны TLS/reverse proxy, ограничение доступа к служебным маршрутам и настройка CORS. Не отключай SSRF для недоверенных URL.
-- S3 сейчас выделен этому проекту и использует общую административную пару для приложения и сервера хранения; не раздавай её другим приложениям. Loopback-конфигурация не является завершённым аудитом безопасности production/multi-tenant.
+- Redis holds temporary job results. Persistent archives require both WARC objects in S3 and their PostgreSQL index. Each new WARC contains one complete response; revisit deduplication is not used.
+- S3/database failure fails the job, while an already-written spool entry remains for retry. Archive recovery does not change a failed job's status. The spool is capped at 5 GiB; full storage rejects new entries instead of evicting existing ones.
+- Do not run `down -v`, `prune`, or tests against deployment databases/Redis. Volumes are not protection against disk failure: keep consistent off-host backups of the database, S3, secrets, and spool.
+- API and S3 console bind to loopback; the S3 API is Docker-internal. External access requires TLS/reverse proxy, restricted service endpoints, and appropriate CORS configuration. Keep SSRF protection enabled for untrusted URLs.
+- Local S3 is dedicated to this project and currently shares one administrative credential pair with the application. Do not give it to other applications. The loopback stack is not a completed production or multi-tenant security audit.
 
-Подробности архивирования и восстановления: [LOCAL-S3](docs/LOCAL-S3.md). Остальные материалы: [документация](docs/README.md).
+Archival/recovery details: [Local S3](docs/LOCAL-S3.md). Additional material: [Documentation](docs/README.md).
+
+## Project language
+
+All project documentation, code comments, user-facing messages, and commit messages must be written in English.
