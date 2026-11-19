@@ -1,5 +1,6 @@
-"""Liveness and dependency readiness, including short-lived worker capabilities."""
+"""Liveness and dependency readiness, including worker and authenticated S3."""
 
+import asyncio
 import json
 import logging
 
@@ -20,7 +21,7 @@ async def healthz():
 
 @router.get("/readyz")
 async def readyz(request: Request):
-    """Readiness requires DB, Redis, and a recent successful worker heartbeat."""
+    """Readiness requires live dependencies and a recent worker heartbeat."""
     checks = {
         "db": "fail",
         "redis": "fail",
@@ -56,8 +57,13 @@ async def readyz(request: Request):
 
     if settings.enable_warc:
         storage = getattr(request.app.state, "warc_storage", None)
-        if storage is not None and getattr(storage, "_s3", None):
-            checks["s3"] = "ok"
+        try:
+            if storage is not None and getattr(storage, "_s3", None):
+                async with asyncio.timeout(2):
+                    await storage._s3.head_bucket(Bucket=settings.s3_bucket)
+                checks["s3"] = "ok"
+        except Exception:
+            logger.debug("Readiness authenticated S3 check failed", exc_info=True)
 
     required = ["db", "redis", "worker", "playwright"]
     if settings.require_camoufox:

@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify a single shared-image build producer
         run: |
-          docker compose -p ci -f docker-compose.yml config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; builders=[n for n,v in s.items() if v.get("build")]; names=("api","worker","initialize","secrets"); assert builders==["api"],builders; assert {s[n]["image"] for n in names}=={"crawler-api:local"}; assert all(s[n].get("pull_policy")=="never" for n in names); print("Single build producer: api; shared local image: OK")'
+          docker compose -p ci -f docker-compose.yml config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; builders=[n for n,v in s.items() if v.get("build")]; names=("api","worker","initialize","secrets"); assert builders==["api"],builders; assert {s[n]["image"] for n in names}=={"crawler-api:local"}; assert all(s[n].get("pull_policy")=="never" for n in names); assert s["worker"]["environment"]["ENABLE_WARC"]=="true"; assert s["s3"]["image"]=="rustfs/rustfs:1.0.6"; print("Single application build and local S3: OK")'
       - uses: docker/setup-buildx-action@v3
       - name: Build the application image once
         uses: docker/build-push-action@v6
@@ -40,7 +40,7 @@ jobs:
           dc() { docker compose -p ci -f docker-compose.yml "$@"; }
           KEY=$(dc exec -T api python scripts/stack_runtime.py key)
           echo "::add-mask::$KEY"
-          curl -fsS http://127.0.0.1:8000/readyz | jq -e '.status == "ready" and .checks.playwright == "ok" and .checks.camoufox == "ok"'
+          curl -fsS http://127.0.0.1:8000/readyz | jq -e '.status == "ready" and .checks.playwright == "ok" and .checks.camoufox == "ok" and .checks.s3 == "ok"'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/v1/keys)" = 401
           curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8000/v1/keys | jq -e 'length == 1'
           curl -fsS -X POST http://127.0.0.1:8000/admin/proxy-pools -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"name":"ci-candidates","provider":"public-candidates"}' | jq -e '.provider == "public-candidates"'
@@ -50,6 +50,22 @@ jobs:
           echo "::add-mask::$KEY_AGAIN"
           test "$KEY" = "$KEY_AGAIN"
           dc exec -T api python scripts/stack_runtime.py alembic current | grep '0009'
+      - name: Verify durable WARC, outage readiness and service restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          dc() { docker compose -p ci -f docker-compose.yml "$@"; }
+          dc exec -T worker python scripts/stack_s3_runtime.py python scripts/warc_smoke.py
+          dc stop s3
+          TMP=$(mktemp)
+          trap 'rm -f "$TMP"' EXIT
+          test "$(curl -sS -o "$TMP" -w '%{http_code}' http://127.0.0.1:8000/readyz)" = 503
+          jq -e '.checks.s3 == "fail"' "$TMP"
+          dc start s3
+          dc up -d --no-build --pull never --wait --wait-timeout 300
+          dc up -d --no-deps --no-build --pull never --force-recreate worker
+          dc up -d --no-build --pull never --wait --wait-timeout 300
+          dc exec -T worker python scripts/stack_s3_runtime.py python scripts/warc_smoke.py verify
       - name: Restore a backup into a disposable database
         shell: bash
         run: |

@@ -1,15 +1,20 @@
-# Canonical fresh-install stack. No .env or prebuilt local image is required.
-# Existing external deployments must be migrated separately, with their data preserved.
+# Canonical local stack: one shared application image, durable WARC and local S3.
+# Existing external deployments must be migrated separately with their data preserved.
 x-app: &app
   image: crawler-api:local
   pull_policy: never
-  entrypoint: ["python", "scripts/stack_runtime.py"]
+  entrypoint: ["python", "scripts/stack_s3_runtime.py"]
   init: true
 
 x-app-env: &app-env
   REDIS_URL: redis://redis:6379/2
   ARQ_REDIS_URL: redis://redis:6379/2
-  ENABLE_WARC: "false"
+  ENABLE_WARC: "true"
+  S3_ENDPOINT_URL: http://s3:9000
+  S3_BUCKET: crawler-warc
+  S3_REGION: us-east-1
+  WARC_DLQ_DIR: /var/lib/crawler/warc-spool
+  WARC_DLQ_MAX_BYTES: "5368709120"
   ENABLE_CALLBACKS: "false"
   ENABLE_TRACING: "false"
   ENABLE_PREMIUM_PROXY_TIERS: "${ENABLE_PREMIUM_PROXY_TIERS:-false}"
@@ -30,8 +35,39 @@ services:
     restart: "no"
     volumes:
       - runtime-secrets:/run/crawler-secrets
+      - s3-secrets:/run/crawler-s3
+      - s3-data:/var/lib/crawler-s3
+      - warc-spool:/var/lib/crawler/warc-spool
     healthcheck:
       disable: true
+
+  s3:
+    image: rustfs/rustfs:1.0.6
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY_FILE: /run/crawler-s3/access_key
+      RUSTFS_SECRET_KEY_FILE: /run/crawler-s3/secret_key
+      RUSTFS_OBS_LOGGER_LEVEL: warn
+      RUSTFS_OBS_LOG_DIRECTORY: /data/logs
+    volumes:
+      - s3-data:/data
+      - s3-secrets:/run/crawler-s3:ro
+    ports:
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/health/ready"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 30
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-bookworm
@@ -70,10 +106,13 @@ services:
     environment: *app-env
     volumes:
       - runtime-secrets:/run/crawler-secrets
+      - s3-secrets:/run/crawler-s3:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      s3:
         condition: service_healthy
     restart: "no"
     healthcheck:
@@ -87,6 +126,7 @@ services:
     environment: *app-env
     volumes:
       - runtime-secrets:/run/crawler-secrets:ro
+      - s3-secrets:/run/crawler-s3:ro
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -106,6 +146,8 @@ services:
     environment: *app-env
     volumes:
       - runtime-secrets:/run/crawler-secrets:ro
+      - s3-secrets:/run/crawler-s3:ro
+      - warc-spool:/var/lib/crawler/warc-spool
     depends_on:
       initialize:
         condition: service_completed_successfully
@@ -123,3 +165,6 @@ volumes:
   postgres-data:
   redis-data:
   runtime-secrets:
+  s3-data:
+  s3-secrets:
+  warc-spool:
