@@ -1,117 +1,124 @@
-version: "3.9"
+# Canonical fresh-install stack. No .env or prebuilt local image is required.
+# Existing external deployments must be migrated separately, with their data preserved.
+x-app: &app
+  image: crawler-api:local
+  build:
+    context: .
+  entrypoint: ["python", "scripts/stack_runtime.py"]
+  init: true
+
+x-app-env: &app-env
+  REDIS_URL: redis://redis:6379/2
+  ARQ_REDIS_URL: redis://redis:6379/2
+  ENABLE_WARC: "false"
+  ENABLE_CALLBACKS: "false"
+  ENABLE_TRACING: "false"
+  ENABLE_PREMIUM_PROXY_TIERS: "${ENABLE_PREMIUM_PROXY_TIERS:-false}"
+  PROXY_CHECK_ENABLED: "true"
+  PROXY_SYNC_ENABLED: "${PROXY_SYNC_ENABLED:-false}"
+  WEBSHARE_API_KEY: "${WEBSHARE_API_KEY:-}"
+  REQUIRE_CAMOUFOX: "true"
+  SSRF_ENABLED: "true"
+  WORKER_MAX_JOBS: "${WORKER_MAX_JOBS:-2}"
+  BROWSER_POOL_SIZE: "1"
+  MOZ_DISABLE_CONTENT_SANDBOX: "1"
 
 services:
-  db:
-    image: postgres:16-alpine
+  secrets:
+    <<: *app
+    user: "0:0"
+    command: ["secrets"]
+    restart: "no"
+    volumes:
+      - runtime-secrets:/run/crawler-secrets
+    healthcheck:
+      disable: true
+
+  postgres:
+    image: postgres:16-bookworm
     environment:
       POSTGRES_USER: crawler
-      POSTGRES_PASSWORD: crawler
-      POSTGRES_DB: crawlerdb
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: crawler
+      POSTGRES_PASSWORD_FILE: /run/crawler-secrets/postgres-password
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
+      - runtime-secrets:/run/crawler-secrets:ro
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crawler -d crawlerdb"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U crawler -d crawler"]
+      interval: 3s
       timeout: 3s
-      retries: 10
+      retries: 30
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 3s
       timeout: 3s
-      retries: 10
+      retries: 30
+    restart: unless-stopped
 
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+  initialize:
+    <<: *app
+    command: ["initialize"]
+    environment: *app-env
     volumes:
-      - minio_data:/data
+      - runtime-secrets:/run/crawler-secrets
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      disable: true
 
   api:
-    build: .
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+asyncpg://crawler:crawler@db:5432/crawlerdb
-      REDIS_URL: redis://redis:6379/0
-      ARQ_REDIS_URL: redis://redis:6379/1
-      S3_ENDPOINT_URL: http://minio:9000
-      S3_BUCKET: crawler-warc
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-      S3_REGION: us-east-1
-      WARC_FORCE_ROTATE_EACH_WRITE: "true"
-      CALLBACK_HMAC_SECRET: dev-secret-change-in-prod
-      API_KEYS_RAW: crw_live_local_dev_key_abcdefghijkl
-      ENABLE_TRACING: "false"
+    <<: *app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
+    volumes:
+      - runtime-secrets:/run/crawler-secrets:ro
     ports:
-      - "8000:8000"
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/readyz"]
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 12
+    restart: unless-stopped
 
   worker:
-    build: .
-    ipc: host
-    env_file:
-      - .env
+    <<: *app
+    command: ["arq", "app.worker.arq_worker.WorkerSettings"]
+    environment: *app-env
+    volumes:
+      - runtime-secrets:/run/crawler-secrets:ro
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+asyncpg://crawler:crawler@db:5432/crawlerdb
-      REDIS_URL: redis://redis:6379/0
-      ARQ_REDIS_URL: redis://redis:6379/1
-      S3_ENDPOINT_URL: http://minio:9000
-      S3_BUCKET: crawler-warc
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-      S3_REGION: us-east-1
-      WARC_FORCE_ROTATE_EACH_WRITE: "true"
-      CALLBACK_HMAC_SECRET: dev-secret-change-in-prod
-      API_KEYS_RAW: crw_live_local_dev_key_abcdefghijkl
-      ENABLE_TRACING: "false"
-      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
-      MAX_CONCURRENT_BROWSERS: ${MAX_CONCURRENT_BROWSERS:-4}
-      MAX_CONCURRENT_CAMOUFOX: ${MAX_CONCURRENT_CAMOUFOX:-2}
-      # camoufox is premium tier 5/6 in LADDER — escalation never reaches it
-      # without this flag (was previously only an implicit default in config.py).
-      ENABLE_PREMIUM_PROXY_TIERS: ${ENABLE_PREMIUM_PROXY_TIERS:-false}
-      # Firefox sandbox cannot create user namespaces under Docker Desktop's
-      # VM (EPERM).  Matches the existing --no-sandbox Chromium posture.
-      MOZ_DISABLE_CONTENT_SANDBOX: "1"
-    command: arq app.worker.arq_worker.WorkerSettings
+      initialize:
+        condition: service_completed_successfully
+    shm_size: 1gb
+    stop_grace_period: 150s
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import redis; r=redis.from_url(\"redis://redis:6379/0\"); r.ping()'"]
+      test: ["CMD", "python", "scripts/stack_runtime.py", "arq", "--check", "app.worker.arq_worker.WorkerSettings"]
       interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 3
+      timeout: 15s
+      start_period: 120s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
-  postgres_data:
-  minio_data:
+  postgres-data:
+  redis-data:
+  runtime-secrets:

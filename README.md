@@ -1,132 +1,128 @@
 # Crawler API
 
-Multi-tenant web scraping platform with per-domain policies, proxy pool management, rate limiting, WARC archival, and async job processing.
+FastAPI + arq worker + PostgreSQL + Redis. Engines: HTTPX, curl_cffi,
+Playwright Chromium and Camoufox Firefox. Domain policies, proxy candidates,
+per-attempt observability and asynchronous batches are included.
 
-## Architecture
+## Fresh installation
 
-```mermaid
-graph LR
-    Client --> API
-    API --> RedisQueue[Redis Queue]
-    RedisQueue --> Worker
-    Worker --> Fetchers
-    Fetchers --> ProxyManager[Proxy Manager]
-    Worker --> WarcStorage[WARC Storage]
-    Worker --> Postgres[(PostgreSQL)]
-    API --> Redis[(Redis)]
-    API --> S3[(MinIO / S3)]
-```
-
-- **API** (FastAPI): REST endpoints for job submission, archive retrieval, usage stats, admin.
-- **Worker** (arq): Async fetch tasks with policy resolution, proxy selection, WARC archival, callbacks.
-- **PostgreSQL**: Tenants, applications, API keys, domain policies, proxy pools, usage counters, WARC index, partitioned request logs.
-- **Redis**: Rate limiter (Lua sliding-window), job queue, circuit breaker state, sticky sessions.
-- **MinIO/S3**: WARC file storage with byte-range reads for random-access retrieval.
-- **Prometheus**: 8 metrics exposed at `/metrics` for latency, block rate, queue depth, proxy health, WARC bytes, costs.
-
-## Getting Started
-
-Prerequisites: Docker, docker-compose, Python 3.12.
+Requires Git and Docker with a current Compose v2 plugin. Host Python and a
+manually created .env are not required. Internet access is required for the
+first build to install dependencies and both browsers.
 
 ```bash
-cp .env.example .env
-# Fill required fields: DATABASE_URL, REDIS_URL, API_KEYS_RAW
-docker compose up -d
-./scripts/verify.sh   # Stage 13: runs full verification
-curl http://localhost:8000/healthz
+git clone https://github.com/softK1T/crawler-api.git
+cd crawler-api
+docker compose up -d --build --wait
 ```
 
-## Verified State
+Until these changes are merged into master, clone with
+`git clone --branch interview-stable https://github.com/softK1T/crawler-api.git`.
+The plain clone command above targets the default branch, not an unmerged branch.
 
-| Field | Value |
-|---|---|
-| Tag | `v0.1.0` |
-| Date | 2026-09-13 |
-| Migration head | `0008` |
-| Tests | 285 passed, 0 failed |
-| verify.sh | OK (2026-09-13; per-attempt request_log observability, cancellation-safe persistence) |
+The default docker-compose.yml builds entirely from this repository's Dockerfile.
+There is no dependency on a developer's existing local application image, home
+folder, external override file or preinstalled browser. PostgreSQL and Redis
+are pulled from their public images.
 
-**Quick reproduction:**
-```bash
-docker compose build --no-cache
-docker compose up -d
-docker compose exec api alembic upgrade head
-docker compose exec api python3 scripts/bootstrap_dev.py  # prints API key
-./scripts/verify.sh
-```
+Startup creates a persistent random database password, waits for PostgreSQL and
+Redis, applies Alembic migrations and creates a local administrator key. API and
+worker start only after initialization succeeds. PostgreSQL, Redis and credentials
+are kept in named volumes. A normal repeat start reuses credentials and data;
+it does not mint another administrator key. The first build can take a while.
 
-For operations, see [docs/runbook.md](docs/runbook.md).
+API: http://127.0.0.1:8000
+OpenAPI UI: http://127.0.0.1:8000/docs
+Readiness: http://127.0.0.1:8000/readyz
+Only the API loopback port is published. PostgreSQL and Redis have no host ports.
+For access from another machine use an SSH tunnel or a properly secured HTTPS proxy.
 
-## Documentation
-
-| Document | Purpose |
-|---|---|
-| [`docs/PROJECT-HISTORY.md`](docs/PROJECT-HISTORY.md) | 15-stage rebuild narrative, architecture, bugs found, deferred items |
-| [`docs/AI-ASSISTED-DEVELOPMENT.md`](docs/AI-ASSISTED-DEVELOPMENT.md) | Working method, agent failure modes, transferable rules |
-| [`docs/runbook.md`](docs/runbook.md) | Operations: proxy sync cron, DLQ inspection, browser mode |
-| [`docs/decisions/`](docs/decisions/) | Architecture Decision Records (ADR-001 through ADR-015) |
-| [`docs/SESSION-SUMMARY.md`](docs/SESSION-SUMMARY.md) | Quick reference pointer |
-
-## API Examples
+## Obtain the administrator key privately
 
 ```bash
-# Submit async fetch
-curl -X POST http://localhost:8000/v1/fetch \
-  -H "X-API-Key: crw_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://example.com","mode":"static"}'
-
-# Poll result
-curl http://localhost:8000/v1/jobs/{job_id} -H "X-API-Key: crw_live_..."
-
-# Archive search
-curl "http://localhost:8000/v1/archive?url=https://example.com&from=2026-01-01" \
-  -H "X-API-Key: crw_live_..."
-
-# Usage stats
-curl http://localhost:8000/v1/usage -H "X-API-Key: crw_live_..."
-
-# Admin: create domain policy
-curl -X POST http://localhost:8000/v1/admin/domain-policies \
-  -H "X-API-Key: crw_live_..." \
-  -d '{"domain":"example.com","engine":"playwright","rate_limit_rps":2.0}'
+API_KEY=$(docker compose exec -T api python scripts/stack_runtime.py key)
+curl -fsS http://127.0.0.1:8000/v1/keys -H "X-API-Key: $API_KEY"
 ```
 
-## Metrics
+The key has fetch/archive/admin/keys scopes. Do not echo it, commit it, paste it
+into chat or use shell tracing. The initializer never prints it to container logs.
+Use POST /v1/keys to issue narrower application keys. A revoked/expired persisted
+bootstrap key causes initialization to fail rather than silently undo revocation.
+Keep credentials volume and database backups together. This is a convenient
+single-host baseline, not a public production security configuration.
 
-| Metric | Description |
-|---|---|
-| crawler_block_rate_total | Blocked fetches by domain/engine/reason |
-| crawler_request_latency_ms | Request/worker latency histogram |
-| crawler_queue_depth | Async job queue depth |
-| crawler_proxy_health_score | Current proxy health per proxy |
-| crawler_warc_bytes_total | WARC bytes written (response/revisit) |
-| crawler_dedup_ratio | Revisit ratio over total records |
-| crawler_proxy_cost_eur_total | Estimated proxy traffic cost |
-| crawler_rate_limit_hits_total | Rate limit denials by layer |
+## Fetch one page
 
-## Scaling & Failure Modes
+```bash
+curl -fsS -X POST http://127.0.0.1:8000/v1/fetch \
+  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com","mode":"static","use_proxy":false}'
+```
 
-**What breaks at 100x:**
-- Single Redis bottleneck for rate limiting + queue + circuit breaker.
-- DB writes per request (proxy health, usage counters) — batch writes needed.
-- WARC 1 GB in-memory buffer — frequent rotation and S3 uploads.
-- Browser-per-fetch (Playwright) — 100 concurrent browsers exhaust 8 GB RAM.
+Read the returned job_id with GET /v1/jobs/{job_id}. Results include status_code,
+blocked, body_b64, body_bytes and content_sha256. A completed job is not proof
+of a successful, unblocked target page; inspect the result and actual content.
+The example needs outbound Internet access. Check site terms and robots rules.
 
-**Mitigations at 10x:** Redis Cluster or separate Redis instances. Batch proxy health writes. Increase WARC rotation threshold.
+## Proxy candidates and batches
 
-**Mitigations at 100x:** PostgreSQL read replicas. Browser pool with pre-warmed instances. Distributed queue (move arq to multi-worker with Redis Cluster).
+The checker is enabled by default. No proxies or paid subscriptions are supplied.
+Create a pool with POST /admin/proxy-pools and provider=public-candidates, then
+POST /proxy/candidates/import with pool_id and a proxies array of public-IP URLs.
+GET /proxy/candidates/pools/{pool_id}/results and /stats show check progress.
+Imported proxies start inactive; country is measured, not assumed. Candidates
+remain type unknown; do not label them datacenter/residential based on location.
 
-## Legal & Ethics
+Batch endpoint: POST /batches/ with urls, mode and options. Use
+GET /batches/{batch_id}/status and /results to poll. Proxy overrides for batches
+belong in options. Candidate selection currently uses options.proxy_type=unknown;
+options.use_proxy=true requires a proxy, and options.proxy_country=PL restricts
+the country. Bind a domain policy to the intended pool to prevent other pools
+from participating. A fresh PL candidate is required for a PL-only test.
 
-- Respect `robots.txt` when `respect_robots=True` in domain policy.
-- Comply with target site Terms of Service.
-- Avoid scraping personal data without consent or legitimate interest.
-- Honor takedown and removal requests.
-- WARC archives and logs may contain sensitive third-party content; handle accordingly.
+WARC/S3, callbacks, Webshare sync and premium proxy tiers are off by default.
+Playwright and Camoufox are mandatory and checked on worker startup. Proxy
+checker and sync traffic, when enabled, performs real network requests.
+The batch admission limit is not a guarantee of per-page pacing or IP rotation.
 
-## AI Usage
+## Operations
 
-- AI-assisted code generation (Claude Code) for architecture design, ADRs, and implementation.
-- No automated in-production decision-making beyond rate limiting and proxy selection.
-- All ADRs and architectural decisions must be reviewed by a human operator before production deployment.
+```bash
+docker compose ps -a
+docker compose logs --tail=100 api worker initialize
+curl -fsS http://127.0.0.1:8000/readyz
+docker compose stop
+docker compose up -d --wait
+```
+
+For a deliberate update: back up the database and runtime-secrets volume first,
+then git pull --ff-only and docker compose up -d --build --wait. The initializer
+applies pending migrations. Do not assume every future migration is reversible.
+Docker cache normally reuses dependency/browser layers when inputs are unchanged;
+it is not a promise of zero downloads. Dependencies are not fully locked yet.
+Never use docker compose down -v on persistent data unless deletion is intended.
+It deletes the database, Redis state and credentials. Tests must use disposable
+DB/Redis, never this persistent stack.
+
+## Existing installations
+
+This default Compose file is for a fresh, self-contained installation. It does
+not automatically adopt an old deployment's volumes, database name, credentials,
+project name or port. Do not run it against the existing server stack blindly.
+In particular, the previously verified crawler-smoke deployment in an external
+folder remains a separate deployment until an explicit data migration is planned.
+compose.ubuntu.yaml and UBUNTU.md describe that older/manual setup; they are not
+required for a fresh start and must not be combined with the default file.
+
+## Verification and other documentation
+
+Fresh Compose startup is tested by .github/workflows/compose-smoke.yml on a clean
+CI runner: build, migrations, browser readiness, authentication, candidate-pool
+creation and repeated initialization without key rotation. Check the actual
+workflow result for a commit; adding a workflow is not proof it passed. This
+smoke test does not validate OLX, supplied proxies, all fetch engines end-to-end,
+WARC, load or a production security boundary.
+
+Architecture and operations: docs/runbook.md, docs/decisions/,
+docs/PROJECT-HISTORY.md and docs/AI-ASSISTED-DEVELOPMENT.md. Historical test counts
+in older documents are not current acceptance results for a new commit.
