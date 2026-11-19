@@ -1,32 +1,40 @@
-name: Fresh Compose startup
+# Internal reusable stage. CI is the only automatic workflow entrypoint.
+name: Docker build and smoke (reusable)
 
 on:
-  push:
-    branches: [master, interview-stable]
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
-  fresh-start:
+  build-and-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the application image once
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
-          python-version: "3.12"
-      - name: Offline runtime tests
-        run: python -m unittest discover -s tests -p test_stack_runtime.py -v
-      - name: Build and start from repository only
-        run: docker compose -f docker-compose.yml up -d --build --wait --wait-timeout 300
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: crawler-api:local
+          cache-from: type=gha,scope=crawler-linux-amd64,timeout=3m
+          cache-to: type=gha,scope=crawler-linux-amd64,mode=max,timeout=3m,ignore-error=true
+      - name: Verify both browser runtimes using the same image
+        run: docker run --rm --shm-size=1g --memory=3g --env DATABASE_URL=postgresql+asyncpg://test:test@localhost/test crawler-api:local python scripts/browser_smoke.py
+      - name: Start a fresh stack without rebuilding the application
+        run: docker compose -p ci -f docker-compose.yml up -d --no-build --pull missing --wait --wait-timeout 300
       - name: Verify readiness, credentials, migration and candidate pool API
         shell: bash
         run: |
           set -euo pipefail
-          dc() { docker compose -f docker-compose.yml "$@"; }
+          dc() { docker compose -p ci -f docker-compose.yml "$@"; }
           KEY=$(dc exec -T api python scripts/stack_runtime.py key)
           echo "::add-mask::$KEY"
           curl -fsS http://127.0.0.1:8000/readyz | jq -e '.status == "ready" and .checks.playwright == "ok" and .checks.camoufox == "ok"'
@@ -34,7 +42,7 @@ jobs:
           curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8000/v1/keys | jq -e 'length == 1'
           curl -fsS -X POST http://127.0.0.1:8000/admin/proxy-pools -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"name":"ci-candidates","provider":"public-candidates"}' | jq -e '.provider == "public-candidates"'
           dc exec -T api python scripts/stack_runtime.py alembic current | grep '0009'
-          dc run --rm --no-deps -T --interactive=false initialize </dev/null
+          dc run --rm --no-deps --pull never -T --interactive=false initialize </dev/null
           KEY_AGAIN=$(dc exec -T api python scripts/stack_runtime.py key)
           echo "::add-mask::$KEY_AGAIN"
           test "$KEY" = "$KEY_AGAIN"
@@ -42,8 +50,8 @@ jobs:
       - name: Diagnostics on failure
         if: failure()
         run: |
-          docker compose -f docker-compose.yml ps -a
-          docker compose -f docker-compose.yml logs --no-color --tail=100
+          docker compose -p ci -f docker-compose.yml ps -a
+          docker compose -p ci -f docker-compose.yml logs --no-color --tail=100
       - name: Remove disposable CI stack
         if: always()
-        run: docker compose -f docker-compose.yml down -v --remove-orphans
+        run: docker compose -p ci -f docker-compose.yml down -v --remove-orphans

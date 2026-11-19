@@ -2,40 +2,25 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master", "dev", "interview-stable", "stage-*"]
+    branches: [main, master, dev, interview-stable, "stage-*"]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lint:
+  checks:
+    name: Code checks and tests
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install ruff
-      - run: ruff check .
-      - run: ruff format --check .
-
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install -r requirements-dev.txt
-      - run: mypy app/ tests/
-
-  test:
-    needs: [lint, typecheck]
-    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      run_checks: ${{ steps.scope.outputs.run_checks }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -53,31 +38,80 @@ jobs:
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Avoid duplicate runs and skip documentation-only changes
+        id: scope
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execFileSync } = require('node:child_process');
+            if (context.eventName === 'push') {
+              const branch = context.ref.replace('refs/heads/', '');
+              try {
+                const { data } = await github.rest.pulls.list({
+                  ...context.repo,
+                  state: 'open',
+                  head: `${context.repo.owner}:${branch}`,
+                  per_page: 1
+                });
+                if (data.length) {
+                  core.setOutput('run_checks', 'false');
+                  core.notice('Open PR owns validation; skip duplicate push run.');
+                  return;
+                }
+              } catch (error) {
+                core.warning('PR lookup failed; running checks instead of skipping validation.');
+              }
+            }
+            if (context.eventName === 'workflow_dispatch') {
+              core.setOutput('run_checks', 'true');
+              return;
+            }
+            const base = context.payload.pull_request?.base?.sha || context.payload.before;
+            const args = base && !/^0+$/.test(base)
+              ? ['diff', '--name-only', base, 'HEAD']
+              : ['ls-files'];
+            const paths = execFileSync('git', args, { encoding: 'utf8' })
+              .trim().split('\n').filter(Boolean);
+            const onlyDocs = paths.every(path =>
+              path.startsWith('docs/') || /\.md$/i.test(path) ||
+              /^(LICENSE|LICENSE\.txt|COPYING)$/.test(path));
+            core.setOutput('run_checks', onlyDocs ? 'false' : 'true');
+            if (onlyDocs) core.notice('Documentation-only change: no Python setup or Docker build.');
       - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run_checks == 'true'
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements-dev.txt
-      - run: pytest -m "not slow" --maxfail=1 -q
+          cache-dependency-path: |
+            requirements-dev.txt
+            pyproject.toml
+      - name: Install linter
+        if: steps.scope.outputs.run_checks == 'true'
+        run: python -m pip install ruff
+      - name: Lint and formatting before dependency installation
+        if: steps.scope.outputs.run_checks == 'true'
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Install test dependencies once
+        if: steps.scope.outputs.run_checks == 'true'
+        run: python -m pip install -r requirements-dev.txt
+      - name: Type checks
+        if: steps.scope.outputs.run_checks == 'true'
+        run: mypy app/ tests/
+      - name: Tests
+        if: steps.scope.outputs.run_checks == 'true'
+        run: pytest -m "not slow" --maxfail=1 -q
         env:
           DATABASE_URL: postgresql+asyncpg://crawler:crawler@localhost:5432/crawlerdb
           REDIS_URL: redis://localhost:6379/0
           TEST_DATABASE_URL: postgresql+asyncpg://crawler:crawler@localhost:5432/crawlerdb
           TEST_REDIS_URL: redis://localhost:6379/0
 
-  build:
-    needs: [test]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          load: true
-          tags: crawler-api:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Verify both browser runtimes in the built image
-        run: docker run --rm --shm-size=1g --memory=3g --env DATABASE_URL=postgresql+asyncpg://test:test@localhost/test crawler-api:ci python scripts/browser_smoke.py
+  docker:
+    name: Docker build and startup
+    needs: checks
+    if: needs.checks.outputs.run_checks == 'true'
+    uses: ./.github/workflows/compose-smoke.yml
