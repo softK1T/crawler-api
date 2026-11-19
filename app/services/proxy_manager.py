@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 from sqlalchemy import func, select
 
 from app.core.logging_config import get_logger
+from app.services.proxy_candidates import candidate_matches
+from app.services.proxy_geo_policy import country_code
 
 logger = logging.getLogger(__name__)
 _slog = get_logger("proxy")
@@ -62,7 +64,7 @@ class ProxyManager:
     # ── Circuit breaker (Redis) ───────────────────────────────────────────────
 
     async def _increment_circuit_breaker(self, domain: str) -> bool:
-        """Increment the failure counter for *domain*.  Trip if threshold reached."""
+        """Increment the failure counter for *domain*. Trip if threshold reached."""
         try:
             key = f"cb:domain:{domain}"
             count = await self._redis.incr(key)
@@ -105,7 +107,7 @@ class ProxyManager:
         """Return the sticky proxy_id for (domain, sticky_key), or None."""
         try:
             raw = await self._redis.get(f"sticky:{domain}:{sticky_key}")
-            return UUID(raw) if raw else None
+            return UUID(raw.decode() if isinstance(raw, bytes) else raw) if raw else None
         except Exception:
             return None
 
@@ -139,51 +141,40 @@ class ProxyManager:
     ) -> Proxy | None:
         """Select a proxy by weighted health score.
 
-        1. Check circuit breaker — return None if open for *domain*.
-        2. Try sticky session — return pinned proxy if still healthy.
-        3. Weighted random selection over all eligible proxies.
-        4. Pin sticky session if *sticky_key* provided.
-
-        *tenant_id* is an alias for *pool_id* (maps to ProxyPool).
-        *exclude_ids* removes proxies already tried (rotation).
-        *country* filters to proxies matching an ISO 3166-1 alpha-2 code.
-        *city* filters to proxies matching a city name exactly.
-        *proxy_type* filters to 'residential' or 'datacenter' proxies.
+        Sticky and ordinary picks share pool, geography, type, cooldown and
+        managed-candidate freshness checks. Country filters are never relaxed.
+        *tenant_id* is the existing alias for *pool_id*.
+        *exclude_ids* removes proxies already tried.
         """
         from app.models.proxy import Proxy
-        from app.services.proxy_health import is_on_cooldown
 
+        country = country_code(country) if country is not None else None
         _excluded = exclude_ids or set()
         effective_pool = tenant_id or pool_id
 
-        # 1. Circuit breaker.
         if await self._is_circuit_open(domain):
             logger.info("Circuit breaker open for domain=%s — no proxy assigned", domain)
             return None
 
-        # 2. Sticky session.
         if sticky_key is not None:
             sticky_id = await self._get_sticky(domain, sticky_key)
             if sticky_id is not None and sticky_id not in _excluded:
                 async with self._db_factory() as db:
                     sticky_proxy = await db.get(Proxy, sticky_id)
-                    if (
-                        sticky_proxy is not None
-                        and sticky_proxy.is_active
-                        and not is_on_cooldown(sticky_proxy)
+                    if sticky_proxy is not None and candidate_matches(
+                        sticky_proxy, pool_id=effective_pool, country=country,
+                        city=city, proxy_type=proxy_type,
                     ):
                         return sticky_proxy
-                # Dead proxy or on cooldown — clear sticky.
                 await self._delete_sticky(domain, sticky_key)
 
-        # 3. Load eligible proxies.
         async with self._db_factory() as db:
             stmt = select(Proxy).order_by(Proxy.health_score.desc(), func.random())
             if effective_pool is not None:
                 stmt = stmt.where(Proxy.pool_id == effective_pool)
             stmt = stmt.where(Proxy.is_active.is_(True))
             if country is not None:
-                stmt = stmt.where(Proxy.country == country.upper()[:2])
+                stmt = stmt.where(Proxy.country == country)
             if city is not None:
                 stmt = stmt.where(Proxy.city == city)
             if proxy_type is not None:
@@ -191,28 +182,23 @@ class ProxyManager:
             result = await db.execute(stmt)
             all_proxies = result.scalars().all()
 
-            # Filter out proxies on cooldown and already excluded.
-            eligible = [p for p in all_proxies if not is_on_cooldown(p) and p.id not in _excluded]
+            eligible = [
+                p for p in all_proxies
+                if p.id not in _excluded and candidate_matches(
+                    p, pool_id=effective_pool, country=country, city=city, proxy_type=proxy_type,
+                )
+            ]
             if not eligible:
                 logger.warning(
                     "No eligible proxies for pool=%s domain=%s country=%s city=%s excluded=%d",
-                    effective_pool,
-                    domain,
-                    country,
-                    city,
-                    len(_excluded),
+                    effective_pool, domain, country, city, len(_excluded),
                 )
                 return None
 
-            # 4. Weighted random selection using health_score.
-            # random.choices() is NOT cryptographically random — intentional.
             weights = [max(_WEIGHT_FLOOR, float(p.health_score)) for p in eligible]
             selected = random.choices(eligible, weights=weights, k=1)[0]
-
-            # 5. Pin sticky session.
             if sticky_key is not None:
                 await self._set_sticky(domain, sticky_key, selected.id, proxy_sticky_ttl_s)
-
             return selected
 
     # ── Reporting ──────────────────────────────────────────────────────────────
