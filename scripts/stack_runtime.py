@@ -93,7 +93,7 @@ async def bootstrap(existing: str | None) -> str:
 
 def initialize() -> None:
     configure()
-    subprocess.run(["alembic", "upgrade", "head"], check=True)  # noqa: S603, S607
+    subprocess.run(["alembic", "upgrade", "head"], check=True)  # noqa: S607
     destination = SECRETS / "admin.key"
     existing = destination.read_text().strip() if destination.exists() else None
     raw_key = asyncio.run(bootstrap(existing))
@@ -118,7 +118,7 @@ def main() -> None:
         print((SECRETS / "admin.key").read_text().strip())
     else:
         configure()
-        os.execvp(action, sys.argv[1:])  # noqa: S606, S607
+        os.execvp(action, sys.argv[1:])  # noqa: S606
 
 
 if __name__ == "__main__":
