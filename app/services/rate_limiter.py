@@ -140,17 +140,20 @@ class RateLimiter:
 
     # ── Per-layer helpers ────────────────────────────────────────────────────
 
-    async def check_key(self, api_key_prefix: str, limit: int) -> RateLimitResult:
+    async def check_key(self, api_key_prefix: str, limit: int, cost: int = 1) -> RateLimitResult:
         return await self._check(
-            key=f"rl:key:{api_key_prefix}", window_s=60, limit=limit, layer="key"
+            key=f"rl:key:{api_key_prefix}", window_s=60, limit=limit, layer="key", cost=cost
         )
 
-    async def check_application(self, application_id: UUID, monthly_quota: int) -> RateLimitResult:
+    async def check_application(
+        self, application_id: UUID, monthly_quota: int, cost: int = 1
+    ) -> RateLimitResult:
         return await self._check(
             key=f"rl:app:{application_id}",
             window_s=30 * 24 * 3600,  # 30-day rolling window
             limit=monthly_quota,
             layer="app",
+            cost=cost,
         )
 
     async def check_domain(self, domain: str, rps: float) -> RateLimitResult:

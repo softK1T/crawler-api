@@ -196,6 +196,9 @@ async def rotate_api_key_endpoint(
     if SCOPE_ADMIN not in api_key.scopes and api_key.application_id != target.application_id:
         raise NotFoundError(detail="API key not found")
 
+    if SCOPE_ADMIN not in api_key.scopes and not set(target.scopes).issubset(api_key.scopes):
+        raise AuthorizationError(detail="Cannot rotate a key with broader scopes than your own")
+
     successor, raw_key = await rotate_api_key(
         db,
         key_id=key_id,

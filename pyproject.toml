@@ -9,7 +9,7 @@ include = ["app*", "scripts*", "alembic*"]
 name = "crawler-api"
 version = "0.1.0"
 description = "Crawler-as-a-service platform for internal scraping projects"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.104.1",
     "uvicorn[standard]>=0.24.0",
@@ -38,14 +38,14 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.47b0",
     "opentelemetry-instrumentation-httpx>=0.47b0",
     "greenlet>=3.0.0",
-    "brotli>=1.1.0",
+    "brotli>=1.2.0",
     "zstandard>=0.22.0",
 ]
 
 [project.optional-dependencies]
 browser = [
-    "playwright==1.49.0",
-    "camoufox[geoip]>=0.4.0",
+    "playwright==1.61.0",
+    "camoufox[geoip]==0.4.11",
 ]
 test = [
     "ruff>=0.6.0",
@@ -61,7 +61,7 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 exclude = [".venv", "alembic/versions", ".idea", ".claude"]
 
@@ -103,7 +103,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 # Incremental hardening: full `strict` would fail on the current untyped code.
 # Each roadmap step tightens this section further.
 check_untyped_defs = true

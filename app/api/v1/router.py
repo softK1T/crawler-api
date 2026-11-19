@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     proxy,
     usage,
 )
+from app.core.config import settings
 
 api_router = APIRouter()
 api_router.include_router(jobs.router)
@@ -17,6 +18,7 @@ api_router.include_router(batches.router)
 api_router.include_router(projects.router)
 api_router.include_router(proxy.router)
 api_router.include_router(auth_keys.router)
-api_router.include_router(archive.router)
+if settings.enable_warc:
+    api_router.include_router(archive.router)
 api_router.include_router(usage.router)
 api_router.include_router(admin.router)

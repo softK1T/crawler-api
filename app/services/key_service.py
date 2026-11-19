@@ -98,8 +98,11 @@ async def rotate_api_key(
     if old_key is None:
         raise NotFoundError(detail="API key not found")
 
-    if old_key.revoked_at is not None:
-        raise ConflictError(detail="Cannot rotate a revoked key")
+    if old_key.revoked_at is not None or not old_key.is_active:
+        raise ConflictError(detail="Cannot rotate an inactive or revoked key")
+    now = datetime.now(UTC)
+    if old_key.expires_at is not None and old_key.expires_at <= now:
+        raise ConflictError(detail="Cannot rotate an expired key")
 
     # Mint the successor with identical application, scopes, and mode.
     raw_key, hashed_key = generate_api_key(mode=old_key.mode)
@@ -120,13 +123,15 @@ async def rotate_api_key(
         prefix=prefix,
         hashed_key=hashed_key,
         scopes=list(old_key.scopes),
+        expires_at=old_key.expires_at,
         mode=old_key.mode,
         issuer_key_id=issuer_key_id,
     )
     db.add(successor)
 
     # Set the old key's expiry — single transaction with successor insert.
-    old_key.expires_at = datetime.now(UTC) + timedelta(hours=overlap_hours)
+    overlap_end = datetime.now(UTC) + timedelta(hours=overlap_hours)
+    old_key.expires_at = min(old_key.expires_at, overlap_end) if old_key.expires_at else overlap_end
 
     await db.commit()
     await db.refresh(successor)

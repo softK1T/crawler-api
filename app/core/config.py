@@ -1,4 +1,4 @@
-from pydantic import PostgresDsn
+from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,7 +39,14 @@ class Settings(BaseSettings):
     request_delay_secs: float = 1.0
     use_http2: bool = True
 
-    max_batch_size: int = 1000
+    # Interview baseline: browsers stay available; optional integrations are opt-in.
+    enable_warc: bool = False
+    enable_callbacks: bool = False
+    worker_max_jobs: int = Field(default=6, ge=1, le=100)
+    worker_job_timeout_s: int = Field(default=120, ge=10)
+    require_camoufox: bool = True
+
+    max_batch_size: int = Field(default=20, ge=1, le=1000)
     batch_timeout_secs: int = 900
 
     # Key rotation overlap window in hours (ADR-016 D4).

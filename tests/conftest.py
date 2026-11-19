@@ -26,6 +26,10 @@ def mock_url_guard():
 @pytest.fixture(scope="session")
 def _postgres_dsn() -> Iterator[str]:
     """Session-scoped Postgres testcontainer."""
+    external = os.environ.get("TEST_DATABASE_URL")
+    if external:
+        yield external
+        return
     from testcontainers.postgres import PostgresContainer
 
     with PostgresContainer("postgres:16-alpine") as pg:
@@ -36,6 +40,10 @@ def _postgres_dsn() -> Iterator[str]:
 @pytest.fixture(scope="session")
 def _redis_url() -> Iterator[str]:
     """Session-scoped Redis testcontainer."""
+    external = os.environ.get("TEST_REDIS_URL")
+    if external:
+        yield external
+        return
     from testcontainers.redis import RedisContainer
 
     with RedisContainer("redis:7-alpine") as rc:
@@ -137,6 +145,7 @@ async def app(_postgres_dsn: str, _redis_url: str) -> AsyncGenerator:
     settings.redis_url = _redis_url
     settings.api_keys_raw = "crw_live_testkey1234567890abcdefghij"
     settings.callback_hmac_secret = "test-secret"
+    settings.enable_callbacks = True
     settings.enable_metrics = False
     settings.enable_tracing = False
     settings.s3_access_key = ""

@@ -66,7 +66,14 @@ class HttpxFetcher:
                 # Stream to capture raw transport bytes before httpx
                 # applies content decoding (ADR-018).
                 async with client.stream("GET", current_url, headers=headers or {}) as response:
-                    raw_body = b"".join([chunk async for chunk in response.aiter_raw()])
+                    from app.core.url_guard import MAX_BODY_BYTES, BodyTooLarge
+
+                    chunks = bytearray()
+                    async for chunk in response.aiter_raw():
+                        if len(chunks) + len(chunk) > MAX_BODY_BYTES:
+                            raise BodyTooLarge("HTTP response exceeds body limit")
+                        chunks.extend(chunk)
+                    raw_body = bytes(chunks)
                     raw_headers = dict(response.headers)
 
                     from app.services.content_decoder import decode_body, normalize_headers
@@ -74,6 +81,8 @@ class HttpxFetcher:
                     content_encoding = raw_headers.get("content-encoding")
                     try:
                         decoded_body, _original_encoding = decode_body(raw_body, content_encoding)
+                    except BodyTooLarge:
+                        raise
                     except Exception:
                         decoded_body = raw_body
 

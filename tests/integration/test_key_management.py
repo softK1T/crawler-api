@@ -338,7 +338,7 @@ async def test_rotate_revoked_key_returns_409(db_session):
     await db_session.commit()
     await db_session.refresh(key)
 
-    with pytest.raises(ConflictError, match="Cannot rotate a revoked key"):
+    with pytest.raises(ConflictError, match="Cannot rotate an inactive or revoked key"):
         await rotate_api_key(db_session, key_id=key.id, issuer_key_id=uuid4())
 
 

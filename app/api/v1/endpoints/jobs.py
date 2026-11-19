@@ -37,6 +37,9 @@ async def create_fetch(
     """Submit a fetch job via arq. Supports Idempotency-Key and sync mode."""
     started = time.perf_counter()
 
+    if body.callback_url and not settings.enable_callbacks:
+        raise HTTPException(status_code=422, detail="Callbacks are disabled")
+
     # Resolve trace_id from correlation ID or OTel span.
     trace_id = req.headers.get("X-Correlation-ID")
     try:
@@ -202,4 +205,8 @@ async def get_job(
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
     job_svc = JobService(redis_client)
-    return await job_svc.get_result(job_id)
+    try:
+        await job_svc.assert_owner(job_id, _api_key.application_id)
+        return await job_svc.get_result(job_id)
+    finally:
+        await redis_client.aclose()

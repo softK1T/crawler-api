@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import UUID
 
 from app.core.config import settings
+from app.core.url_guard import MAX_BODY_BYTES
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
 
@@ -106,7 +107,25 @@ class CurlFetcher:
                 if proxy_url:
                     kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
 
-                resp = cffi_requests.get(current_url, **kwargs)
+                body_buffer = bytearray()
+                too_large = False
+
+                def receive(chunk: bytes, body_buffer: bytearray = body_buffer) -> int:
+                    nonlocal too_large
+                    if len(body_buffer) + len(chunk) > MAX_BODY_BYTES:
+                        too_large = True
+                        return 0
+                    body_buffer.extend(chunk)
+                    return len(chunk)
+
+                try:
+                    resp = cffi_requests.get(current_url, content_callback=receive, **kwargs)
+                except Exception:
+                    if too_large:
+                        raise FetchError("Response exceeds body limit") from None
+                    raise
+                if too_large:
+                    raise FetchError("Response exceeds body limit")
 
                 if resp.status_code in (301, 302, 303, 307, 308) and follow_redirects:
                     location = resp.headers.get("location")
@@ -121,7 +140,7 @@ class CurlFetcher:
                     current_url,
                     resp.status_code,
                     dict(list(resp.headers.items())[:50]),
-                    resp.content,
+                    bytes(body_buffer),
                     200 <= resp.status_code < 300,
                 )
 

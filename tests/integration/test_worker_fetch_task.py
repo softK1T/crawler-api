@@ -34,8 +34,9 @@ def _make_ctx(redis_client, db_factory=None):
         "settings": SimpleNamespace(
             job_result_ttl_s=60,
             ssrf_enabled=False,
-            warc_enabled=False,
-            archive_enabled=False,
+            enable_warc=False,
+            enable_callbacks=False,
+            callback_hmac_secret="",
             callback_max_retries=1,
         ),
         "browser_pool": None,
@@ -45,6 +46,7 @@ def _make_ctx(redis_client, db_factory=None):
 def _real_ctx(redis_client, db_session_factory, *, warc_storage=None, proxy_manager=None):
     ctx = _make_ctx(redis_client, db_factory=db_session_factory)
     ctx["warc_storage"] = warc_storage
+    ctx["settings"].enable_warc = warc_storage is not None
     ctx["proxy_manager"] = proxy_manager
     return ctx
 

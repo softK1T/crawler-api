@@ -178,8 +178,12 @@ async def _run_fetch_task(
 
             raw_for_decode = result.raw_body or result.body
             content_encoding = (result.raw_headers or result.headers).get("content-encoding")
+            from app.core.url_guard import BodyTooLarge
+
             try:
                 api_body, original_encoding = decode_body(raw_for_decode, content_encoding)
+            except BodyTooLarge:
+                raise
             except Exception:
                 api_body = result.body
                 original_encoding = content_encoding
@@ -224,16 +228,24 @@ async def _run_fetch_task(
             # 8. Policy learner — write escalation outcome back to DB.
             from app.services.policy_learner import record_outcome
 
-            await record_outcome(
-                result=result,
-                policy=policy,
-                db=db,
-                engine_used=result.engine,
-                tier_used=getattr(result, "_tier_used", 0),
-            )
+            try:
+                await record_outcome(
+                    result=result,
+                    policy=policy,
+                    db=db,
+                    engine_used=result.engine,
+                    tier_used=getattr(result, "_tier_used", 0),
+                )
+            except Exception:
+                await db.rollback()
+                logger.warning("Policy learning failed after completed fetch", exc_info=True)
 
             # 9. Usage counter upsert.
-            await _upsert_usage(db, application_id, len(result.body))
+            try:
+                await _upsert_usage(db, application_id, len(result.body))
+            except Exception:
+                await db.rollback()
+                logger.warning("Usage accounting failed after completed fetch", exc_info=True)
 
             # 8b. Cost metric — only for proxied fetches.
             if result.proxy_id is not None:
@@ -247,7 +259,7 @@ async def _run_fetch_task(
             _record_latency("completed", started)
 
             # 10. Callback.
-            if callback_url and settings.callback_hmac_secret:
+            if settings.enable_callbacks and callback_url and settings.callback_hmac_secret:
                 _schedule_callback(
                     job_id=job_id,
                     status="completed",
@@ -260,7 +272,7 @@ async def _run_fetch_task(
             await _set_error(redis_client, job_id, "Worker shutdown", settings.job_result_ttl_s)
             await _upsert_usage(db, application_id, 0)
             _record_latency("failed", started)
-            if callback_url and settings.callback_hmac_secret:
+            if settings.enable_callbacks and callback_url and settings.callback_hmac_secret:
                 _schedule_callback(
                     job_id=job_id,
                     status="failed",
@@ -275,7 +287,7 @@ async def _run_fetch_task(
             await _set_error(redis_client, job_id, str(exc), settings.job_result_ttl_s)
             await _upsert_usage(db, application_id, 0)
             _record_latency("failed", started)
-            if callback_url and settings.callback_hmac_secret:
+            if settings.enable_callbacks and callback_url and settings.callback_hmac_secret:
                 _schedule_callback(
                     job_id=job_id,
                     status="failed",
@@ -293,13 +305,14 @@ async def _set_status(redis_client, job_id: str, status: str, ttl: int, result_d
     # Preserve created_at from the original status payload.
     raw = await redis_client.get(f"job:{job_id}:status")
     created_at = now
+    existing = {}
     if raw:
         try:
             existing = json.loads(raw)
             created_at = existing.get("created_at", now)
         except json.JSONDecodeError:
             pass
-    payload = {"status": status, "updated_at": now, "created_at": created_at}
+    payload = {**existing, "status": status, "updated_at": now, "created_at": created_at}
     if result_data is not None:
         payload["result"] = result_data
     await redis_client.set(f"job:{job_id}:status", json.dumps(payload), ex=ttl)
@@ -309,13 +322,16 @@ async def _set_error(redis_client, job_id: str, error: str, ttl: int) -> None:
     now = datetime.now(UTC).isoformat()
     raw = await redis_client.get(f"job:{job_id}:status")
     created_at = now
+    existing = {}
     if raw:
         try:
             existing = json.loads(raw)
             created_at = existing.get("created_at", now)
         except json.JSONDecodeError:
             pass
-    payload = {"status": "failed", "updated_at": now, "created_at": created_at}
+    if existing.get("status") == "completed":
+        return
+    payload = {**existing, "status": "failed", "updated_at": now, "created_at": created_at}
     await redis_client.set(f"job:{job_id}:status", json.dumps(payload), ex=ttl)
     await redis_client.set(f"job:{job_id}:error", error, ex=ttl)
 
@@ -385,6 +401,7 @@ async def _upsert_usage(db, application_id: str, body_bytes: int) -> None:
         )
         await db.commit()
     except Exception:
+        await db.rollback()
         logger.warning("Usage counter upsert failed for app=%s", application_id, exc_info=True)
 
 
@@ -534,35 +551,52 @@ async def startup(ctx: dict) -> None:
         circuit_breaker_threshold=settings.circuit_breaker_threshold,
         circuit_breaker_timeout_s=settings.circuit_breaker_timeout_s,
     )
-    ctx["warc_storage"] = await create_warc_storage(settings)
+    ctx["warc_storage"] = await create_warc_storage(settings) if settings.enable_warc else None
 
     # Verify Chromium can actually launch (not just exist on disk).
     # Fail startup if missing — browser-mode jobs must not silently degrade.
     try:
-        version = await verify_chromium()
-        await browser_pool.start()
+        async with asyncio.timeout(30):
+            version = await verify_chromium()
+            await browser_pool.start()
         ctx["browser_pool"] = browser_pool
         ctx["browser_ready"] = True
         logger.info("chromium_selfcheck_passed version=%s", version)
-    except ChromiumMissingError:
+    except (ChromiumMissingError, TimeoutError):
+        await browser_pool.stop()
         ctx["browser_ready"] = False
         logger.error("browser_selfcheck_failed error=PLAYWRIGHT_CHROMIUM_MISSING")
+        await ctx["redis"].aclose()
         raise
 
-    # Verify Camoufox can launch too.  Unlike Chromium this is NOT fatal:
-    # Firefox is only needed at ladder tiers 5-6, so a failure marks
-    # camoufox_ready=False and CamoufoxFetcher fails fast per-request.
+    # The interview baseline requires both engines. Optional deployments may
+    # set REQUIRE_CAMOUFOX=false and expose degraded capabilities explicitly.
     try:
         from app.worker.camoufox_check import CamoufoxMissingError, verify_camoufox
 
-        camoufox_version = await verify_camoufox()
+        async with asyncio.timeout(60):
+            camoufox_version = await verify_camoufox()
         ctx["camoufox_ready"] = True
         logger.info("camoufox_selfcheck_passed version=%s", camoufox_version)
-    except CamoufoxMissingError as exc:
+    except (CamoufoxMissingError, TimeoutError) as exc:
         ctx["camoufox_ready"] = False
         logger.error("camoufox_selfcheck_failed error=%s", exc)
+        if settings.require_camoufox:
+            await browser_pool.stop()
+            await ctx["redis"].aclose()
+            raise
 
+    await publish_worker_health(ctx)
     logger.info("arq worker startup complete")
+
+
+async def publish_worker_health(ctx: dict) -> None:
+    """Publish short-lived engine capability heartbeat after successful startup."""
+    payload = {
+        "playwright": bool(ctx.get("browser_ready")),
+        "camoufox": bool(ctx.get("camoufox_ready")),
+    }
+    await ctx["redis"].set("crawler:worker:capabilities", json.dumps(payload), ex=45)
 
 
 async def shutdown(ctx: dict) -> None:

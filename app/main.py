@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -24,10 +23,14 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     setup_tracing(settings)
 
-    # Initialize services in background — don't block server startup.
-    _init_task = asyncio.create_task(_init_services(app))  # noqa: RUF006 — kept for cancellation
+    await _init_services(app)
 
-    yield
+    try:
+        yield
+    finally:
+        redis_client = getattr(app.state, "redis", None)
+        if redis_client is not None:
+            await redis_client.aclose()
 
     # Graceful shutdown.
     try:
@@ -39,7 +42,7 @@ async def lifespan(app: FastAPI):
 
 
 async def _init_services(app: FastAPI) -> None:
-    """Initialize Redis, proxy manager, WARC storage in background."""
+    """Initialize services before accepting requests; archive remains opt-in."""
     try:
         import redis.asyncio as aioredis
 
@@ -59,6 +62,11 @@ async def _init_services(app: FastAPI) -> None:
 
         from app.services.warc.storage import create_warc_storage
 
+        if not settings.enable_warc:
+            app.state.warc_storage = None
+            logger.info("Core services initialized; WARC disabled")
+            return
+
         warc_storage = await create_warc_storage(settings)
         app.state.warc_storage = warc_storage
         app.state.s3_client = warc_storage._s3
@@ -68,7 +76,11 @@ async def _init_services(app: FastAPI) -> None:
         app.state.archive_reader = ArchiveReader(app.state.s3_client, settings.s3_bucket)
         logger.info("All services initialized")
     except Exception:
-        logger.warning("Service initialization incomplete", exc_info=True)
+        logger.exception("Service initialization failed")
+        redis_client = getattr(app.state, "redis", None)
+        if redis_client is not None:
+            await redis_client.aclose()
+        raise
 
 
 app = FastAPI(

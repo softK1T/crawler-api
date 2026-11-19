@@ -120,7 +120,7 @@ class CamoufoxFetcher:
             raise FetchError("camoufox is not installed — install crawler-api[browser]") from exc
 
         sem = _get_semaphore()
-        async with sem:
+        async with asyncio.timeout(timeout_s), sem:
             return await self._do_fetch(
                 camoufox=camoufox,
                 url=url,
@@ -155,25 +155,14 @@ class CamoufoxFetcher:
         }
         if proxy_url:
             kwargs["proxy"] = _split_proxy_credentials(proxy_url)
-        if proxy_country:
-            # Pass the country so camoufox[geoip] can pick matching locale/TZ.
-            kwargs["country"] = proxy_country.upper()
 
         try:
             async with _new_browser(camoufox, **kwargs) as browser:
-                page = await browser.new_page()
+                context = await browser.new_context(service_workers="block", accept_downloads=False)
+                from app.services.fetchers.browser_guard import install_browser_guard
 
-                async def _check_response(response: object) -> None:
-                    from app.core.url_guard import URLGuardError, validate_url_async
-
-                    resp_url = getattr(response, "url", "")
-                    if resp_url:
-                        try:
-                            await validate_url_async(resp_url)
-                        except URLGuardError:
-                            logger.warning("[camoufox] SSRF blocked navigation to %s", resp_url)
-
-                page.on("response", _check_response)
+                await install_browser_guard(context)
+                page = await context.new_page()
 
                 if headers:
                     # Let camoufox humanize provide the UA and language — a
@@ -191,12 +180,16 @@ class CamoufoxFetcher:
                 response = await page.goto(
                     url,
                     timeout=timeout_s * 1000,
-                    wait_until="networkidle",
+                    wait_until="domcontentloaded",
                 )
+                await page.wait_for_timeout(500)
                 final_url: str = page.url
                 status_code: int = getattr(response, "status", 200) if response else 200
 
                 body = (await page.content()).encode("utf-8")
+                from app.services.fetchers.browser_guard import check_browser_body
+
+                check_browser_body(body)
 
                 # Capture response headers for WARC and block detection.
                 raw_headers: dict[str, str] = {}
