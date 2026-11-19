@@ -1,58 +1,32 @@
-# Security and supported boundaries
+# Security boundaries
 
-[Documentation](README.md) · [API](API.md) · [Runbook](runbook.md)
+[Documentation](README.md) · [API](API.md) · [Deployment](runbook.md)
 
-## Deployment boundary
+## Access and isolation
 
-Default loopback single-host operation is not a completed public-production audit.
-Treat Docker/host access, administrator keys and backup archives as privileged.
-Before public use establish TLS, access controls, restricted CORS, secret rotation,
-recovery, CPU/memory budgets and network-level egress policy. Canonical Compose
-has no explicit memory/CPU cap; response-size checks do not bound browser RSS.
+| Boundary | Current behavior | Operator action |
+|---|---|---|
+| API keys | Database-backed, Argon2-verified, explicitly scoped | Issue least-privilege client keys; revoke leaked credentials |
+| Jobs and batches | Reads check application ownership | Keep application identities separate |
+| Policies and proxy pools | Global configuration | Restrict administration to trusted operators |
+| Archives | Queries lack application filtering | Grant `archive` only to trusted clients; fix ownership before untrusted multi-tenancy |
+| Local S3 | Dedicated server, shared administrative credential pair | Protect its secret volume; introduce scoped IAM before sharing access |
+| Diagnostics/docs | No API-key dependency | Restrict health, metrics, and documentation when exposing the API |
 
-Keys are DB-backed and Argon2-verified. Scopes are explicit; job/batch reads check
-application ownership. Policies and proxy pools are global. A tenant/application
-is not a separate database, network, proxy universe or archive boundary. Do not
-issue normal clients admin/keys scope. Application deactivation is not a substitute
-for revoking keys. Bootstrap credentials are persisted; protect them with DB backups.
-A shell variable is not complete credential/process isolation on a shared host.
+`admin` does not implicitly grant other scopes. Application deactivation is not a substitute for key revocation. Treat host/Docker access and backup files as privileged; shell variables do not isolate credentials on a shared host.
 
-## Network and browser behavior
+## Network, browsers, and proxies
 
-SSRF checks and browser interception are defense in depth, not complete network
-isolation. DNS rebinding, redirects/subresources and optional callback egress need
-independent review. Browser paths restrict service workers/downloads/WebSockets;
-Firefox's compatibility sandbox setting is not hardened browser isolation.
-A robots flag is not proof of complete robots enforcement on every engine.
-Use permitted targets and authorized proxies; stop/diagnose refusals and rate limits.
+The canonical API and S3 console bind to loopback, and the S3 API remains inside Docker. Public deployment additionally needs TLS, access controls, restricted CORS, egress policy, resource budgets, and a security review. Canonical Compose does not impose explicit CPU/memory limits; response-size checks do not bound browser RSS.
 
-A successful proxy probe, TLS response or country code is not a trust/anonymity
-certification. Never send sensitive sessions through untrusted public proxies.
-Location does not establish commercial proxy type or future rotating exit location.
+Keep SSRF checks enabled for untrusted URLs. Software URL checks/browser interception are defense in depth, not complete egress isolation. Redirects, DNS rebinding, subresources, and optional callbacks require independent review. Browser sandbox compatibility settings are not hardened browser isolation. A policy's robots flag is not proof of complete enforcement by every engine.
 
-## Optional boundaries
+A successful proxy check or country code is not a trust/anonymity certificate. Never send sensitive sessions through untrusted public proxies. Use only authorized proxies and permitted targets; respect refusals and rate limits.
 
-WARC/S3 and callbacks are disabled by default. Archive handlers currently query
-WarcIndex without an application filter: archive scope is not a tenant ownership
-boundary. Review/fix that before untrusted multi-tenant archive exposure. Configure
-durable DLQ storage and real archive write/read tests before relying on durability.
-Callback URL/redirect/egress and delivery behaviour need separate acceptance.
-Do not expose operational health/metrics or pass deployment secrets to CI casually.
+## Secrets, archives, and evidence
 
-## Supply chain and data
+URLs, query strings, HTML, exceptions, and archives can contain personal data or tokens. Redact before sharing; never publish raw credentials, dumps, cookies, profiles, or proxy URLs. A leak requires exposure restriction, credential revocation/rotation, and access review.
 
-The pinned recovered Camoufox archive is checked before filtered extraction and
-version/executable validation. SHA256 is not an upstream signature, provenance
-review, vulnerability scan or future availability guarantee. Keep license material;
-review redistribution obligations. Never overwrite the asset or add profiles,
-secrets or separately licensed GeoIP databases. New versions/platforms need reviewed
-artifacts and real launch tests. Native ARM64 is not supported. Other dependencies
-and OS images are not fully immutable merely because this archive has a fixed hash.
+Back up database, S3 objects, credentials, and pending journal entries consistently and off-host. Readiness is a point-in-time dependency check, not proof of valid target content, write durability, sustained stability, or disaster recovery. Validate archive round trips and isolated restoration separately.
 
-URLs, query strings, exception text, HTML and archives can contain tokens/personal
-data despite intended proxy-credential redaction. Redact before sharing; do not
-attach raw dumps, profiles, cookies, proxy URLs or bootstrap output to public issues.
-For a leak, restrict exposure, preserve safe audit IDs, revoke/rotate and inspect
-access. Readiness proves point-in-time capabilities, not valid target content,
-sustained stability or complete disaster recovery. CI's basic restore drill checks
-schema/selected counts in a disposable DB, not the whole production recovery plan.
+The recovered Camoufox artifact is checksum-checked before extraction. A checksum is not an upstream signature or vulnerability audit; preserve license material and review redistribution obligations. Current browser packaging supports Linux x86_64, not native ARM64. Other dependencies are not made immutable by that checksum.

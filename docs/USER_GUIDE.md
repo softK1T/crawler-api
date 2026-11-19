@@ -1,140 +1,100 @@
-# User guide
+# Usage guide
 
-[Documentation](README.md) · [API reference](API.md) · [Proxy acceptance](PROXY_CANDIDATES.md)
+[Documentation](README.md) · [API reference](API.md) · [Deployment](runbook.md)
 
-## 1. Start and authenticate
+## 1. Check the service and authenticate
 
-Start from the project README. The examples below use Bash, curl and jq; jq is
-an optional client-side convenience, not a requirement for starting Docker.
-Run sequentially and stop on HTTP/JSON errors. Resource creation is not generally
-idempotent: rerunning the whole guide can create additional tenants and keys.
+Start with the deployment guide. These Bash examples use `curl` and `jq`; host `jq` is only needed for these client examples, not to start Docker. Run commands sequentially and stop on errors.
+
+```bash
+BASE=http://127.0.0.1:8000
+API_KEY=$(docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/stack_runtime.py key)
+curl --fail-with-body "$BASE/readyz" | jq .
+```
+
+Expect `status: ready` and `s3: ok` in the canonical stack. Do not print the bootstrap key or enable `set -x`. It is an operator credential, not a normal client key.
+
+## 2. Submit a page
+
+This example explicitly disables proxy use. Mode selection is still subject to domain policy and escalation behavior.
+
+```bash
+JOB_ID=$(curl --fail-with-body "$BASE/v1/fetch" \
+  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.org/","mode":"static","use_proxy":false}' \
+  | jq -er '.job_id')
+curl --fail-with-body "$BASE/v1/jobs/$JOB_ID" -H "X-API-Key: $API_KEY" | jq .
+```
+
+HTTP 202 means accepted, not fetched. Poll the same job until `status` is `completed` or `failed`; do not resubmit just because it is still running. For a bounded synchronous wait, submit `"options":{"sync":true}`. If the API still returns 202, continue polling.
+
+| Check | Why it matters |
+|---|---|
+| Job `status` and `error` | Polling can return HTTP 200 for a failed job |
+| Result `status_code` | A completed task can contain a target HTTP error |
+| `blocked` / `block_reason` | A challenge page can have target HTTP 200 |
+| `engine`, `proxy_id`, `proxy_country` | Verify which transport/routing actually ran |
+| Decoded body | Transport success does not prove the expected page was returned |
+
+`idempotency_key` is a JSON request field scoped to the application. It is useful for replaying submission, but is not an exactly-once transaction guarantee.
+
+## 3. Read the response and archive
+
+Job results are temporary Redis data. Save a completed job response privately if needed:
 
 ```bash
 umask 077
-BASE=http://127.0.0.1:8000
-API_KEY=$(docker compose exec -T api python scripts/stack_runtime.py key)
-curl -fsS "$BASE/readyz" | jq .
+curl --fail-with-body "$BASE/v1/jobs/$JOB_ID" -H "X-API-Key: $API_KEY" > job.json
+docker compose -p crawler-current -f docker-compose.yml exec -T api python -c 'import base64,hashlib,json,sys; r=json.load(sys.stdin)["result"]; b=base64.b64decode(r["body_b64"],validate=True); assert len(b)==r["body_bytes"]; assert hashlib.sha256(b).hexdigest()==r["content_sha256"]; sys.stdout.buffer.write(b)' < job.json > page.html
 ```
 
-Expected readiness is ready. The bootstrap key is a privileged local administrator.
-Never publish it or enable set -x. The normal API always needs a valid DB-backed
-key; an empty API_KEYS_RAW does not make these endpoints anonymous.
+Only decode after checking completion and result presence. Inspect untrusted HTML as text first. Integrity checks do not establish semantic correctness.
 
-## 2. Create a client identity
-
-A tenant groups applications. An application owns its jobs, batch metadata and
-usage. A key belongs to an application and carries scopes. Domain policies and
-proxy pools are global, not isolated by creating a new application.
+Persistent archives use a different identifier from jobs:
 
 ```bash
-RUN="demo-$(date +%s)"
-TENANT_ID=$(curl -fsS -X POST "$BASE/v1/tenants" \
+curl --fail-with-body --get "$BASE/v1/archive/" \
+  -H "X-API-Key: $API_KEY" --data-urlencode 'url=https://example.org/' | jq .
+```
+
+Use an entry's `id` with `GET /v1/archive/{entry_id}`. Its `body_b64` contains the extracted archived body. Filters must match the captured URL; redirects may change it. Archive scope currently exposes entries without application filtering, so keep it restricted to trusted operators.
+
+## 4. Create a restricted client key
+
+A tenant contains applications; a key belongs to one application. The following commands create resources and are not a read-only demo. Rerunning them can create extra tenants/keys or name conflicts.
+
+```bash
+umask 077
+NAME="client-$(date +%s)"
+TENANT_ID=$(curl --fail-with-body "$BASE/v1/tenants" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg name "$RUN" '{name:$name}')" | jq -er '.id')
-APP_ID=$(curl -fsS -X POST "$BASE/v1/applications" \
+  -d "$(jq -n --arg n "$NAME" '{name:$n}')" | jq -er '.id')
+APP_ID=$(curl --fail-with-body "$BASE/v1/applications" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg tenant "$TENANT_ID" '{tenant_id:$tenant,name:"demo-client"}')" | jq -er '.id')
-curl -fsS -X POST "$BASE/v1/keys" \
+  -d "$(jq -n --arg t "$TENANT_ID" '{tenant_id:$t,name:"client"}')" | jq -er '.id')
+curl --fail-with-body "$BASE/v1/keys" \
   -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg app "$APP_ID" '{application_id:$app,scopes:["fetch"],mode:"live"}')" \
-  > client-key.json
+  -d "$(jq -n --arg a "$APP_ID" '{application_id:$a,scopes:["fetch"],mode:"live"}')" > client-key.json
 FETCH_KEY=$(jq -er '.raw_key' client-key.json)
-KEY_ID=$(jq -er '.id' client-key.json)
 ```
 
-client-key.json contains the raw credential and must remain private. The API returns
-a raw issued key once. mode=test is a key tag, not a no-network sandbox. A fetch-only
-key cannot perform administrative operations. Prefer expiring keys for real clients.
-
-## 3. Submit one page
-
-```bash
-JOB_ID=$(curl -fsS -X POST "$BASE/v1/fetch" \
-  -H "X-API-Key: $FETCH_KEY" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg token "$RUN-first" '{url:"https://example.com/",mode:"static",use_proxy:false,idempotency_key:$token}')" \
-  | jq -er '.job_id')
-```
-
-202 means accepted, not downloaded. The request uses an explicit direct connection;
-no proxies are bundled with the service. A domain policy can influence engine and
-retry behaviour. Do not rely on mode=static as a universal lock on every later tier.
-
-```bash
-for attempt in $(seq 1 90); do
-  curl -fsS "$BASE/v1/jobs/$JOB_ID" -H "X-API-Key: $FETCH_KEY" > job.json
-  STATUS=$(jq -er '.status' job.json)
-  case "$STATUS" in completed|failed) break ;; esac
-  sleep 2
-done
-jq 'del(.result.body_b64)' job.json
-```
-
-If still pending/running after this bounded wait, inspect the queue/worker; do not
-blindly submit another job. Idempotency is application-scoped and does not promise
-an atomic exactly-once transaction across Redis, queue submission and side effects.
-
-## 4. Validate and save the response
-
-Check completed, expected HTTP status, blocked=false and the actual page. A 200
-challenge page can still be wrong. The following decodes and checks integrity
-using Python already installed in the API image, not on the host:
-
-```bash
-docker compose exec -T api python -c 'import base64,hashlib,json,sys; j=json.load(sys.stdin); r=j["result"]; b=base64.b64decode(r["body_b64"],validate=True); assert len(b)==r["body_bytes"]; assert hashlib.sha256(b).hexdigest()==r["content_sha256"]; sys.stdout.buffer.write(b)' \
-  < job.json > page.html
-```
-
-Integrity is not semantic success. Inspect untrusted HTML as text first, not in a
-trusted logged-in browser session. Results/bodies can contain personal information.
+Keep `client-key.json` private and outside version control. Use `FETCH_KEY` for that application's jobs and batches. It cannot read jobs submitted by the bootstrap application's key. Raw issued keys are returned once; `mode=test` is not a network sandbox. Creating an application does not isolate global proxy pools or domain policies.
 
 ## 5. Submit a batch
 
-Create urls.json containing an array of permitted actual URLs. Up to 20 are allowed
-by the default installation; the schema also has a hard cap of 100.
+Use the client's key. Batch proxy overrides belong inside `options`:
 
 ```bash
-jq -n --slurpfile urls urls.json \
-  '{urls:$urls[0],mode:"static",options:{use_proxy:false}}' > batch.json
-curl -fsS -X POST "$BASE/batches/" \
+curl --fail-with-body "$BASE/batches/" \
   -H "X-API-Key: $FETCH_KEY" -H 'Content-Type: application/json' \
-  --data-binary @batch.json > batch-created.json
-BATCH_ID=$(jq -er '.batch_id' batch-created.json)
-curl -fsS "$BASE/batches/$BATCH_ID/status" -H "X-API-Key: $FETCH_KEY" | jq .
-curl -fsS "$BASE/batches/$BATCH_ID/results" -H "X-API-Key: $FETCH_KEY" > batch-results.json
+  -d '{"urls":["https://example.org/"],"mode":"static","options":{"use_proxy":false}}'
 ```
 
-Poll status until all jobs are terminal before evaluating final counts. successful
-counts completed jobs, not necessarily unblocked 2xx pages. Each URL consumes
-key/application admission; the domain admission check occurs once per unique domain.
-The batch endpoint does not guarantee per-page pacing or transactional all-or-nothing
-enqueueing. Request-level proxy overrides belong inside options for batches.
+Read `GET /batches/{batch_id}/status` and `/results` with the same application's key. Default admission allows up to 20 URLs; the schema caps the list at 100. Batch completion/success counts do not replace inspecting each job and page. Enqueueing is not an all-or-nothing transaction, and batch admission is not per-page pacing.
 
-## 6. Add real proxies or browsers
+## Next tasks
 
-Read the proxy acceptance guide before using candidate pools. A PL requirement
-needs fresh passing PL candidates; type unknown is not residential/datacenter.
-Binding a domain policy to the intended pool avoids unintended pool participation.
-use_proxy=true must not be treated as permission to fall back to the server's IP.
-
-Available modes are static, stealth, browser and camoufox. They select HTTPX,
-curl_cffi, Playwright and Camoufox subject to domain policy and escalation rules.
-Having a browser installed does not guarantee access to a protected target.
-Use only permitted targets and authorized proxies; do not defeat a refusal by
-removing safety filters, solving CAPTCHA automatically or ignoring site limits.
-
-## 7. Observe and finish
-
-GET /v1/usage/ with the client key reports its application's usage. request_log
-contains individual attempts in PostgreSQL; job results have a finite Redis TTL.
-Usage/cost fields are estimates from service accounting, not provider invoices.
-
-Revoke the demo fetch key with the separate administrator credential:
-
-```bash
-curl -fsS -X DELETE "$BASE/v1/keys/$KEY_ID" -H "X-API-Key: $API_KEY" | jq .
-unset FETCH_KEY API_KEY
-```
-
-A key cannot revoke itself. Keep required credentials in a secret store, remove
-unneeded plaintext local copies, and never commit client-key.json, HTML or raw
-proxy lists. Administrative scope is global and must not be given to normal clients.
+- Routing and real proxy acceptance: [Proxy candidates](PROXY_CANDIDATES.md).
+- Request fields, errors, key revocation/rotation: [API reference](API.md).
+- Recovery and retention: [Local S3](LOCAL-S3.md).
+- Never commit keys, cookies, raw proxy lists, or captured personal data.
