@@ -203,7 +203,7 @@ def spans_multiple_sites(urls: Iterable[str]) -> bool:
 
 
 def curl_identity(
-    options: RequestOptions | None, default_profile: str, default_user_agent: str
+    options: RequestOptions | None, default_profile: str, default_user_agent: str | None
 ) -> tuple[str, str | None]:
     """TLS profile and pinned UA for curl_cffi.
 
