@@ -1,0 +1,16 @@
+--- a/app/services/fetchers/base.py
++++ b/app/services/fetchers/base.py
+@@ -325,3 +325,4 @@
+     # override the ladder for the entire call.  Engine still escalates.
+-    caller_forced_use_proxy = use_proxy  # None means "let ladder decide"
++    # Direct egress is not a permitted retry route, even for legacy jobs.
++    caller_forced_use_proxy = True
+     caller_forced_proxy_type = proxy_type  # None means "let ladder decide"
+@@ -426,4 +427,6 @@
+         try:
+-            # 1. Pick proxy.
++            # 1. Pick proxy. Fail before invoking any transport without a manager.
++            if proxy_manager is None:
++                raise ProxyPoolUnavailableError("PROXY_POOL_EMPTY: proxy manager unavailable")
+             if tier_use_proxy and proxy_manager is not None:
+                 proxy = await proxy_manager.get_proxy(
