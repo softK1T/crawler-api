@@ -467,7 +467,13 @@ async def fetch_with_retry(
                 proxy = await proxy_manager.get_proxy(
                     pool_id=getattr(policy, "proxy_pool_id", None),
                     domain=domain,
-                    sticky_key=sticky_key if total_attempts == 1 else None,
+                    # A session keeps one exit IP across attempts and jobs. A blocked
+                    # proxy is excluded below, so the next pick replaces the pin.
+                    sticky_key=(
+                        f"session:{session_key}"
+                        if session_key
+                        else (sticky_key if total_attempts == 1 else None)
+                    ),
                     exclude_ids=failed_proxy_ids,
                     country=effective_country,
                     city=effective_city,
