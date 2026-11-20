@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import random
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +113,10 @@ class BrowserPool:
             try:
                 yield ctx
             finally:
+                # Detach route handlers first: one still fetching a subresource would
+                # otherwise raise "Request context disposed" into a later call.
+                with suppress(Exception):
+                    await ctx.unroute_all(behavior="ignoreErrors")
                 await ctx.close()
 
     def _default_ua(self) -> str:

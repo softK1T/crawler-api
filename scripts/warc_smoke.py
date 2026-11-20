@@ -12,9 +12,9 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.config import settings  # noqa: E402
-from app.core.db import AsyncSessionLocal, engine  # noqa: E402
-from app.services.warc import storage as module  # noqa: E402
+from app.core.config import settings
+from app.core.db import AsyncSessionLocal, engine
+from app.services.warc import storage as module
 
 PROOF = Path("/var/lib/crawler/warc-spool/smoke-proof")
 BODY = b"crawler archival smoke: exact body survives S3 and worker restart\n"
@@ -24,9 +24,7 @@ async def verify(ids: list[str]) -> None:
     import httpx
 
     key = Path("/run/crawler-secrets/admin.key").read_text().strip()  # noqa: ASYNC240
-    async with httpx.AsyncClient(
-        base_url="http://api:8000", headers={"X-API-Key": key}
-    ) as client:
+    async with httpx.AsyncClient(base_url="http://api:8000", headers={"X-API-Key": key}) as client:
         for entry_id in ids:
             response = await client.get(f"/v1/archive/{entry_id}")
             response.raise_for_status()

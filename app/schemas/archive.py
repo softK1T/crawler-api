@@ -15,6 +15,9 @@ class ArchiveEntryResponse(BaseModel):
     content_type: str | None
     status_code: int | None
     captured_at: datetime
+    # Attempt (request_log row) that produced this capture and the job it belonged to.
+    request_log_id: UUID | None = None
+    job_id: str | None = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -27,3 +30,5 @@ class ArchiveContentResponse(BaseModel):
     warc_filename: str
     is_revisit: bool
     sha256: str
+    request_log_id: UUID | None = None
+    job_id: str | None = None

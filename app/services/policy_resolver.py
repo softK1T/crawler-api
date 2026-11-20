@@ -51,7 +51,11 @@ async def resolve_policy(url: str, db: AsyncSession):
     Returns the ORM row or ``None`` if no policy is configured for the
     extracted domain.  Callers must fall back to :func:`get_policy_defaults`.
     """
+    from app.core.config import settings
     from app.models.domain_policy import DomainPolicy
+
+    if not settings.enable_domain_policies:
+        return None
 
     domain = _parse_hostname(url)
     stmt = (

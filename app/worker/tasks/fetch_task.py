@@ -51,6 +51,9 @@ async def fetch_task(
     # arq reuses worker tasks — never inherit a previous job's bound context.
     clear_context()
     bind_context(trace_id=trace_id or job_id, job_id=job_id, application_id=application_id)
+    from app.services.fetchers.request_options import clear_request_options
+
+    clear_request_options()
 
     try:
         await _run_fetch_task(
@@ -72,6 +75,7 @@ async def fetch_task(
         )
     finally:
         clear_context()
+        clear_request_options()
 
 
 async def _run_fetch_task(
@@ -101,7 +105,9 @@ async def _run_fetch_task(
             # 2. Resolve policy.
             from app.services.policy_resolver import resolve_policy
 
-            policy = await resolve_policy(url, db)
+            # use_policy=false skips the domain policy and policy learning for this job.
+            use_policy = options.get("use_policy") is not False
+            policy = await resolve_policy(url, db) if use_policy else None
 
             # 2b. Resolve api_key_id ONCE for the whole job (legacy jobs carry
             # only the prefix).  Failure is non-fatal: attempt rows persist
@@ -133,6 +139,9 @@ async def _run_fetch_task(
                 "proxy_type"
             )  # "residential" | "datacenter" | "isp" | None
             req_session_key = options.get("session_key")
+            from app.services.fetchers.request_options import RequestOptions, set_request_options
+
+            set_request_options(RequestOptions.from_options(options) or None)
 
             result = await fetch_with_retry(
                 fetcher=fetcher,
@@ -229,13 +238,14 @@ async def _run_fetch_task(
             from app.services.policy_learner import record_outcome
 
             try:
-                await record_outcome(
-                    result=result,
-                    policy=policy,
-                    db=db,
-                    engine_used=result.engine,
-                    tier_used=getattr(result, "_tier_used", 0),
-                )
+                if use_policy and getattr(settings, "enable_domain_policies", True):
+                    await record_outcome(
+                        result=result,
+                        policy=policy,
+                        db=db,
+                        engine_used=result.engine,
+                        tier_used=getattr(result, "_tier_used", 0),
+                    )
             except Exception:
                 await db.rollback()
                 logger.warning("Policy learning failed after completed fetch", exc_info=True)

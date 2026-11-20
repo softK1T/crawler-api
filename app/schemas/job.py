@@ -24,6 +24,13 @@ class JobCreate(BaseModel):
     proxy_city: str | None = Field(None, min_length=1, max_length=128)
     proxy_type: Literal["residential", "datacenter", "isp"] | None = None
     session_key: str | None = Field(None, min_length=1, max_length=128)
+    # Per-request overrides; validated by RequestOptions before the job is queued.
+    headers: dict[str, str] | None = None
+    cookies: dict[str, str] | None = None
+    user_agent: str | None = Field(None, min_length=1, max_length=512)
+    impersonate: str | None = Field(None, min_length=2, max_length=32)
+    # False skips the domain policy and policy learning for this job only.
+    use_policy: bool | None = None
     options: dict[str, Any] = {}
 
 

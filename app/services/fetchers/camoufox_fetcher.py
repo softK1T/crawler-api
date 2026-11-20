@@ -22,6 +22,7 @@ from uuid import UUID
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
 from app.services.fetchers.playwright_fetcher import _split_proxy_credentials
+from app.services.fetchers.request_options import current_request_options
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,21 @@ async def _new_browser(camoufox_module: Any, **kwargs):
             await browser.close()
     finally:
         await pw.stop()
+
+
+def _geoip_database_ready(camoufox_module: Any) -> bool:
+    """True when Camoufox's GeoIP database is already present in its package directory.
+
+    Camoufox downloads the file there lazily, but the runtime user cannot write to
+    site-packages, so without a bundled file every geoip fetch would fail.
+    """
+    package_file = getattr(camoufox_module, "__file__", None)
+    if not package_file:
+        return False
+    ready = os.path.isfile(os.path.join(os.path.dirname(package_file), "GeoLite2-City.mmdb"))
+    if not ready:
+        logger.warning("camoufox_geoip_database_missing")
+    return ready
 
 
 class CamoufoxFetcher:
@@ -151,7 +167,8 @@ class CamoufoxFetcher:
         kwargs: dict[str, object] = {
             "humanize": True,
             "headless": "virtual",  # spawn Xvfb inside the container (see Dockerfile: xvfb installed)
-            "geoip": proxy_country is not None,  # align TZ/locale to exit-IP country
+            # Align TZ/locale to the exit-IP country when the GeoIP database is installed.
+            "geoip": proxy_country is not None and _geoip_database_ready(camoufox),
         }
         if proxy_url:
             kwargs["proxy"] = _split_proxy_credentials(proxy_url)
@@ -159,9 +176,9 @@ class CamoufoxFetcher:
         try:
             async with _new_browser(camoufox, **kwargs) as browser:
                 context = await browser.new_context(service_workers="block", accept_downloads=False)
-                from app.services.fetchers.browser_guard import install_browser_guard
+                from app.services.fetchers.browser_guard import prepare_browser_context
 
-                await install_browser_guard(context)
+                await prepare_browser_context(context, current_request_options(), url)
                 page = await context.new_page()
 
                 if headers:

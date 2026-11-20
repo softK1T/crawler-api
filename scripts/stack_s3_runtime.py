@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts import stack_runtime as runtime  # noqa: E402
+from scripts import stack_runtime as runtime
 
 S3_SECRETS = Path("/run/crawler-s3")
 S3_DATA = Path("/var/lib/crawler-s3")
