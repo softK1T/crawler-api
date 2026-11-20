@@ -204,3 +204,46 @@ def tier_for(policy: DomainPolicy | None, *, enable_premium: bool = False) -> Ti
         )
         idx = max_idx
     return LADDER[idx]
+
+
+# ── Running premium tiers without premium proxies ────────────────────────────
+
+FREE_PROXY_TYPE = "datacenter"
+_PREMIUM_PROXY_TYPES = frozenset({"residential", "mobile"})
+
+
+def proxy_type_for(tier: Tier, *, enable_premium: bool) -> str | None:
+    """Proxy type *tier* runs on; premium types become datacenter when premium is off.
+
+    The premium flag guards proxy spend, not engine cost, so a browser tier stays
+    usable on a free proxy.
+    """
+    if tier.proxy_type in _PREMIUM_PROXY_TYPES and not enable_premium:
+        return FREE_PROXY_TYPE
+    return tier.proxy_type
+
+
+def next_distinct_tier(current: int, *, enable_premium: bool) -> int | None:
+    """Next tier above *current* whose engine and effective proxy type are new.
+
+    With premium off this skips curl_cffi+residential and camoufox+mobile, which
+    would only repeat a lower tier on the same datacenter proxies.
+    """
+
+    def key(index: int) -> tuple[str, str | None]:
+        tier = LADDER[index]
+        return tier.engine, proxy_type_for(tier, enable_premium=enable_premium)
+
+    seen = {key(index) for index in range(current + 1)}
+    for index in range(current + 1, len(LADDER)):
+        if key(index) not in seen:
+            return index
+    return None
+
+
+def premium_enabled_for(domain: str, *, global_flag: bool, allowed: str) -> bool:
+    """Premium proxies are allowed globally or for a comma-separated list of domains."""
+    if global_flag:
+        return True
+    domains = {item.strip().lower() for item in allowed.split(",") if item.strip()}
+    return domain.lower() in domains
