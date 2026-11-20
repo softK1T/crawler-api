@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import time
 from collections.abc import Awaitable, Callable
@@ -299,10 +300,11 @@ async def fetch_with_retry(
       IP_BAN / RATE_LIMITED only rotate the proxy — engine stays the same.
     - On tier change: clear failed_proxy_ids (a new proxy_type invalidates
       prior IP bans) and re-instantiate the fetcher if the engine changed.
-    - Premium tiers (residential/mobile) are gated behind
-      settings.enable_premium_proxy_tiers (default False).  When the flag is
-      off, escalation stops at the highest free tier, logs a warning, and
-      returns the last blocked FetchResult rather than raising.
+    - Premium proxies (residential/mobile) are used only when
+      settings.enable_premium_proxy_tiers is on or the domain is listed in
+      PREMIUM_PROXY_DOMAINS.  Otherwise a premium tier keeps its engine and
+      runs on a datacenter proxy, so the browser tiers stay reachable; tiers
+      that would only repeat a lower one are skipped.
     - Tier-0 direct-connection: preserved — if proxy is None and block occurs,
       we now escalate instead of hard-returning, unless caller explicitly
       forced use_proxy=False (which locks tier 0).
@@ -322,10 +324,11 @@ async def fetch_with_retry(
     from app.services.escalation import (
         LADDER,
         MAX_ATTEMPTS_PER_TIER,
-        effective_max_tier,
         initial_tier,
         is_escalatable,
-        next_tier,
+        next_distinct_tier,
+        premium_enabled_for,
+        proxy_type_for,
     )
     from app.services.fetchers import get_fetcher
 
@@ -339,7 +342,12 @@ async def fetch_with_retry(
     except Exception:
         enable_premium = False
 
-    max_tier = effective_max_tier(enable_premium)
+    enable_premium = premium_enabled_for(
+        domain, global_flag=enable_premium, allowed=os.getenv("PREMIUM_PROXY_DOMAINS", "")
+    )
+    # Every tier is reachable: without premium a premium tier keeps its engine and
+    # runs on a datacenter proxy (escalation.proxy_type_for).
+    max_tier = len(LADDER) - 1
     max_attempts = getattr(policy, "max_escalation_attempts", None) or 12
 
     # policy.max_retries overrides the per-tier attempt cap (level 3 precedence).
@@ -385,40 +393,11 @@ async def fetch_with_retry(
     last_result: FetchResult | None = None
     last_error: Exception | None = None
     failed_proxy_ids: set[UUID] = set()
+    # Proxies blocked for an IP reason; they stay excluded when only the engine changes.
+    ip_blocked_proxy_ids: set[UUID] = set()
     total_attempts = 0
 
     while total_attempts < max_attempts:
-        # Clamp tier to max_tier (premium gate).  An explicit
-        # requested_engine bypasses the gate for the ENGINE only: the premium
-        # gate protects proxy EUR spend, not engine CPU, so the requested
-        # engine runs direct (no proxy) instead of bailing out.
-        tier_bypassed_premium_gate = False
-        if esc.tier > max_tier:
-            if requested_engine is not None and LADDER[esc.tier].engine == requested_engine:
-                tier_bypassed_premium_gate = True
-                logger.warning(
-                    "premium_gate_bypassed_for_requested_engine",
-                    extra={
-                        "domain": domain,
-                        "engine": requested_engine,
-                        "tier": esc.tier,
-                        "reason": "explicit engine request — premium proxy dropped, engine kept",
-                    },
-                )
-            else:
-                logger.warning(
-                    "escalation_premium_gate_hit",
-                    extra={
-                        "domain": domain,
-                        "tier": esc.tier,
-                        "max_tier": max_tier,
-                        "reason": "enable_premium_proxy_tiers=False",
-                    },
-                )
-                if last_result is not None:
-                    return last_result
-                break
-
         tier_def = LADDER[esc.tier]
 
         # ── Derive effective proxy settings for this tier ────────────────────
@@ -430,8 +409,6 @@ async def fetch_with_retry(
 
         if caller_forced_use_proxy is not None:
             tier_use_proxy = caller_forced_use_proxy
-        elif tier_bypassed_premium_gate:
-            tier_use_proxy = False
         elif tier_def.use_proxy:
             tier_use_proxy = True
         elif policy_use_proxy is not None:
@@ -442,10 +419,8 @@ async def fetch_with_retry(
         tier_proxy_type: str | None
         if caller_forced_proxy_type is not None:
             tier_proxy_type = caller_forced_proxy_type
-        elif tier_bypassed_premium_gate:
-            tier_proxy_type = None
         elif tier_def.proxy_type is not None:
-            tier_proxy_type = tier_def.proxy_type
+            tier_proxy_type = proxy_type_for(tier_def, enable_premium=enable_premium)
         else:
             tier_proxy_type = policy_proxy_type
 
@@ -492,7 +467,13 @@ async def fetch_with_retry(
                 proxy = await proxy_manager.get_proxy(
                     pool_id=getattr(policy, "proxy_pool_id", None),
                     domain=domain,
-                    sticky_key=sticky_key if total_attempts == 1 else None,
+                    # A session keeps one exit IP across attempts and jobs. A blocked
+                    # proxy is excluded below, so the next pick replaces the pin.
+                    sticky_key=(
+                        f"session:{session_key}"
+                        if session_key
+                        else (sticky_key if total_attempts == 1 else None)
+                    ),
                     exclude_ids=failed_proxy_ids,
                     country=effective_country,
                     city=effective_city,
@@ -550,12 +531,14 @@ async def fetch_with_retry(
                         response_time_ms=result.elapsed_ms,
                     )
                     failed_proxy_ids.add(proxy.id)
+                    if not is_escalatable(result.block_reason):
+                        ip_blocked_proxy_ids.add(proxy.id)
 
                 # Decide: escalate tier or rotate proxy?
                 if esc.attempts_at_tier >= attempts_per_tier and is_escalatable(
                     result.block_reason
                 ):
-                    nxt = next_tier(esc.tier)
+                    nxt = next_distinct_tier(esc.tier, enable_premium=enable_premium)
                     if nxt is None or nxt > max_tier:
                         # Top of reachable ladder — return last blocked result.
                         logger.warning(
@@ -577,7 +560,15 @@ async def fetch_with_retry(
                     esc.attempts_at_tier = 0
                     esc.iterations_at_tier = 0
                     esc.fetcher = None  # force re-instantiation
-                    failed_proxy_ids.clear()  # new proxy_type — reset bans
+                    # A challenge block says nothing about the exit IP, so those proxies
+                    # may be retried by the new engine. IP-blocked ones stay excluded
+                    # until the proxy type itself changes.
+                    if (
+                        proxy_type_for(LADDER[nxt], enable_premium=enable_premium)
+                        != tier_proxy_type
+                    ):
+                        ip_blocked_proxy_ids.clear()
+                    failed_proxy_ids.intersection_update(ip_blocked_proxy_ids)
                     # No sleep between tier bumps — the new engine is the retry.
                     continue
 
@@ -585,7 +576,7 @@ async def fetch_with_retry(
                 if proxy is None and caller_forced_use_proxy is not True:
                     # Direct connection blocked and caller didn't force proxy —
                     # escalate out of tier 0 rather than hard-returning.
-                    nxt = next_tier(esc.tier)
+                    nxt = next_distinct_tier(esc.tier, enable_premium=enable_premium)
                     if nxt is not None and nxt <= max_tier:
                         esc.tier = nxt
                         esc.attempts_at_tier = 0

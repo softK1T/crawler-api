@@ -155,7 +155,7 @@ async def _run_fetch_task(
                 proxy_country=req_proxy_country,
                 proxy_city=req_proxy_city,
                 proxy_type=req_proxy_type,
-                session_key=req_session_key,
+                session_key=_session_scope(application_id, req_session_key),
                 browser_pool=ctx.get("browser_pool"),
                 # An explicit mode must actually run its engine — otherwise
                 # the ladder starts at tier 0 (httpx) and stealth/browser/
@@ -428,6 +428,13 @@ def _record_latency(status: str, started: float) -> None:
 
 
 # ── Attempt observability helpers ─────────────────────────────────────────────
+
+
+def _session_scope(application_id: str, session_key: object) -> str | None:
+    """Scope a caller-chosen session key to its application so tenants never share one."""
+    if not session_key:
+        return None
+    return f"{application_id}:{session_key}"
 
 
 def _parse_uuid(value: str | None) -> UUID | None:

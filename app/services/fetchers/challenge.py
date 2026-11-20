@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import re
 import time
 from typing import Any
@@ -41,6 +42,18 @@ class NavigationTracker:
             return
 
 
+async def _idle_like_a_visitor(page: Any) -> None:
+    """Move the pointer and scroll a little while a challenge runs; never fails the fetch."""
+    try:
+        x = random.uniform(200, 900)  # noqa: S311
+        y = random.uniform(150, 600)  # noqa: S311
+        steps = random.randint(8, 20)  # noqa: S311
+        await page.mouse.move(x, y, steps=steps)
+        await page.mouse.wheel(0, random.uniform(40, 220))  # noqa: S311
+    except Exception:
+        return
+
+
 async def settle_page(page: Any, *, budget_s: float) -> bytes:
     """Return the serialized DOM, waiting up to *budget_s* for a pending challenge."""
     limit = time.monotonic() + max(0.0, min(budget_s, CHALLENGE_WAIT_S))
@@ -56,6 +69,7 @@ async def settle_page(page: Any, *, budget_s: float) -> bytes:
             pending = challenge_pending(body)
         if not pending or time.monotonic() >= limit:
             break
+        await _idle_like_a_visitor(page)
         await page.wait_for_timeout(_POLL_MS)
     if not body:
         body = (await page.content()).encode("utf-8")
