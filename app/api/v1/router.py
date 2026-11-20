@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     archive,
     auth_keys,
     batches,
+    fetches,
     jobs,
     projects,
     proxy,
@@ -15,6 +16,7 @@ from app.core.config import settings
 
 api_router = APIRouter()
 api_router.include_router(jobs.router)
+api_router.include_router(fetches.router)
 api_router.include_router(batches.router)
 api_router.include_router(projects.router)
 api_router.include_router(proxy.router)
