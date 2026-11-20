@@ -478,9 +478,25 @@ async def fetch_with_retry(
                     country=effective_country,
                     city=effective_city,
                     proxy_type=tier_proxy_type,
+                    engine=tier_def.engine,
                 )
 
                 if proxy is None:
+                    # Nothing usable for this engine on a fresh tier (refused by the site,
+                    # cooling down or empty): another engine may still have proxies.
+                    skip_to = (
+                        None
+                        if failed_proxy_ids
+                        else next_distinct_tier(esc.tier, enable_premium=enable_premium)
+                    )
+                    if skip_to is not None:
+                        outcome = "proxy_pool_empty"
+                        error_message = "no usable proxy for this engine; trying the next tier"
+                        esc.tier = skip_to
+                        esc.attempts_at_tier = 0
+                        esc.iterations_at_tier = 0
+                        esc.fetcher = None
+                        continue
                     if failed_proxy_ids:
                         raise ProxyPoolExhaustedError(
                             f"PROXY_POOL_EXHAUSTED: all eligible "
