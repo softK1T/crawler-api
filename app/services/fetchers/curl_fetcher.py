@@ -5,6 +5,7 @@ import atexit
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from uuid import UUID
 
 from app.core.config import settings
@@ -14,15 +15,11 @@ from app.services.fetchers.base import FetchError, FetchResult
 
 logger = logging.getLogger(__name__)
 
-IMPERSONATION = "chrome120"
+# "chrome" follows the newest Chrome profile shipped with the installed curl_cffi.
+# The profile sends its own User-Agent and client hints, so none is pinned here:
+# a hard-coded UA drifts away from the TLS fingerprint whenever the profile moves.
+IMPERSONATION = "chrome"
 
-# UA pinned to the impersonation profile: a rotated Firefox UA riding on
-# Chrome TLS is an inconsistency anti-bot vendors fingerprint (verified on
-# tls.peet.ws — the site echoes both UA and JA3 side by side).
-CHROME_120_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
 
 # ── Shared executor ───────────────────────────────────────────────────────────
 _executor: ThreadPoolExecutor | None = None
@@ -76,8 +73,8 @@ class CurlFetcher:
         )
 
         request_options = current_request_options()
-        # A custom TLS profile without an explicit UA must not carry the Chrome 120 UA.
-        impersonation, pinned_ua = curl_identity(request_options, IMPERSONATION, CHROME_120_UA)
+        # No default UA: the TLS profile sends the one that matches it.
+        impersonation, pinned_ua = curl_identity(request_options, IMPERSONATION, None)
 
         # 1. Validate initial URL (sync — ok in executor context).
         from app.core.url_guard import URLGuardError, validate_url_sync
@@ -95,10 +92,8 @@ class CurlFetcher:
         # 2. Run sync fetch in the shared thread executor.
         loop = asyncio.get_running_loop()
 
-        def _sync_fetch() -> tuple:
+        def _fetch_hops(session: Any) -> tuple:
             """Inner synchronous fetch — runs in ThreadPoolExecutor."""
-            from curl_cffi import requests as cffi_requests
-
             current_url = url
             for _hop in range(max_redirects + 1):
                 validate_url_sync(current_url)
@@ -131,7 +126,7 @@ class CurlFetcher:
                     return len(chunk)
 
                 try:
-                    resp = cffi_requests.get(current_url, content_callback=receive, **kwargs)
+                    resp = session.get(current_url, content_callback=receive, **kwargs)
                 except Exception:
                     if too_large:
                         raise FetchError("Response exceeds body limit") from None
@@ -157,6 +152,13 @@ class CurlFetcher:
                 )
 
             raise FetchError(f"Too many redirects from {url}")
+
+        def _sync_fetch() -> tuple:
+            """One session per fetch: cookies set on a redirect reach the next hop."""
+            from curl_cffi import requests as cffi_requests
+
+            with cffi_requests.Session() as session:
+                return _fetch_hops(session)
 
         executor = _get_executor()
         try:

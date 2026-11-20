@@ -54,3 +54,52 @@ def headers_for_domain(policy) -> dict[str, str]:
         headers.update(policy.header_profile)
 
     return headers
+
+
+# Engines that present a browser fingerprint build their own header set. Generic
+# identity headers on top of it contradict the TLS and JavaScript fingerprint.
+FINGERPRINTED_ENGINES = frozenset({"curl_cffi", "playwright", "camoufox"})
+IDENTITY_HEADERS = frozenset(
+    {
+        "user-agent",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "connection",
+        "upgrade-insecure-requests",
+    }
+)
+
+# Language a browser in the proxy's country would normally announce.
+ACCEPT_LANGUAGE_BY_COUNTRY: dict[str, str] = {
+    "PL": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "DE": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+    "FR": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "GB": "en-GB,en;q=0.9",
+    "US": "en-US,en;q=0.9",
+}
+
+
+def headers_for_engine(
+    policy: object | None, engine: str, proxy_country: str | None = None
+) -> dict[str, str]:
+    """Headers to add on top of what *engine* sends by itself.
+
+    httpx has no browser fingerprint and keeps the generic set. curl_cffi and the
+    browsers get only non-identity headers from the policy; curl_cffi also gets an
+    Accept-Language matching the proxy country unless the policy sets one.
+    """
+    if engine not in FINGERPRINTED_ENGINES:
+        return headers_for_domain(policy)
+    profile: dict[str, str] = getattr(policy, "header_profile", None) or {}
+    headers = {
+        name: value for name, value in profile.items() if name.lower() not in IDENTITY_HEADERS
+    }
+    if engine == "curl_cffi":
+        language = next(
+            (value for name, value in profile.items() if name.lower() == "accept-language"),
+            ACCEPT_LANGUAGE_BY_COUNTRY.get((proxy_country or "").strip().upper()),
+        )
+        if language:
+            headers["Accept-Language"] = language
+    return headers

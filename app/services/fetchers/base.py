@@ -512,9 +512,11 @@ async def fetch_with_retry(
                     )
 
             # 2. Build headers.
-            from app.services.fetchers.headers import headers_for_domain
+            from app.services.fetchers.headers import headers_for_engine
 
-            merged_headers = headers_for_domain(policy)
+            merged_headers = headers_for_engine(
+                policy, tier_def.engine, getattr(proxy, "country", None)
+            )
 
             # 3. Fetch.
             result = await current_fetcher.fetch(
