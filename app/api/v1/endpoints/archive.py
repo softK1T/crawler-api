@@ -12,12 +12,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import SCOPE_ARCHIVE, require_scope
 from app.core.db import get_db
 from app.models.api_key import ApiKey
+from app.models.request_log import RequestLog
 from app.models.warc_index import WarcIndex
 from app.schemas.archive import ArchiveContentResponse, ArchiveEntryResponse
 from app.services.archive_reader import ArchiveReadError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/archive", tags=["archive"])
+
+
+async def _job_ids(
+    db: AsyncSession, request_log_ids: list[UUID | None]
+) -> dict[UUID | None, str | None]:
+    """Map request_log ids to the job that produced each attempt.
+
+    The key type admits None so callers can look up an entry that has no attempt link.
+    """
+    ids = [value for value in request_log_ids if value is not None]
+    if not ids:
+        return {}
+    rows = await db.execute(select(RequestLog.id, RequestLog.job_id).where(RequestLog.id.in_(ids)))
+    return {row.id: row.job_id for row in rows}
 
 
 @router.get("/{entry_id}", response_model=ArchiveContentResponse)
@@ -70,6 +85,8 @@ async def get_archive_by_request(
         warc_filename=target.warc_filename,
         is_revisit=row.is_revisit,
         sha256=row.sha256,
+        request_log_id=row.request_log_id,
+        job_id=(await _job_ids(db, [row.request_log_id])).get(row.request_log_id),
     )
 
 
@@ -96,4 +113,11 @@ async def list_archives(
     stmt = stmt.limit(per_page).offset((page - 1) * per_page)
 
     result = await db.execute(stmt)
-    return result.scalars().all()
+    rows = result.scalars().all()
+    jobs = await _job_ids(db, [row.request_log_id for row in rows])
+    return [
+        ArchiveEntryResponse.model_validate(row).model_copy(
+            update={"job_id": jobs.get(row.request_log_id)}
+        )
+        for row in rows
+    ]
