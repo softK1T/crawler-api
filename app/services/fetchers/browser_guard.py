@@ -7,6 +7,7 @@ blocked on the context; WebSockets are disabled for the interview baseline.
 """
 
 import contextlib
+import os
 from typing import Any
 
 from app.core.url_guard import MAX_BODY_BYTES, BodyTooLarge, URLGuardError, validate_url_async
@@ -17,6 +18,7 @@ async def install_browser_guard(
     *,
     navigation_headers: dict[str, str] | None = None,
     site_url: str | None = None,
+    native_transport: bool = False,
 ) -> list[str]:
     """Install before creating/navigating a page; return blocked URLs for diagnostics."""
     blocked: list[str] = []
@@ -31,6 +33,16 @@ async def install_browser_guard(
             return
         except Exception:
             await _abort_quietly(route, "failed")
+            return
+        if native_transport:
+            # The browser sends the request itself, so the site sees the browser's own
+            # TLS and HTTP/2 fingerprint rather than the Playwright HTTP client's.
+            try:
+                await route.continue_(
+                    **_navigation_kwargs(route.request, navigation_headers, site_url)
+                )
+            except Exception:
+                await _abort_quietly(route, "failed")
             return
         try:
             response = await route.fetch(
@@ -93,10 +105,12 @@ def _navigation_kwargs(
     return {"headers": merged}
 
 
-async def prepare_browser_context(context: Any, request_options: Any, url: str) -> list[str]:
+async def prepare_browser_context(
+    context: Any, request_options: Any, url: str, *, native_transport: bool = False
+) -> list[str]:
     """Install the egress guard and apply per-request cookies and navigation headers."""
     if not request_options:
-        return await install_browser_guard(context)
+        return await install_browser_guard(context, native_transport=native_transport)
     if request_options.cookies:
         await context.add_cookies(
             [
@@ -105,7 +119,10 @@ async def prepare_browser_context(context: Any, request_options: Any, url: str) 
             ]
         )
     return await install_browser_guard(
-        context, navigation_headers=dict(request_options.headers), site_url=url
+        context,
+        navigation_headers=dict(request_options.headers),
+        site_url=url,
+        native_transport=native_transport,
     )
 
 
@@ -113,3 +130,14 @@ async def _abort_quietly(route: Any, reason: str) -> None:
     """Abort a route whose page or context may already be gone."""
     with contextlib.suppress(Exception):
         await route.abort(reason)
+
+
+def native_transport_enabled(proxy_in_use: bool) -> bool:
+    """Whether the browser may send requests itself instead of through route.fetch.
+
+    Only behind a proxy: every hop, redirects included, then leaves through the proxy
+    and cannot reach this host's network. Redirect hops are not re-validated in this
+    mode and the per-resource body limit does not apply. BROWSER_NATIVE_TRANSPORT=0
+    restores the fully intercepted transport.
+    """
+    return proxy_in_use and os.getenv("BROWSER_NATIVE_TRANSPORT", "1") != "0"
