@@ -60,6 +60,15 @@ class PlaywrightFetcher:
         max_redirects: int = 10,
     ) -> FetchResult:
         start = time.perf_counter()
+        from app.services.fetchers.request_options import (
+            current_request_options,
+            without_user_agent,
+        )
+
+        request_options = current_request_options()
+        pool_kwargs: dict[str, str] = {}
+        if request_options and request_options.user_agent:
+            pool_kwargs["ua"] = request_options.user_agent
 
         # 1. Validate initial URL.
         from app.core.url_guard import URLGuardError, validate_url_async
@@ -83,14 +92,17 @@ class PlaywrightFetcher:
             )
 
         try:
-            async with asyncio.timeout(timeout_s), self._pool.context(proxy=proxy_config) as ctx:
+            async with (
+                asyncio.timeout(timeout_s),
+                self._pool.context(proxy=proxy_config, **pool_kwargs) as ctx,
+            ):
                 page = await ctx.new_page()
 
-                from app.services.fetchers.browser_guard import install_browser_guard
+                from app.services.fetchers.browser_guard import prepare_browser_context
 
-                await install_browser_guard(ctx)
+                await prepare_browser_context(ctx, request_options, url)
                 if headers:
-                    await page.set_extra_http_headers(headers)
+                    await page.set_extra_http_headers(without_user_agent(headers, request_options))
 
                 response = await page.goto(
                     url,

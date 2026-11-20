@@ -127,6 +127,17 @@ async def create_fetch(
     if body.session_key is not None:
         merged_options["session_key"] = body.session_key
 
+    for option_name in ("headers", "cookies", "user_agent", "impersonate", "use_policy"):
+        option_value = getattr(body, option_name)
+        if option_value is not None:
+            merged_options[option_name] = option_value
+    from app.services.fetchers.request_options import RequestOptions
+
+    try:
+        RequestOptions.from_options(merged_options)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
     # 5. Enqueue.
     job_id = str(uuid4())
     proxy_pool_id = None

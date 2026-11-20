@@ -30,6 +30,13 @@ async def create_crawl_batch(
     if request.callback_url and not settings.enable_callbacks:
         raise HTTPException(status_code=422, detail="Callbacks are disabled")
 
+    from app.services.fetchers.request_options import RequestOptions
+
+    try:
+        RequestOptions.from_options(dict(request.options or {}))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
     # Each URL consumes per-key admission, not just one token per batch.
     limiter = req.app.state.rate_limiter
     quota = await limiter.check_application(

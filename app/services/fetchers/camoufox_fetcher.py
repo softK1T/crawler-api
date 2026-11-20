@@ -22,6 +22,7 @@ from uuid import UUID
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
 from app.services.fetchers.playwright_fetcher import _split_proxy_credentials
+from app.services.fetchers.request_options import current_request_options
 
 logger = logging.getLogger(__name__)
 
@@ -159,9 +160,9 @@ class CamoufoxFetcher:
         try:
             async with _new_browser(camoufox, **kwargs) as browser:
                 context = await browser.new_context(service_workers="block", accept_downloads=False)
-                from app.services.fetchers.browser_guard import install_browser_guard
+                from app.services.fetchers.browser_guard import prepare_browser_context
 
-                await install_browser_guard(context)
+                await prepare_browser_context(context, current_request_options(), url)
                 page = await context.new_page()
 
                 if headers:

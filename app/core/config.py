@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     worker_max_jobs: int = Field(default=6, ge=1, le=100)
     worker_job_timeout_s: int = Field(default=120, ge=10)
     require_camoufox: bool = True
+    # Per-domain engine, headers and learned tiers. False ignores them everywhere.
+    enable_domain_policies: bool = True
 
     max_batch_size: int = Field(default=20, ge=1, le=1000)
     batch_timeout_secs: int = 900

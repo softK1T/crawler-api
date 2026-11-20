@@ -227,3 +227,5 @@ Usage responses include period records, total requests/bytes, and an estimated s
 `CrawlerAPIError` returns `error`/`detail`; FastAPI validation and `HTTPException` responses can have different `detail` shapes. Do not assume one universal error envelope. Submission errors, polling HTTP status, task status, and target HTTP status are separate layers. In particular, HTTP 200 from polling is not a successful page fetch.
 
 Contract sources: `app/api/v1/endpoints/`, `app/schemas/`, `app/api/v1/dependencies.py`, and the deployed OpenAPI schema. Historical audits and unused request models are not the current API contract.
+
+Per-request headers, cookies, User-Agent and the domain-policy switches: see [REQUEST_OPTIONS.md](REQUEST_OPTIONS.md).

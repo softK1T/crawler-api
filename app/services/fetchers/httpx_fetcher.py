@@ -33,6 +33,9 @@ class HttpxFetcher:
         max_redirects: int = 10,
     ) -> FetchResult:
         start = time.perf_counter()
+        from app.services.fetchers.request_options import current_request_options, headers_for_hop
+
+        request_options = current_request_options()
 
         # 1. Validate initial URL.
         from app.core.url_guard import URLGuardError, validate_url_async
@@ -65,7 +68,11 @@ class HttpxFetcher:
 
                 # Stream to capture raw transport bytes before httpx
                 # applies content decoding (ADR-018).
-                async with client.stream("GET", current_url, headers=headers or {}) as response:
+                async with client.stream(
+                    "GET",
+                    current_url,
+                    headers=headers_for_hop(headers, request_options, url, current_url),
+                ) as response:
                     from app.core.url_guard import MAX_BODY_BYTES, BodyTooLarge
 
                     chunks = bytearray()
