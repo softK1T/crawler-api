@@ -6,6 +6,7 @@ instead makes its next hop a new intercepted request. Service workers must be
 blocked on the context; WebSockets are disabled for the interview baseline.
 """
 
+import contextlib
 from typing import Any
 
 from app.core.url_guard import MAX_BODY_BYTES, BodyTooLarge, URLGuardError, validate_url_async
@@ -26,7 +27,10 @@ async def install_browser_guard(
             await validate_url_async(url)
         except URLGuardError:
             blocked.append(url)
-            await route.abort("blockedbyclient")
+            await _abort_quietly(route, "blockedbyclient")
+            return
+        except Exception:
+            await _abort_quietly(route, "failed")
             return
         try:
             response = await route.fetch(
@@ -43,11 +47,17 @@ async def install_browser_guard(
             await route.fulfill(response=response, body=body)
         except BodyTooLarge:
             blocked.append(url)
-            await route.abort("blockedbyclient")
+            await _abort_quietly(route, "blockedbyclient")
+        except Exception:
+            # A closing context or a dead proxy must fail this request only. An escaping
+            # error surfaces in an unrelated later Playwright call, and an unanswered
+            # route stalls the navigation until its timeout.
+            await _abort_quietly(route, "failed")
         finally:
             # APIRequestContext otherwise retains response buffers until context close.
             if "response" in locals():
-                await response.dispose()
+                with contextlib.suppress(Exception):
+                    await response.dispose()
 
     await context.route("**/*", handle)
 
@@ -97,3 +107,9 @@ async def prepare_browser_context(context: Any, request_options: Any, url: str) 
     return await install_browser_guard(
         context, navigation_headers=dict(request_options.headers), site_url=url
     )
+
+
+async def _abort_quietly(route: Any, reason: str) -> None:
+    """Abort a route whose page or context may already be gone."""
+    with contextlib.suppress(Exception):
+        await route.abort(reason)

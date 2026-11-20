@@ -61,6 +61,17 @@ RUN curl --fail --location --retry 3 --retry-delay 5 --connect-timeout 30 --max-
     && chown -R crawler:crawler /home/crawler/.cache/camoufox \
     && rm /tmp/camoufox.tar.gz
 
+# GeoIP data for Camoufox geoip=True (aligns timezone and locale with the proxy exit country).
+# Camoufox downloads it lazily into its package directory, which the runtime user cannot write.
+# A failed download is not fatal: the fetcher then runs Camoufox without geoip.
+RUN GEOIP=/usr/local/lib/python3.12/site-packages/camoufox/GeoLite2-City.mmdb; \
+    ( curl --fail --location --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 600 \
+        --output "$GEOIP" \
+        https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-City.mmdb \
+      && python -c 'import sys, maxminddb; db = maxminddb.open_database(sys.argv[1]); kind = db.metadata().database_type; db.close(); "City" in kind or sys.exit("Unexpected GeoIP database: " + kind); print("GeoIP database installed:", kind)' "$GEOIP" \
+      && chmod a+r "$GEOIP" ) \
+    || { rm -f "$GEOIP"; echo "WARNING: GeoIP database not installed; Camoufox will run without geoip" >&2; }
+
 COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
