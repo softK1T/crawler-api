@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Browsers need room for a cold start and for an interstitial challenge to finish.
+_ENGINE_TIMEOUT_S: dict[str, float] = {"playwright": 60.0, "camoufox": 60.0}
+
 
 # ── FetchResult dataclass ────────────────────────────────────────────────────
 
@@ -523,7 +526,7 @@ async def fetch_with_retry(
                 url,
                 proxy=proxy,
                 headers=merged_headers,
-                timeout_s=30.0,
+                timeout_s=_ENGINE_TIMEOUT_S.get(tier_def.engine, 30.0),
             )
             result.retries_used = total_attempts - 1
             result.trace_id = trace_id

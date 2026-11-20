@@ -21,6 +21,7 @@ from uuid import UUID
 
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
+from app.services.fetchers.challenge import NavigationTracker, settle_page
 from app.services.fetchers.playwright_fetcher import _split_proxy_credentials
 from app.services.fetchers.request_options import current_request_options
 
@@ -170,15 +171,23 @@ class CamoufoxFetcher:
             # Align TZ/locale to the exit-IP country when the GeoIP database is installed.
             "geoip": proxy_country is not None and _geoip_database_ready(camoufox),
         }
+        from app.services.fetchers.browser_guard import native_transport_enabled
+
+        native = native_transport_enabled(bool(proxy_url))
         if proxy_url:
             kwargs["proxy"] = _split_proxy_credentials(proxy_url)
+        if native:
+            # Firefox otherwise sends loopback addresses around the proxy.
+            kwargs["firefox_user_prefs"] = {"network.proxy.allow_hijacking_localhost": True}
 
         try:
             async with _new_browser(camoufox, **kwargs) as browser:
                 context = await browser.new_context(service_workers="block", accept_downloads=False)
                 from app.services.fetchers.browser_guard import prepare_browser_context
 
-                await prepare_browser_context(context, current_request_options(), url)
+                await prepare_browser_context(
+                    context, current_request_options(), url, native_transport=native
+                )
                 page = await context.new_page()
 
                 if headers:
@@ -194,16 +203,21 @@ class CamoufoxFetcher:
                     if extra:
                         await page.set_extra_http_headers(extra)
 
+                tracker = NavigationTracker(page)
                 response = await page.goto(
                     url,
                     timeout=timeout_s * 1000,
                     wait_until="domcontentloaded",
                 )
                 await page.wait_for_timeout(500)
+                body = await settle_page(
+                    page, budget_s=timeout_s - (time.perf_counter() - start) - 5.0
+                )
+                # A passed challenge reloads the page: describe the document now shown.
+                response = tracker.response or response
                 final_url: str = page.url
                 status_code: int = getattr(response, "status", 200) if response else 200
 
-                body = (await page.content()).encode("utf-8")
                 from app.services.fetchers.browser_guard import check_browser_body
 
                 check_browser_body(body)

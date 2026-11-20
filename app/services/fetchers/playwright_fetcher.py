@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
+from app.services.fetchers.challenge import NavigationTracker, settle_page
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,13 @@ class PlaywrightFetcher:
                 proxy_config = _split_proxy_credentials(proxy_url)
             proxy_id = getattr(proxy, "id", None)
 
+        from app.services.fetchers.browser_guard import native_transport_enabled
+
+        native = native_transport_enabled(proxy_config is not None)
+        if native and proxy_config is not None:
+            # Chromium otherwise sends loopback addresses around the proxy.
+            proxy_config["bypass"] = "<-loopback>"
+
         if self._pool is None:
             raise FetchError(
                 "BrowserPool not available — ensure worker startup completed successfully"
@@ -100,20 +108,25 @@ class PlaywrightFetcher:
 
                 from app.services.fetchers.browser_guard import prepare_browser_context
 
-                await prepare_browser_context(ctx, request_options, url)
+                await prepare_browser_context(ctx, request_options, url, native_transport=native)
                 if headers:
                     await page.set_extra_http_headers(without_user_agent(headers, request_options))
 
+                tracker = NavigationTracker(page)
                 response = await page.goto(
                     url,
                     timeout=timeout_s * 1000,
                     wait_until="domcontentloaded",
                 )
                 await page.wait_for_timeout(500)
+                body = await settle_page(
+                    page, budget_s=timeout_s - (time.perf_counter() - start) - 5.0
+                )
+                # A passed challenge reloads the page: describe the document now shown.
+                response = tracker.response or response
                 final_url = page.url
                 status_code = response.status if response else 200
 
-                body = (await page.content()).encode("utf-8")
                 from app.services.fetchers.browser_guard import check_browser_body
 
                 check_browser_body(body)
