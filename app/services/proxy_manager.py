@@ -157,6 +157,10 @@ class ProxyManager:
         except Exception:
             return set()
 
+    async def has_site_blocks(self, domain: str, engine: str | None) -> bool:
+        """True when *domain* has recently refused at least one proxy for *engine*."""
+        return bool(await self._site_blocked_ids(domain, engine))
+
     async def get_proxy(
         self,
         *,

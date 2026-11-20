@@ -148,7 +148,14 @@ class NextEngineTests(unittest.TestCase):
                 return None
             return SimpleNamespace(id=uuid.uuid4(), country="PL")
 
-        proxies: Any = SimpleNamespace(get_proxy=get_proxy, report_result=mock.AsyncMock())
+        async def has_site_blocks(domain: str, engine: str) -> bool:
+            return engine == "curl_cffi"
+
+        proxies: Any = SimpleNamespace(
+            get_proxy=get_proxy,
+            has_site_blocks=has_site_blocks,
+            report_result=mock.AsyncMock(),
+        )
         with (
             mock.patch("app.services.fetchers.get_fetcher", get_fetcher),
             mock.patch("asyncio.sleep", mock.AsyncMock()),
@@ -164,6 +171,42 @@ class NextEngineTests(unittest.TestCase):
             )
         self.assertEqual(engines, ["playwright"])
         self.assertEqual(result.engine, "playwright")
+
+    def test_empty_pool_without_site_blocks_fails_at_once(self) -> None:
+        from app.core.errors import ProxyPoolUnavailableError
+        from app.services.fetchers.base import fetch_with_retry
+
+        calls: list[str] = []
+
+        async def get_proxy(**kwargs: Any) -> Any:
+            calls.append(kwargs["engine"])
+            return None
+
+        async def has_site_blocks(domain: str, engine: str) -> bool:
+            return False
+
+        proxies: Any = SimpleNamespace(get_proxy=get_proxy, has_site_blocks=has_site_blocks)
+        fetcher: Any = SimpleNamespace(_engine_name="curl_cffi", fetch=mock.AsyncMock())
+        with (
+            mock.patch("app.services.fetchers.get_fetcher", lambda engine, **kwargs: fetcher),
+            self.assertRaises(ProxyPoolUnavailableError),
+        ):
+            asyncio.run(
+                fetch_with_retry(
+                    fetcher,
+                    "https://www.example.pl/",
+                    proxy_manager=proxies,
+                    requested_engine="curl_cffi",
+                )
+            )
+        self.assertEqual(calls, ["curl_cffi"])
+        fetcher.fetch.assert_not_awaited()
+
+    def test_manager_reports_site_blocks_per_engine(self) -> None:
+        manager = _manager([_Proxy("p-1")])
+        _report(manager, "cloudflare", "curl_cffi")
+        self.assertTrue(asyncio.run(manager.has_site_blocks("example.pl", "curl_cffi")))
+        self.assertFalse(asyncio.run(manager.has_site_blocks("example.pl", "camoufox")))
 
 
 if __name__ == "__main__":

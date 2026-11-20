@@ -250,6 +250,21 @@ class _EscalationState:
     iterations_at_tier: int = 0
 
 
+async def _engine_refused(proxy_manager: object, domain: str, engine: str) -> bool:
+    """True when the site has recently refused proxies for this engine.
+
+    Only then is another engine worth trying without a proxy pick: an empty or
+    cooling pool is empty for every engine and must fail at once.
+    """
+    check = getattr(proxy_manager, "has_site_blocks", None)
+    if check is None:
+        return False
+    try:
+        return (await check(domain, engine)) is True
+    except Exception:
+        return False
+
+
 async def fetch_with_retry(
     fetcher: FetcherProtocol,
     url: str,
@@ -482,13 +497,13 @@ async def fetch_with_retry(
                 )
 
                 if proxy is None:
-                    # Nothing usable for this engine on a fresh tier (refused by the site,
-                    # cooling down or empty): another engine may still have proxies.
-                    skip_to = (
-                        None
-                        if failed_proxy_ids
-                        else next_distinct_tier(esc.tier, enable_premium=enable_premium)
-                    )
+                    # The site has refused this engine's proxies: another engine may still
+                    # get through. A pool that is simply empty fails at once below.
+                    skip_to = None
+                    if not failed_proxy_ids and await _engine_refused(
+                        proxy_manager, domain, tier_def.engine
+                    ):
+                        skip_to = next_distinct_tier(esc.tier, enable_premium=enable_premium)
                     if skip_to is not None:
                         outcome = "proxy_pool_empty"
                         error_message = "no usable proxy for this engine; trying the next tier"
