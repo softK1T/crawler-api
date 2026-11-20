@@ -30,12 +30,24 @@ async def create_crawl_batch(
     if request.callback_url and not settings.enable_callbacks:
         raise HTTPException(status_code=422, detail="Callbacks are disabled")
 
-    from app.services.fetchers.request_options import RequestOptions
+    from app.services.fetchers.request_options import (
+        RequestOptions,
+        carries_credentials,
+        spans_multiple_sites,
+    )
 
     try:
-        RequestOptions.from_options(dict(request.options or {}))
+        request_options = RequestOptions.from_options(dict(request.options or {}))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    # One cookie set must never be sent to several unrelated sites.
+    if carries_credentials(request_options) and spans_multiple_sites(
+        str(batch_url) for batch_url in request.urls
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="cookies and Authorization require all batch URLs on one registered domain",
+        )
 
     # Each URL consumes per-key admission, not just one token per batch.
     limiter = req.app.state.rate_limiter

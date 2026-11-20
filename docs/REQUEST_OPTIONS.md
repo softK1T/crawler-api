@@ -39,8 +39,11 @@ value the installed curl_cffi does not know fails the job.
   `Accept-Encoding` and `Proxy-*` cannot be set. `Cookie` and `User-Agent` are
   accepted only through their dedicated fields.
 - Values must be printable ASCII; at most 40 headers, 150 cookies and 32 KiB.
+- A batch that carries cookies or `Authorization` must keep all URLs on one
+  registered domain; otherwise it is rejected with 422.
+- `use_policy` must be a JSON boolean.
 - Values are never logged and are absent from `request_log`. They stay in the
-  Redis job payload until the worker picks the job up. WARC stores response
+  Redis job payload until the job finishes. WARC stores response
   records only, but an archived page can still contain account data.
 
 Cookies are credentials. Use sessions you are allowed to use.

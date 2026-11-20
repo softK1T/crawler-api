@@ -40,6 +40,19 @@ async def create_fetch(
     if body.callback_url and not settings.enable_callbacks:
         raise HTTPException(status_code=422, detail="Callbacks are disabled")
 
+    # Reject invalid per-request options before any rate-limit token is spent.
+    from app.services.fetchers.request_options import RequestOptions
+
+    request_level = dict(body.options)
+    for option_name in ("headers", "cookies", "user_agent", "impersonate", "use_policy"):
+        option_value = getattr(body, option_name)
+        if option_value is not None:
+            request_level[option_name] = option_value
+    try:
+        RequestOptions.from_options(request_level)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
     # Resolve trace_id from correlation ID or OTel span.
     trace_id = req.headers.get("X-Correlation-ID")
     try:
@@ -131,12 +144,6 @@ async def create_fetch(
         option_value = getattr(body, option_name)
         if option_value is not None:
             merged_options[option_name] = option_value
-    from app.services.fetchers.request_options import RequestOptions
-
-    try:
-        RequestOptions.from_options(merged_options)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
 
     # 5. Enqueue.
     job_id = str(uuid4())

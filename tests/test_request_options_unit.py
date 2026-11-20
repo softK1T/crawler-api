@@ -3,6 +3,7 @@
 import asyncio
 import os
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/testdb")
@@ -129,6 +130,73 @@ class UsePolicyFieldTests(unittest.TestCase):
             {"url": "https://www.example.com/", "use_policy": False}
         )
         self.assertIs(disabled.use_policy, False)
+
+
+class CredentialScopeTests(unittest.TestCase):
+    def test_carries_credentials(self) -> None:
+        from app.services.fetchers.request_options import carries_credentials
+
+        with_cookies = RequestOptions.from_options({"cookies": {"a": "1"}})
+        with_auth = RequestOptions.from_options({"headers": {"authorization": "x"}})
+        plain = RequestOptions.from_options({"headers": {"Referer": "x"}})
+        self.assertTrue(carries_credentials(with_cookies))
+        self.assertTrue(carries_credentials(with_auth))
+        self.assertFalse(carries_credentials(plain))
+
+    def test_spans_multiple_sites(self) -> None:
+        from app.services.fetchers.request_options import spans_multiple_sites
+
+        same = ["https://www.example.pl/a", "https://m.example.pl/b"]
+        mixed = ["https://example.pl/", "https://example.com/"]
+        self.assertFalse(spans_multiple_sites(same))
+        self.assertTrue(spans_multiple_sites(mixed))
+        self.assertFalse(spans_multiple_sites([]))
+
+    def test_use_policy_must_be_boolean(self) -> None:
+        RequestOptions.from_options({"use_policy": False})
+        with self.assertRaises(ValueError):
+            RequestOptions.from_options({"use_policy": "false"})
+
+
+class CurlIdentityTests(unittest.TestCase):
+    def test_profile_and_user_agent_selection(self) -> None:
+        from app.services.fetchers.request_options import curl_identity
+
+        custom_ua = RequestOptions.from_options({"user_agent": "UA/1.0"})
+        profile = RequestOptions.from_options({"impersonate": "chrome124"})
+        both = RequestOptions.from_options({"impersonate": "chrome124", "user_agent": "UA/1.0"})
+        self.assertEqual(curl_identity(None, "chrome120", "UA120"), ("chrome120", "UA120"))
+        self.assertEqual(curl_identity(custom_ua, "chrome120", "UA120"), ("chrome120", "UA/1.0"))
+        self.assertEqual(curl_identity(profile, "chrome120", "UA120"), ("chrome124", None))
+        self.assertEqual(curl_identity(both, "chrome120", "UA120"), ("chrome124", "UA/1.0"))
+
+
+class NavigationHeaderTests(unittest.TestCase):
+    @staticmethod
+    def _request(url: str, *, navigation: bool = True, top: bool = True) -> SimpleNamespace:
+        return SimpleNamespace(
+            url=url,
+            headers={"accept": "*/*", "referer": "old"},
+            frame=SimpleNamespace(parent_frame=None if top else object()),
+            is_navigation_request=lambda: navigation,
+        )
+
+    def test_headers_reach_only_same_site_top_level_navigations(self) -> None:
+        from app.services.fetchers.browser_guard import _navigation_kwargs
+
+        custom = {"Referer": "https://www.google.com/"}
+        site = "https://www.example.pl/"
+        merged = _navigation_kwargs(self._request("https://example.pl/x"), custom, site)
+        self.assertEqual(
+            merged, {"headers": {"accept": "*/*", "referer": "https://www.google.com/"}}
+        )
+        subresource = self._request("https://example.pl/x", navigation=False)
+        iframe = self._request("https://example.pl/x", top=False)
+        foreign = self._request("https://other.com/x")
+        self.assertEqual(_navigation_kwargs(subresource, custom, site), {})
+        self.assertEqual(_navigation_kwargs(iframe, custom, site), {})
+        self.assertEqual(_navigation_kwargs(foreign, custom, site), {})
+        self.assertEqual(_navigation_kwargs(self._request("https://example.pl/x"), None, site), {})
 
 
 if __name__ == "__main__":

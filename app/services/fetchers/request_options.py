@@ -8,7 +8,7 @@ widening the FetcherProtocol signature; arq runs every job in its own task.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -117,6 +117,10 @@ class RequestOptions:
             if not user_agent.strip():
                 raise ValueError("user_agent must not be empty")
 
+        use_policy = options.get("use_policy")
+        if use_policy is not None and not isinstance(use_policy, bool):
+            raise ValueError("use_policy must be a boolean")
+
         impersonate = options.get("impersonate")
         if impersonate is not None and (
             not isinstance(impersonate, str) or not _IMPERSONATE.fullmatch(impersonate)
@@ -182,6 +186,33 @@ def without_user_agent(
     if options and options.user_agent:
         return {name: value for name, value in (base or {}).items() if name.lower() != "user-agent"}
     return dict(base or {})
+
+
+def carries_credentials(options: RequestOptions) -> bool:
+    """True when the options include cookies or an Authorization header."""
+    return bool(options.cookies) or any(
+        name.lower() in _SENSITIVE_HEADERS for name in options.headers
+    )
+
+
+def spans_multiple_sites(urls: Iterable[str]) -> bool:
+    """True when the URLs do not all share one registered domain."""
+    from app.services.policy_resolver import normalize_domain
+
+    return len({normalize_domain(urlsplit(url).hostname or url) for url in urls}) > 1
+
+
+def curl_identity(
+    options: RequestOptions | None, default_profile: str, default_user_agent: str
+) -> tuple[str, str | None]:
+    """TLS profile and pinned UA for curl_cffi.
+
+    A custom profile without an explicit UA pins none, so the default UA of
+    another browser version never rides on it.
+    """
+    profile = options.impersonate if options else None
+    user_agent = options.user_agent if options else None
+    return profile or default_profile, user_agent or (None if profile else default_user_agent)
 
 
 _current: ContextVar[RequestOptions | None] = ContextVar("crawler_request_options", default=None)

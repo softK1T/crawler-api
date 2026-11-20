@@ -69,15 +69,15 @@ class CurlFetcher:
         max_redirects: int = 10,
     ) -> FetchResult:
         start = time.perf_counter()
-        from app.services.fetchers.request_options import current_request_options, headers_for_hop
+        from app.services.fetchers.request_options import (
+            curl_identity,
+            current_request_options,
+            headers_for_hop,
+        )
 
         request_options = current_request_options()
-        custom_profile = request_options.impersonate if request_options else None
-        impersonation = custom_profile or IMPERSONATION
         # A custom TLS profile without an explicit UA must not carry the Chrome 120 UA.
-        pinned_ua = (request_options.user_agent if request_options else None) or (
-            None if custom_profile else CHROME_120_UA
-        )
+        impersonation, pinned_ua = curl_identity(request_options, IMPERSONATION, CHROME_120_UA)
 
         # 1. Validate initial URL (sync — ok in executor context).
         from app.core.url_guard import URLGuardError, validate_url_sync
