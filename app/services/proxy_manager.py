@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -27,6 +28,11 @@ _slog = get_logger("proxy")
 
 # Weight floor so 0.0-health proxies still get occasional traffic (canary testing).
 _WEIGHT_FLOOR = 0.01
+
+# How long a proxy stays excluded for the domain and engine a site refused it on.
+SITE_BLOCK_TTL_S = 600
+# Failures of the proxy itself; every other reason is a refusal by the target site.
+_TRANSPORT_REASONS = frozenset({"http_error", "timeout"})
 
 
 def _is_open_state(value: object) -> bool:
@@ -126,6 +132,35 @@ class ProxyManager:
 
     # ── Proxy selection ───────────────────────────────────────────────────────
 
+    # Site blocks (Redis): proxy refused by one domain for one engine
+
+    @staticmethod
+    def _site_block_key(domain: str, engine: str | None) -> str:
+        return f"proxy:blocked:{domain}:{engine or 'any'}"
+
+    async def _mark_site_blocked(self, proxy_id: UUID, domain: str, engine: str | None) -> None:
+        try:
+            key = self._site_block_key(domain, engine)
+            await self._redis.zadd(key, {str(proxy_id): time.time() + SITE_BLOCK_TTL_S})
+            await self._redis.expire(key, max(SITE_BLOCK_TTL_S, 1))
+        except Exception:
+            logger.warning("Site block mark failed for domain=%s", domain, exc_info=True)
+
+    async def _site_blocked_ids(self, domain: str, engine: str | None) -> set[str]:
+        """Proxy ids currently refused by *domain* for *engine*; empty if Redis fails."""
+        try:
+            key = self._site_block_key(domain, engine)
+            now = time.time()
+            await self._redis.zremrangebyscore(key, 0, now)
+            raw = await self._redis.zrangebyscore(key, now, "+inf")
+            return {item.decode() if isinstance(item, bytes) else str(item) for item in raw}
+        except Exception:
+            return set()
+
+    async def has_site_blocks(self, domain: str, engine: str | None) -> bool:
+        """True when *domain* has recently refused at least one proxy for *engine*."""
+        return bool(await self._site_blocked_ids(domain, engine))
+
     async def get_proxy(
         self,
         *,
@@ -138,6 +173,7 @@ class ProxyManager:
         country: str | None = None,
         city: str | None = None,
         proxy_type: str | None = None,
+        engine: str | None = None,
     ) -> Proxy | None:
         """Select a proxy by weighted health score.
 
@@ -151,6 +187,7 @@ class ProxyManager:
         country = country_code(country) if country is not None else None
         _excluded = exclude_ids or set()
         effective_pool = tenant_id or pool_id
+        site_blocked = await self._site_blocked_ids(domain, engine)
 
         if await self._is_circuit_open(domain):
             logger.info("Circuit breaker open for domain=%s — no proxy assigned", domain)
@@ -158,7 +195,11 @@ class ProxyManager:
 
         if sticky_key is not None:
             sticky_id = await self._get_sticky(domain, sticky_key)
-            if sticky_id is not None and sticky_id not in _excluded:
+            if (
+                sticky_id is not None
+                and sticky_id not in _excluded
+                and str(sticky_id) not in site_blocked
+            ):
                 async with self._db_factory() as db:
                     sticky_proxy = await db.get(Proxy, sticky_id)
                     if sticky_proxy is not None and candidate_matches(
@@ -189,6 +230,7 @@ class ProxyManager:
                 p
                 for p in all_proxies
                 if p.id not in _excluded
+                and str(p.id) not in site_blocked
                 and candidate_matches(
                     p,
                     pool_id=effective_pool,
@@ -230,7 +272,7 @@ class ProxyManager:
         """Record a proxy request outcome and update circuit breaker state."""
         from app.models.proxy import Proxy
         from app.models.proxy_event import ProxyEvent
-        from app.services.proxy_health import record_failure, record_success
+        from app.services.proxy_health import record_failure, record_site_block, record_success
 
         if success:
             await record_success(proxy_id, db)
@@ -245,7 +287,13 @@ class ProxyManager:
                 )
         else:
             reason_literal = reason if reason is not None else "http_error"
-            await record_failure(proxy_id, db, reason_literal)  # type: ignore[arg-type]
+            if reason_literal in _TRANSPORT_REASONS:
+                await record_failure(proxy_id, db, reason_literal)  # type: ignore[arg-type]
+            else:
+                # The site refused this proxy for this engine. The proxy still works for
+                # other sites and engines: no global cooldown, no health decay.
+                await record_site_block(proxy_id, db)
+                await self._mark_site_blocked(proxy_id, domain, engine)
             circuit_opened = await self._increment_circuit_breaker(domain)
             if circuit_opened:
                 db.add(

@@ -91,6 +91,24 @@ async def record_failure(
     )
 
 
+async def record_site_block(proxy_id: UUID, db: AsyncSession) -> None:
+    """Count a request that the target site refused, without penalising the proxy.
+
+    A block by one site says nothing about the proxy's health for other sites, so
+    health, consecutive failures and cooldown stay untouched.
+    """
+    await db.execute(
+        text("""
+            UPDATE proxies SET
+                total_errors = total_errors + 1,
+                total_requests = total_requests + 1,
+                updated_at = now()
+            WHERE id = :pid
+        """),
+        {"pid": proxy_id},
+    )
+
+
 def is_on_cooldown(proxy) -> bool:
     """Return True if the proxy's ``cooldown_until`` is set and in the future."""
     if proxy.cooldown_until is None:
