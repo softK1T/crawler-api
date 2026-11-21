@@ -52,3 +52,11 @@ class BatchRateLimitHitsTests(unittest.TestCase):
                 before = _hits(layer)
                 self.assertEqual(_rejected_batch(layer).status_code, 429)
                 self.assertEqual(_hits(layer) - before, 1.0)
+
+
+class BatchRetryAfterTests(unittest.TestCase):
+    def test_rejected_batch_says_when_to_retry(self) -> None:
+        for layer in ("app", "key", "domain"):
+            with self.subTest(layer=layer):
+                headers = _rejected_batch(layer).headers or {}
+                self.assertEqual(headers.get("Retry-After"), "1")

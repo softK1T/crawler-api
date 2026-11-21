@@ -56,7 +56,11 @@ async def create_crawl_batch(
     )
     if not quota["allowed"]:
         RATE_LIMIT_HITS_TOTAL.labels(layer=quota["layer"]).inc()
-        raise HTTPException(status_code=429, detail="Application quota exceeded")
+        raise HTTPException(
+            status_code=429,
+            detail="Application quota exceeded",
+            headers={"Retry-After": str(math.ceil(quota["retry_after_s"]))},
+        )
     admission = await limiter.check_key(
         api_key.prefix, limit=settings.key_rate_limit_rpm, cost=len(request.urls)
     )
