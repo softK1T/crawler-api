@@ -39,8 +39,8 @@ def _page(state: dict[str, Any]) -> str:
 
 
 def _rows(*ads: dict[str, Any]) -> list[olx_parser.Listing]:
-    page = _page({"listing": {"listing": {"ads": ads}}})
-    return olx_parser.parse_listings(page, collected_at=COLLECTED)
+    page = _page({"listing": {"listing": {"ads": ads, "totalPages": 1}}})
+    return olx_parser.parse_listings(page, collected_at=COLLECTED)[0]
 
 
 class ParseListingsTests(unittest.TestCase):
@@ -93,6 +93,11 @@ class ParseListingsTests(unittest.TestCase):
 
     def test_listing_page_with_no_ads_gives_no_rows(self) -> None:
         self.assertEqual(_rows(), [])
+
+    def test_page_count_comes_with_the_rows(self) -> None:
+        page = _page({"listing": {"listing": {"ads": [_ad()], "totalPages": 25}}})
+        rows, pages = olx_parser.parse_listings(page, collected_at=COLLECTED)
+        self.assertEqual((len(rows), pages), (1, 25))
 
     def test_page_without_listings_is_an_error(self) -> None:
         for page in ("<title>Access denied</title>", _page({"home": {}})):

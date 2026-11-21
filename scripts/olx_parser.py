@@ -32,17 +32,18 @@ class Listing(BaseModel):
     collected_at: datetime
 
 
-def parse_listings(html: str, *, collected_at: datetime) -> list[Listing]:
-    """Every ad on the page in page order, repeats included."""
+def parse_listings(html: str, *, collected_at: datetime) -> tuple[list[Listing], int]:
+    """Every ad on the page in page order, repeats included, and how many pages the listing has."""
     try:
         # The page carries its data as JSON inside a JavaScript string literal.
         start = html.index('"', html.index("window.__PRERENDERED_STATE__"))
         literal, _ = json.JSONDecoder().raw_decode(html, start)
-        ads = json.loads(literal)["listing"]["listing"]["ads"]
+        listing = json.loads(literal)["listing"]["listing"]
+        ads, pages = listing["ads"], listing["totalPages"]
     except (ValueError, KeyError) as exc:
         # A block page has no state at all; the home page and an ad page have no listing in it.
         raise ValueError("no listing data on the page") from exc
-    return [_listing(ad, collected_at) for ad in ads]
+    return [_listing(ad, collected_at) for ad in ads], pages
 
 
 def _listing(ad: dict[str, Any], collected_at: datetime) -> Listing:
