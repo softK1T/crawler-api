@@ -127,9 +127,9 @@ def start_worker_metrics_server(settings) -> None:
 
 
 async def observe_queue_depth(redis_client, queue_name: str = "arq:crawler") -> None:
-    """Read arq queue depth from Redis and set QUEUE_DEPTH gauge."""
+    """Set QUEUE_DEPTH from arq's queue, a sorted set that keeps a job until it finishes."""
     try:
-        depth = await redis_client.llen(f"arq:queue:{queue_name}")
+        depth = await redis_client.zcard(queue_name)
         QUEUE_DEPTH.labels(queue_name=queue_name).set(depth or 0)
     except Exception:
         logger.debug("Failed to observe queue depth", exc_info=True)
