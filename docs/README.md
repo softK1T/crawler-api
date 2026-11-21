@@ -21,7 +21,3 @@
 The guides above describe canonical `docker-compose.yml` on `master`. Read them in this order for a first installation: deployment, usage, API. Commands assume the repository root and Compose project `crawler-current`, unless explicitly stated otherwise.
 
 The deployed revision's code and `/openapi.json` define the API contract. A documentation change or an added smoke test is not evidence that a deployment or CI run succeeded. Check results for the exact commit.
-
-## Historical material
-
-[Architecture decisions](decisions/) and [project history](PROJECT-HISTORY.md) explain past decisions, not current runtime guarantees. [Development-method notes](AI-ASSISTED-DEVELOPMENT.md) are background material, not an installation requirement.

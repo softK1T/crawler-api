@@ -44,7 +44,7 @@ docs/decisions/   ADRs
 ## Rules for you (Claude Code)
 - Work autonomously. Do NOT ask the user questions. If a decision is ambiguous,
   pick the option that is simpler and cheaper to run, and record it in
-  docs/decisions/ as an ADR with the alternatives you rejected.
+  docs/DESIGN.md with the alternatives you rejected.
 - Read the actual files before editing. Never assume file contents.
 - Run `ruff check --fix`, `ruff format`, `mypy app/` after each stage.
   Fix everything you break.

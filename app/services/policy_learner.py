@@ -4,7 +4,7 @@ Called after every fetch_with_retry attempt in fetch_task.  Fully async,
 no side-effects on FetchResult.  Uses optimistic UPDATE with SELECT refresh
 so concurrent workers converge correctly without advisory locks.
 
-Design: see docs/decisions/ADR-019-escalation-ladder.md §Learning state.
+Design: see "The escalation ladder" in docs/DESIGN.md.
 """
 
 from __future__ import annotations
