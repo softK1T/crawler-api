@@ -17,7 +17,7 @@ The architecture page says what the parts are. This page says why they are built
 - **Decision.** HTTPX, curl_cffi, Playwright (Chromium) and Camoufox (Firefox) implement one `fetch()` protocol and return one `FetchResult`. One loop, `fetch_with_retry`, owns proxy choice, health reports, backoff and escalation. One function, `detect_block_reason`, classifies blocks for every engine.
 - **Why.** Separate crawlers per engine had drifted apart in error handling, block detection and URL checks.
 - **Turned down.** Block detection inside each engine.
-- **Limit.** Only high-confidence block pages are flagged: 429, Cloudflare challenge markers, CAPTCHA widgets, IP-ban and WAF texts, and 401, 403, 407, 451. A 200 page that is an empty JavaScript shell counts as a success, which is why `scripts/benchmark.py` checks each body for marker text.
+- **Limit.** Only high-confidence block pages are flagged: 429, Cloudflare challenge markers, CAPTCHA widgets, IP-ban and WAF texts, and 403, 407, 451. A bare 401 is returned as the site's answer. A 200 page that is an empty JavaScript shell counts as a success, which is why `scripts/benchmark.py` checks each body for marker text.
 - **Code.** `app/services/fetchers/`, `app/services/block_detector.py`
 
 ## The escalation ladder
