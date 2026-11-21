@@ -70,11 +70,12 @@ def detect_block_reason(
         return BlockReason.RATE_LIMITED
 
     # cf-ray/server:cloudflare appear on EVERY Cloudflare-fronted response,
-    # including clean 200s — only a non-2xx plus those headers is a block.
+    # including clean 200s and the site's own 404 or 5xx, so they mark a block
+    # only together with 403, the status Cloudflare blocks and challenges with.
     # Body patterns (cf-chl-, "cloudflare ray id", challenge text) are
     # challenge-page markers and match on any status.
     if (
-        (status_code >= 400)
+        (status_code == 403)
         and (
             "cf-ray" in normalized_headers
             or "cloudflare" in normalized_headers.get("server", "").lower()
