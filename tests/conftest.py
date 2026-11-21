@@ -65,8 +65,6 @@ async def db_session(_postgres_dsn: str) -> AsyncGenerator:
         import app.models.api_key
         import app.models.application
         import app.models.domain_policy
-        import app.models.legacy_crawl_result
-        import app.models.legacy_project
         import app.models.proxy
         import app.models.proxy_event
         import app.models.proxy_pool
