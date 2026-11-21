@@ -97,8 +97,9 @@ The architecture page says what the parts are. This page says why they are built
 
 - **Decision.** `/healthz` is liveness. `/readyz` answers ready only when PostgreSQL, Redis, a recent worker heartbeat with a working Chromium and, when required, Camoufox, and S3 when WARC is on, all pass.
 - **Why.** An API that accepts jobs no worker can run is not ready.
-- **Limit.** `/metrics` is served by the API process and shows what that process counts. Counters kept in the worker, such as blocks and attempts per tier, are not exported.
-- **Code.** `app/api/v1/endpoints/health.py`, `app/core/observability.py`
+- **Turned down.** Prometheus multiprocess mode, which needs a directory shared by the API and worker containers, and relaying counters through Redis: a second scrape target is simpler.
+- **Limit.** Each process exports only its own counters. `/metrics` on the API shows API latency, rate-limit denials and queue depth. Blocks, attempts per tier, WARC bytes and proxy cost are counted in the worker, which serves them on its own port (`WORKER_METRICS_PORT`, 9464 in Compose, host loopback only). A Prometheus scraper reads both.
+- **Code.** `app/api/v1/endpoints/health.py`, `app/core/observability.py`, `app/worker/tasks/fetch_task.py`
 
 ## One host, one image
 

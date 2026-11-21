@@ -11,7 +11,7 @@
 | Policies and proxy pools | Global configuration | Restrict administration to trusted operators |
 | Archives | Queries lack application filtering | Grant `archive` only to trusted clients; fix ownership before untrusted multi-tenancy |
 | Local S3 | Dedicated server, shared administrative credential pair | Protect its secret volume; introduce scoped IAM before sharing access |
-| Diagnostics/docs | No API-key dependency | Restrict health, metrics, and documentation when exposing the API |
+| Diagnostics/docs | No API-key dependency | Restrict health, metrics (API and worker port), and documentation when exposing the API |
 
 `admin` does not implicitly grant other scopes. Application deactivation is not a substitute for key revocation. Treat host/Docker access and backup files as privileged; shell variables do not isolate credentials on a shared host.
 

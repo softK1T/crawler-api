@@ -112,6 +112,7 @@ class Settings(BaseSettings):
     service_name: str = "crawler-api"
     service_version: str = "0.1.0"
     metrics_path: str = "/metrics"
+    worker_metrics_port: int = 0  # 0 = the worker serves no metrics endpoint
 
     @property
     def api_keys(self) -> list[str]:

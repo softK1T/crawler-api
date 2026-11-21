@@ -36,7 +36,7 @@ curl --fail-with-body http://127.0.0.1:8000/readyz
 
 The canonical stack should report `status: ready` and `s3: ok`. `/healthz` only checks API process liveness. Worker health uses arq, not an API HTTP request. Browser capabilities come from a short-lived worker heartbeat. S3 readiness makes an authenticated bucket request; it does not prove arbitrary writes or a complete restore.
 
-The API binds to `127.0.0.1:8000`, the S3 console to `127.0.0.1:9001`; S3 port 9000 is not published. Use SSH tunnelling or a secured reverse proxy for remote access. See [configuration](CONFIGURATION.md) to change host ports.
+The API binds to `127.0.0.1:8000`, the worker metrics endpoint to `127.0.0.1:9464`, the S3 console to `127.0.0.1:9001`; S3 port 9000 is not published. Use SSH tunnelling or a secured reverse proxy for remote access. See [configuration](CONFIGURATION.md) to change host ports.
 
 ## Update an existing stack
 

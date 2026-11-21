@@ -12,6 +12,7 @@ from prometheus_client import (
     Gauge,
     Histogram,
     generate_latest,
+    start_http_server,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,12 @@ def get_metrics_response() -> None:
     if not settings.enable_metrics:
         return Response(content="", media_type=CONTENT_TYPE_LATEST)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+def start_worker_metrics_server(settings) -> None:
+    """Serve the worker's registry over HTTP: the API's /metrics only sees its own process."""
+    if settings.enable_metrics and settings.worker_metrics_port:
+        start_http_server(settings.worker_metrics_port)
 
 
 async def observe_queue_depth(redis_client, queue_name: str = "arq:crawler") -> None:
