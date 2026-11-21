@@ -81,11 +81,6 @@ class JobService:
         )
         await arq_redis.aclose()
 
-        # Observe queue depth.
-        from app.core.observability import observe_queue_depth
-
-        await observe_queue_depth(self._redis)
-
         logger.info(
             "job_enqueued",
             extra={

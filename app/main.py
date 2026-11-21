@@ -100,11 +100,14 @@ app.include_router(api_router)
 
 
 # ── Prometheus metrics endpoint ──────────────────────────────────────────────
-from app.core.observability import get_metrics_response  # noqa: E402
+from app.core.observability import get_metrics_response, observe_queue_depth  # noqa: E402
 
 
 @app.get(settings.metrics_path)
 async def metrics():
+    redis_client = getattr(app.state, "redis", None)
+    if redis_client is not None:
+        await observe_queue_depth(redis_client)
     return get_metrics_response()
 
 
