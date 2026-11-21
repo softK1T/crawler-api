@@ -54,6 +54,56 @@ Run commands sequentially and stop on failure. Only `api` builds the shared appl
 
 For an existing installation, follow the [update procedure](docs/runbook.md#update-an-existing-stack), not the fresh-install recipe. Never change its Compose project name or delete its volumes to repair a startup error.
 
+## Demo
+
+Three commands on the running stack. They use the bootstrap key that startup created; the first one needs host `jq`.
+
+Fetch one page and wait for the result:
+
+```bash
+API_KEY=$(docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/stack_runtime.py key)
+curl -sS --fail-with-body http://127.0.0.1:8000/v1/fetch \
+  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.org/","mode":"static","use_proxy":false,"options":{"sync":true}}' \
+  | jq '{status, engine: .result.engine, status_code: .result.status_code, blocked: .result.blocked}'
+```
+
+```json
+{
+  "status": "completed",
+  "engine": "httpx",
+  "status_code": 200,
+  "blocked": false
+}
+```
+
+Collect three pages of a live OLX listing into one row per ad:
+
+```bash
+docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/olx_dataset.py https://www.olx.pl/elektronika/telefony/ --pages 3 --no-proxy > phones.jsonl
+```
+
+The rows land in `phones.jsonl`; progress and a quality report go to the terminal. A run on 2026-11-21 printed:
+
+```text
+https://www.olx.pl/elektronika/telefony/?page=1 ok
+https://www.olx.pl/elektronika/telefony/?page=2 ok
+https://www.olx.pl/elektronika/telefony/?page=3 ok
+ads seen 156, unique 154, repeats dropped 2
+price: empty in 6 of 154 (4%)
+currency: empty in 6 of 154 (4%)
+negotiable: empty in 6 of 154 (4%)
+without a price: free 0, exchange 6, not given 0
+```
+
+Compare the four fetch modes on public practice sites. Per mode it prints how many pages came back with the expected content, the latency and the engine that delivered them. The default run makes 84 fetches and took about 20 minutes in a test run without a proxy; `--runs 1` makes 28:
+
+```bash
+docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/benchmark.py --no-proxy
+```
+
+The [usage guide](docs/USER_GUIDE.md) explains each step.
+
 ## Important boundaries
 
 WARC/local S3 are enabled. Provider sync, premium proxy tiers, callbacks, and tracing are disabled by default. Fetch completion is not a guarantee of valid target content. Archive access and administration are not isolated by application; grant these scopes only to trusted operators. This loopback stack is not a completed public-production security audit.
