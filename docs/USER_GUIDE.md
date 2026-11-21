@@ -92,6 +92,24 @@ curl --fail-with-body "$BASE/batches/" \
 
 Read `GET /batches/{batch_id}/status` and `/results` with the same application's key. Default admission allows up to 20 URLs; the schema caps the list at 100. Batch completion/success counts do not replace inspecting each job and page. Enqueueing is not an all-or-nothing transaction, and batch admission is not per-page pacing.
 
+## 6. Compare fetch modes
+
+`scripts/benchmark.py` sends every page in `scripts/data/benchmark_targets.txt` through each mode and prints two Markdown tables: one line per mode, then successes per target. It submits with `use_policy: false`, so earlier results do not move a mode's starting tier.
+
+```bash
+docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/benchmark.py --no-proxy
+```
+
+| Column | Meaning |
+|---|---|
+| OK | Jobs whose body contains the target's marker text, out of all jobs |
+| p50 s, p95 s | Job time (`completed_at` minus `created_at`) of successful jobs only |
+| Attempts/job | Mean attempts across the escalation ladder, failed jobs included |
+| Delivered by | Engine that produced the body of each successful job |
+| Failures | Block reason, error code, `http_<status>`, or `marker_missing` |
+
+Drop `--no-proxy` once the proxy pool has healthy proxies; with an empty pool every mode above `static` fails with `PROXY_POOL_EMPTY`. The default run submits 84 jobs to public practice sites under the bootstrap key's rate limits and takes several minutes; `--runs`, `--modes` and `--targets` narrow it. The numbers describe this host and its network at that moment, so quote only a run you made.
+
 ## Next tasks
 
 - Routing and real proxy acceptance: [Proxy candidates](PROXY_CANDIDATES.md).
