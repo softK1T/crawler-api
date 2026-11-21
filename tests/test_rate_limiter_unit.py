@@ -49,3 +49,49 @@ class KeyRateLimitSettingTests(unittest.TestCase):
             asyncio.run(create_fetch(body, req, api_key, mock.Mock()))
 
         self.assertEqual(redis.limits["rl:key:ck_test"], 7)
+
+
+def _check_all(layer: str | None) -> tuple[Any, mock.AsyncMock]:
+    """Run check_all with the given layer rejecting; return the result and the quota check."""
+    from app.services.rate_limiter import RateLimiter, _allowed, _denied
+
+    def check(name: str) -> mock.AsyncMock:
+        verdict = _denied if name == layer else _allowed
+        return mock.AsyncMock(return_value=verdict(limit=1, count=1, reset_at_ms=0, layer=name))
+
+    limiter = RateLimiter(None)
+    with (
+        mock.patch.object(limiter, "check_key", check("key")),
+        mock.patch.object(limiter, "check_domain", check("domain")),
+        mock.patch.object(limiter, "check_application", check("app")) as quota,
+    ):
+        result = asyncio.run(
+            limiter.check_all(
+                api_key_prefix="ck_test",
+                application_id=uuid.uuid4(),
+                domain="https://www.example.com/",
+                proxy_id=None,
+                key_rpm=60,
+                domain_rps=1.0,
+                monthly_quota=100,
+            )
+        )
+    return result, quota
+
+
+class QuotaChargedLastTests(unittest.TestCase):
+    def test_rejected_request_does_not_use_the_quota(self) -> None:
+        for layer in ("key", "domain"):
+            with self.subTest(layer=layer):
+                result, quota = _check_all(layer)
+                self.assertEqual((result["allowed"], result["layer"]), (False, layer))
+                quota.assert_not_awaited()
+
+    def test_allowed_request_uses_the_quota_once(self) -> None:
+        result, quota = _check_all(None)
+        self.assertTrue(result["allowed"])
+        quota.assert_awaited_once()
+
+    def test_quota_rejection_is_returned(self) -> None:
+        result, _quota = _check_all("app")
+        self.assertEqual((result["allowed"], result["layer"]), (False, "app"))
