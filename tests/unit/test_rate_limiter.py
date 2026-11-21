@@ -41,6 +41,7 @@ async def test_proxy_layer_skipped_when_none(limiter):
         application_id=__import__("uuid").uuid4(),
         domain="test.example.com",
         proxy_id=None,
+        key_rpm=60,
         domain_rps=10.0,
         monthly_quota=100_000,
     )
