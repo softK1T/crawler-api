@@ -57,7 +57,7 @@ def _observe_latency(started: float, status_code: int) -> None:
 async def _create_fetch(
     body: JobCreate, req: Request, api_key: ApiKey, db: AsyncSession
 ) -> JSONResponse:
-    if body.callback_url and not settings.enable_callbacks:
+    if body.callback_url and not (settings.enable_callbacks and settings.callback_hmac_secret):
         raise HTTPException(status_code=422, detail="Callbacks are disabled")
 
     # Reject invalid per-request options before any rate-limit token is spent.

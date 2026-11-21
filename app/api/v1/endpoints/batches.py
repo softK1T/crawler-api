@@ -27,7 +27,7 @@ async def create_crawl_batch(
         raise HTTPException(
             status_code=422, detail=f"At most {settings.max_batch_size} URLs per batch"
         )
-    if request.callback_url and not settings.enable_callbacks:
+    if request.callback_url and not (settings.enable_callbacks and settings.callback_hmac_secret):
         raise HTTPException(status_code=422, detail="Callbacks are disabled")
 
     from app.services.fetchers.request_options import (
