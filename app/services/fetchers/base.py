@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from uuid import UUID
 
+from app.core.url_guard import DNSResolutionError, URLGuardError
+
 if TYPE_CHECKING:
     from app.models.domain_policy import DomainPolicy
     from app.services.proxy_manager import ProxyManager
@@ -71,6 +73,16 @@ class FetchError(Exception):
 
 class WaitForError(FetchError):
     """The page loaded, but the ``wait_for`` selector was not found on it."""
+
+
+class UrlRejectedError(FetchError):
+    """The URL guard refused the URL by policy; no retry or other proxy changes that."""
+
+
+def guard_fetch_error(exc: URLGuardError) -> FetchError:
+    """Map a URL guard error: a failed DNS lookup stays retryable, the rest is final."""
+    kind = FetchError if isinstance(exc, DNSResolutionError) else UrlRejectedError
+    return kind(str(exc))
 
 
 # ── FetcherProtocol ───────────────────────────────────────────────────────────
@@ -662,9 +674,10 @@ async def fetch_with_retry(
             # would decay perfectly healthy proxies on every worker restart.
             raise
 
-        except WaitForError as exc:
+        except (WaitForError, UrlRejectedError) as exc:
             # The page loaded without the awaited element: the proxy did its job, and
             # another attempt would spend a full browser timeout on the same page.
+            # A URL refused by the guard was never requested, so no proxy is at fault.
             outcome = classify_fetch_error(exc)
             error_type = type(exc).__name__
             error_message = str(exc)

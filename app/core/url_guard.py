@@ -40,6 +40,10 @@ class URLGuardError(ValueError):
     """Raised for a URL that violates outbound policy. Callers map it to HTTP 422."""
 
 
+class DNSResolutionError(URLGuardError):
+    """The hostname did not resolve. Unlike a policy rejection, a retry can succeed."""
+
+
 class BodyTooLarge(ValueError):
     """Raised when a response body exceeds MAX_BODY_BYTES."""
 
@@ -99,7 +103,7 @@ def validate_url_sync(url: str) -> None:
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
-        raise URLGuardError(f"DNS resolution failed: {host}") from exc
+        raise DNSResolutionError(f"DNS resolution failed: {host}") from exc
     _check_resolved(host, list(infos))
 
 
@@ -114,4 +118,6 @@ async def validate_url_async(url: str) -> None:
     try:
         await async_validate_ssrf(url)
     except SSRFError as exc:
-        raise URLGuardError(str(exc)) from exc
+        # async_validate_ssrf chains the resolver's OSError only for a failed lookup.
+        kind = DNSResolutionError if isinstance(exc.__cause__, OSError) else URLGuardError
+        raise kind(str(exc)) from exc
