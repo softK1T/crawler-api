@@ -152,11 +152,15 @@ services:
   worker:
     <<: *app
     command: ["arq", "app.worker.arq_worker.WorkerSettings"]
-    environment: *app-env
+    environment:
+      <<: *app-env
+      WORKER_METRICS_PORT: "9464"
     volumes:
       - runtime-secrets:/run/crawler-secrets:ro
       - s3-secrets:/run/crawler-s3:ro
       - warc-spool:/var/lib/crawler/warc-spool
+    ports:
+      - "127.0.0.1:${WORKER_METRICS_PORT:-9464}:9464"
     depends_on:
       initialize:
         condition: service_completed_successfully

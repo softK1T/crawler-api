@@ -51,6 +51,7 @@ Run commands sequentially and stop on failure. Only `api` builds the shared appl
 - API: `http://127.0.0.1:8000`
 - Interactive reference: `/docs`; machine-readable contract: `/openapi.json`
 - S3 console: `http://127.0.0.1:9001`; S3 API stays inside Docker.
+- Metrics: `/metrics` on the API for the API process, `http://127.0.0.1:9464/metrics` for the worker process.
 
 For an existing installation, follow the [update procedure](docs/runbook.md#update-an-existing-stack), not the fresh-install recipe. Never change its Compose project name or delete its volumes to repair a startup error.
 

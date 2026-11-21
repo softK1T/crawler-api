@@ -204,11 +204,13 @@ Import creates inactive pending candidates. Enabling permits checks and future a
 | GET | `/v1/usage/applications/{application_id}` | `admin` | 200 | Selected application's usage with the same date filters |
 | GET | `/healthz` | Public | 200 | API process liveness |
 | GET | `/readyz` | Public | 200 or 503 | Dependency/browser checks and `ready` / `not_ready` |
-| GET | `/metrics` | Public | 200 | Prometheus output; path configurable through `METRICS_PATH` |
+| GET | `/metrics` | Public | 200 | Prometheus output of the API process; path configurable through `METRICS_PATH` |
 | GET | `/docs` | Public | 200 | Swagger UI |
 | GET | `/redoc` | Public | 200 | ReDoc |
 | GET | `/openapi.json` | Public | 200 | Deployed OpenAPI schema |
 | GET | `/docs/oauth2-redirect` | Public | 200 | Swagger helper redirect, not an authentication API |
+
+Each process exports only what it counts itself. `/metrics` on the API has API latency, rate-limit denials and queue depth. Fetch attempts, blocks, escalation tiers, proxy health and cost, and WARC bytes are counted in the worker, which serves them on its own port: `http://127.0.0.1:9464/metrics` in the Compose stack (`WORKER_METRICS_PORT`). Scrape both.
 
 Usage responses include period records, total requests/bytes, and an estimated service cost, not a provider invoice. Protect public service/docs routes when exposing the application beyond loopback.
 

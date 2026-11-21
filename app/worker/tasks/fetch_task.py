@@ -554,11 +554,13 @@ async def startup(ctx: dict) -> None:
     from app.core.config import settings
     from app.core.db import AsyncSessionLocal
     from app.core.logging_config import configure_logging
+    from app.core.observability import start_worker_metrics_server
     from app.services.proxy_manager import ProxyManager
     from app.services.warc.storage import create_warc_storage
     from app.worker.browser_pool import ChromiumMissingError, browser_pool, verify_chromium
 
     configure_logging(settings.log_level)
+    start_worker_metrics_server(settings)
     ctx["settings"] = settings
     ctx["redis"] = aioredis.from_url(settings.redis_url, decode_responses=False)
     ctx["db_factory"] = AsyncSessionLocal

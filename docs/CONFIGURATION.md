@@ -15,6 +15,7 @@ Adding an arbitrary host `.env` value does not forward it to the API or worker. 
 |---|---|---|
 | `API_PORT` | `8000` | API host-loopback port; container port remains 8000 |
 | `S3_CONSOLE_PORT` | `9001` | S3 console host-loopback port |
+| `WORKER_METRICS_PORT` | `9464` | Worker metrics host-loopback port; container port remains 9464 |
 | `WORKER_MAX_JOBS` | `2` | Maximum concurrent worker jobs |
 | `PROXY_SYNC_ENABLED` | `false` | Allow provider sync; also requires credentials |
 | `WEBSHARE_API_KEY` | Empty | Private Webshare API credential |
@@ -34,6 +35,7 @@ Example: `API_PORT=8001 docker compose -p crawler-current -f docker-compose.yml 
 | `WARC_DLQ_MAX_BYTES` | `5368709120` | 5 GiB, including journal serialization overhead |
 | `PROXY_CHECK_ENABLED` | `true` | Background candidate checker |
 | `BROWSER_POOL_SIZE` | `1` | Chromium pool size, not total browser memory |
+| `WORKER_METRICS_PORT` | `9464` | Worker only: port of its Prometheus endpoint. The Python default is `0`, which starts no endpoint |
 | `REQUIRE_CAMOUFOX` / `SSRF_ENABLED` | `true` / `true` | Browser readiness and URL protection |
 | `ENABLE_CALLBACKS` / `ENABLE_TRACING` | `false` / `false` | Require an explicit reviewed configuration change |
 
