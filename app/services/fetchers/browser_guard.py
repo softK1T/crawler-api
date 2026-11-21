@@ -11,6 +11,7 @@ import os
 from typing import Any
 
 from app.core.url_guard import MAX_BODY_BYTES, BodyTooLarge, URLGuardError, validate_url_async
+from app.services.content_decoder import decode_body
 
 
 async def install_browser_guard(
@@ -54,6 +55,9 @@ async def install_browser_guard(
             if length.isdigit() and int(length) > MAX_BODY_BYTES:
                 raise BodyTooLarge("Browser resource exceeds body limit")
             body = await response.body()
+            if response.headers.get("content-encoding", "").lower() == "zstd":
+                # Firefox asks for zstd, and Playwright's HTTP client returns it undecoded.
+                body, _ = decode_body(body, "zstd")
             if len(body) > MAX_BODY_BYTES:
                 raise BodyTooLarge("Browser resource exceeds body limit")
             await route.fulfill(response=response, body=body)
