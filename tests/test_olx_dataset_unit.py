@@ -1,5 +1,8 @@
 """Offline tests for how OLX listing pages become one deduplicated dataset."""
 
+import csv
+import io
+import json
 import unittest
 from typing import Any
 
@@ -56,6 +59,43 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(
             ([row.listing_id for row in rows], seen, stopped),
             ([1], 1, "page 2: no listing data on the page"),
+        )
+
+
+class OutputTests(unittest.TestCase):
+    def test_quality_report_counts_repeats_and_empty_fields(self) -> None:
+        free = _ad(id=2, price={"free": True, "exchange": False, "regularPrice": None})
+        swap = _ad(id=3, price={"free": False, "exchange": True, "regularPrice": None})
+        site = _Site([_ad(id=1), _ad(id=1), free, swap, _ad(id=4, price=None, params=[])])
+        rows, seen, _ = olx_dataset.collect(site, URL, 1)
+        self.assertEqual(
+            olx_dataset.quality(rows, seen),
+            "ads seen 5, unique 4, repeats dropped 1\n"
+            "price: empty in 3 of 4 (75%)\n"
+            "currency: empty in 3 of 4 (75%)\n"
+            "negotiable: empty in 3 of 4 (75%)\n"
+            "condition: empty in 1 of 4 (25%)\n"
+            "without a price: free 1, exchange 1, not given 1",
+        )
+
+    def test_rows_are_written_as_json_lines_or_csv(self) -> None:
+        rows, _, _ = olx_dataset.collect(_Site([_ad(id=1), _ad(id=2, price=None)]), URL, 1)
+        lines, table = io.StringIO(), io.StringIO()
+        olx_dataset.write(rows, lines, as_csv=False)
+        olx_dataset.write(rows, table, as_csv=True)
+        self.assertEqual(
+            [
+                (row["listing_id"], row["price"], row["city"])
+                for row in map(json.loads, lines.getvalue().splitlines())
+            ],
+            [(1, "750", "Łódź"), (2, None, "Łódź")],
+        )
+        self.assertEqual(
+            [
+                (row["listing_id"], row["price"], row["city"])
+                for row in csv.DictReader(table.getvalue().splitlines())
+            ],
+            [("1", "750", "Łódź"), ("2", "", "Łódź")],
         )
 
 
