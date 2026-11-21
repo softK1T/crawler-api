@@ -36,6 +36,15 @@ async def test_domain_layer_429_has_retry_after(limiter):
     assert result["layer"] == "domain"
 
 
+async def test_domain_rate_below_one_a_second_is_enforced(limiter):
+    domain = "slow-domain.example.com"
+    assert (await limiter.check_domain(domain, rps=0.2))["allowed"] is True
+    await asyncio.sleep(1.1)
+    result = await limiter.check_domain(domain, rps=0.2)
+    assert result["allowed"] is False
+    assert result["retry_after_s"] > 1
+
+
 async def test_proxy_layer_skipped_when_none(limiter):
     result = await limiter.check_all(
         api_key_prefix="test",

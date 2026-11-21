@@ -55,7 +55,7 @@ The architecture page says what the parts are. This page says why they are built
 
 ## Rate limits
 
-- **Decision.** Sliding windows in Redis sorted sets, each check one atomic Lua script: per key over 60 seconds, per application over 30 days, per target domain over 1 second. A denial is a 429 with `Retry-After`. If Redis fails, the limiter lets the request through.
+- **Decision.** Sliding windows in Redis sorted sets, each check one atomic Lua script: per key over 60 seconds, per application over 30 days, per target domain over 1 second, or over a longer window when the policy rate is below 1 request a second. A denial is a 429 with `Retry-After`. If Redis fails, the limiter lets the request through.
 - **Why.** Limits must hold across API processes and allow no burst at a window boundary. A broken limiter should not stop fetching.
 - **Turned down.** Token bucket and fixed-window counters.
 - **Limit.** The domain limit comes from the domain policy and is 1 request a second without one, so a client that submits faster to one domain must wait and retry.
