@@ -108,6 +108,32 @@ class NativeTransportTests(unittest.TestCase):
             self.assertFalse(native_transport_enabled(True))
 
 
+class InterceptedTransportTests(unittest.TestCase):
+    def test_zstd_response_is_decoded_before_it_reaches_the_page(self) -> None:
+        import zstandard
+
+        from app.services.fetchers import browser_guard
+
+        response = mock.Mock()
+        response.headers = {"content-encoding": "zstd"}
+        response.body = mock.AsyncMock(
+            return_value=zstandard.ZstdCompressor().compress(REAL.encode())
+        )
+        response.dispose = mock.AsyncMock()
+        route = _route()
+        route.fetch.return_value = response
+        route.fulfill = mock.AsyncMock()
+
+        async def scenario() -> None:
+            context = _FakeContext()
+            with mock.patch.object(browser_guard, "validate_url_async", mock.AsyncMock()):
+                await browser_guard.install_browser_guard(context)
+                await context.handlers[0](route)
+
+        asyncio.run(scenario())
+        route.fulfill.assert_awaited_once_with(response=response, body=REAL.encode())
+
+
 class ChallengeWaitTests(unittest.TestCase):
     def test_only_self_resolving_challenges_count_as_pending(self) -> None:
         from app.services.fetchers.challenge import challenge_pending
