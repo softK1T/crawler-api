@@ -91,6 +91,7 @@ async def create_fetch(
         application_id=api_key.application_id,
         domain=str(body.url),
         proxy_id=None,
+        key_rpm=settings.key_rate_limit_rpm,
         domain_rps=_domain_rps,
         monthly_quota=settings.default_monthly_quota,
     )

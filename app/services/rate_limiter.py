@@ -177,6 +177,7 @@ class RateLimiter:
         application_id: UUID,
         domain: str,
         proxy_id: UUID | None,
+        key_rpm: int,
         domain_rps: float,
         monthly_quota: int,
     ) -> RateLimitResult:
@@ -186,7 +187,7 @@ class RateLimiter:
         *proxy_id* is optional — if ``None``, L4 is skipped.
         """
         layers = [
-            self.check_key(api_key_prefix, limit=60),  # per-key RPM from config
+            self.check_key(api_key_prefix, limit=key_rpm),
             self.check_application(application_id, monthly_quota),
         ]
         results = await asyncio.gather(*layers)
