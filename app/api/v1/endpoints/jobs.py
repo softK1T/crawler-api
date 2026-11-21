@@ -95,6 +95,7 @@ async def create_fetch(
         monthly_quota=settings.default_monthly_quota,
     )
     if not result["allowed"]:
+        RATE_LIMIT_HITS_TOTAL.labels(layer=result["layer"]).inc()
         raise HTTPException(
             status_code=429,
             detail={
@@ -105,7 +106,6 @@ async def create_fetch(
             },
             headers={"Retry-After": str(math.ceil(result["retry_after_s"]))},
         )
-        RATE_LIMIT_HITS_TOTAL.labels(layer=result["layer"]).inc()
 
     # 3. Idempotency.
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
