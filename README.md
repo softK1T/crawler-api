@@ -107,7 +107,7 @@ The [usage guide](docs/USER_GUIDE.md) explains each step.
 
 ## Important boundaries
 
-WARC/local S3 are enabled. Provider sync, premium proxy tiers, callbacks, and tracing are disabled by default. Fetch completion is not a guarantee of valid target content. Archive access and administration are not isolated by application; grant these scopes only to trusted operators. This loopback stack is not a completed public-production security audit.
+WARC/local S3 are enabled. Provider sync, premium proxy tiers, and callbacks are disabled by default. Fetch completion is not a guarantee of valid target content. Archive access and administration are not isolated by application; grant these scopes only to trusted operators. This loopback stack is not a completed public-production security audit.
 
 All project documentation, code comments, user-facing messages, and commit messages must be written in English.
 

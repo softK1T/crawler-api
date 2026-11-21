@@ -145,7 +145,6 @@ async def app(_postgres_dsn: str, _redis_url: str) -> AsyncGenerator:
     settings.callback_hmac_secret = "test-secret"
     settings.enable_callbacks = True
     settings.enable_metrics = False
-    settings.enable_tracing = False
     settings.s3_access_key = ""
 
     from app.main import app

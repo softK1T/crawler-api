@@ -37,7 +37,7 @@ Example: `API_PORT=8001 docker compose -p crawler-current -f docker-compose.yml 
 | `BROWSER_POOL_SIZE` | `1` | Chromium pool size, not total browser memory |
 | `WORKER_METRICS_PORT` | `9464` | Worker only: port of its Prometheus endpoint. The Python default is `0`, which starts no endpoint |
 | `REQUIRE_CAMOUFOX` / `SSRF_ENABLED` | `true` / `true` | Browser readiness and URL protection |
-| `ENABLE_CALLBACKS` / `ENABLE_TRACING` | `false` / `false` | Require an explicit reviewed configuration change |
+| `ENABLE_CALLBACKS` | `false` | Requires an explicit reviewed configuration change |
 
 These values are not all host-overridable. Change the Compose environment deliberately if needed, preserving service volumes, credentials, and dependency order. Runtime-wide Python defaults live in `app/core/config.py`; candidate-checker settings live in `app/core/proxy_check_config.py`. A defined setting or request field is not proof every engine uses it.
 
@@ -46,7 +46,7 @@ These values are not all host-overridable. Change the Compose environment delibe
 - Single-job and batch results are temporary Redis data; the default job-result TTL is 86400 seconds.
 - Batch admission defaults to 20 URLs; its request schema caps the list at 100.
 - Callbacks additionally need `CALLBACK_HMAC_SECRET` and separate delivery/egress validation.
-- Tracing needs a configured OTLP destination. Provider sync requires private credentials and explicit enablement.
+- Provider sync requires private credentials and explicit enablement.
 - Current WARC writes use one response per object. Legacy rotation-size/age flags do not control this writer.
 
 [Archival contract and backups](LOCAL-S3.md) · [Security](SECURITY.md)
