@@ -1,9 +1,9 @@
 """Camoufox-based fetcher — Firefox with humanized behaviour.
 
 Camoufox uses Firefox (not Chromium) and cannot share the existing
-BrowserPool which wraps a Playwright Chromium instance.  Per the ADR,
+BrowserPool which wraps a Playwright Chromium instance.  Instead
 we use per-request browser lifecycle with a module-level asyncio.Semaphore
-to cap concurrency.  See docs/decisions/ADR-020-camoufox-packaging.md.
+to cap concurrency.  See "Browser engines" in docs/DESIGN.md.
 
 Import is intentionally lazy so the base image (without [browser] extras)
 imports cleanly.

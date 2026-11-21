@@ -31,4 +31,4 @@ The four modes select HTTPX, curl_cffi, Playwright, or Camoufox, subject to doma
 
 Job/batch reads check application ownership. Archive queries currently do not filter by application. Do not infer tenant isolation from the existence of tenant/application records. See [security boundaries](SECURITY.md).
 
-The service retrieves pages; shop-specific extraction, scheduling, and site-login orchestration are not provided by the tenant-compatible `/projects/` routes. [ADRs](decisions/) describe design history and may predate current code.
+The service retrieves pages; shop-specific extraction, scheduling, and site-login orchestration are not provided by the tenant-compatible `/projects/` routes. [Design decisions](DESIGN.md) gives the reasons behind the current design.

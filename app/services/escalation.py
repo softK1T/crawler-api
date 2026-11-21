@@ -4,7 +4,7 @@ The ladder defines an ordered sequence of (engine, proxy_type, use_proxy)
 tiers from cheapest to most expensive.  The retry loop in fetch_with_retry
 walks up the ladder when a block reason is in ESCALATABLE.
 
-Design decisions — see docs/decisions/ADR-019-escalation-ladder.md.
+Design decisions: see "The escalation ladder" in docs/DESIGN.md.
 """
 
 from __future__ import annotations
