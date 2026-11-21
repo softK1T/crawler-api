@@ -1,4 +1,4 @@
-"""Prometheus metrics and OpenTelemetry tracing bootstrap.
+"""Prometheus metrics.
 
 Module-level singletons are safe because they are instantiated at import time
 before any request is served.  The GIL protects registry registration.
@@ -103,55 +103,6 @@ def _update_dedup_ratio() -> None:
         DEDUP_RATIO.set(_revisit_records / _total_records)
     else:
         DEDUP_RATIO.set(0.0)
-
-
-# ── Tracing bootstrap ────────────────────────────────────────────────────────
-
-
-def setup_tracing(settings) -> None:
-    """Initialize OpenTelemetry with OTLP or console exporter."""
-    if not settings.enable_tracing:
-        return
-    from opentelemetry import trace
-    from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-    resource = Resource.create(
-        {SERVICE_NAME: settings.service_name, SERVICE_VERSION: settings.service_version}
-    )
-
-    from opentelemetry.sdk.trace.export import SpanExporter
-
-    exporter: SpanExporter
-    if settings.otlp_endpoint:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-        exporter = OTLPSpanExporter(endpoint=settings.otlp_endpoint)
-    else:
-        from opentelemetry.sdk.trace.export import ConsoleSpanExporter
-
-        exporter = ConsoleSpanExporter()
-
-    provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
-
-    # Instrument FastAPI and httpx.
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        from opentelemetry.instrumentation.httpx import HTTPXInstrumentor
-
-        FastAPIInstrumentor().instrument()
-        HTTPXInstrumentor().instrument()
-    except Exception:
-        logger.warning("OTel instrumentation failed", exc_info=True)
-
-
-def get_tracer(name: str = "crawler-api"):
-    from opentelemetry import trace
-
-    return trace.get_tracer(name)
 
 
 # ── Metrics helpers ───────────────────────────────────────────────────────────

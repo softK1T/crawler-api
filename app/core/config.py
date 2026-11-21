@@ -107,10 +107,6 @@ class Settings(BaseSettings):
 
     # Observability
     enable_metrics: bool = True
-    enable_tracing: bool = True
-    otlp_endpoint: str = ""
-    service_name: str = "crawler-api"
-    service_version: str = "0.1.0"
     metrics_path: str = "/metrics"
 
     @property

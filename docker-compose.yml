@@ -16,7 +16,6 @@ x-app-env: &app-env
   WARC_DLQ_DIR: /var/lib/crawler/warc-spool
   WARC_DLQ_MAX_BYTES: "5368709120"
   ENABLE_CALLBACKS: "false"
-  ENABLE_TRACING: "false"
   ENABLE_PREMIUM_PROXY_TIERS: "${ENABLE_PREMIUM_PROXY_TIERS:-false}"
   PREMIUM_PROXY_DOMAINS: "${PREMIUM_PROXY_DOMAINS:-}"
   # A blocked site can take two attempts on each of three engines, browsers included.

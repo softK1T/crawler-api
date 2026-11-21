@@ -55,16 +55,7 @@ async def create_fetch(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
-    # Resolve trace_id from correlation ID or OTel span.
     trace_id = req.headers.get("X-Correlation-ID")
-    try:
-        from opentelemetry import trace
-
-        span = trace.get_current_span()
-        if span and span.get_span_context().is_valid:
-            trace_id = format(span.get_span_context().trace_id, "032x")
-    except Exception:
-        pass
 
     bind_context(trace_id=trace_id, application_id=str(api_key.application_id))
 

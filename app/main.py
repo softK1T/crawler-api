@@ -10,7 +10,6 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import CrawlerAPIError
 from app.core.logging_config import configure_logging
-from app.core.observability import setup_tracing
 from app.middleware.correlation_id import CorrelationIdMiddleware
 
 # Configured at import time so startup logs are already structured.
@@ -21,8 +20,6 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    setup_tracing(settings)
-
     await _init_services(app)
 
     try:
