@@ -16,9 +16,11 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),  # loopback
     ipaddress.ip_network("::1/128"),  # IPv6 loopback
     ipaddress.ip_network("169.254.0.0/16"),  # link-local (AWS/GCP/Azure metadata)
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
     ipaddress.ip_network("fd00::/8"),  # IPv6 unique local
     ipaddress.ip_network("fc00::/7"),  # IPv6 unique local
     ipaddress.ip_network("0.0.0.0/8"),  # "This" network
+    ipaddress.ip_network("::/128"),  # IPv6 unspecified
     ipaddress.ip_network("100.64.0.0/10"),  # Shared address space (CGN)
     ipaddress.ip_network("192.0.2.0/24"),  # TEST-NET-1
     ipaddress.ip_network("198.51.100.0/24"),  # TEST-NET-2
@@ -51,6 +53,10 @@ def _is_ip_blocked(ip_str: str) -> bool:
 
     if ip_str in _METADATA_IPS:
         return True
+
+    # An IPv4-mapped address is checked as the IPv4 address it carries.
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
 
     for network in _BLOCKED_NETWORKS:
         if addr in network:
