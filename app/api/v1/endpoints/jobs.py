@@ -38,7 +38,25 @@ async def create_fetch(
 ):
     """Submit a fetch job via arq. Supports Idempotency-Key and sync mode."""
     started = time.perf_counter()
+    try:
+        response = await _create_fetch(body, req, api_key, db)
+    except Exception as exc:
+        _observe_latency(started, getattr(exc, "status_code", 500))
+        raise
+    _observe_latency(started, response.status_code)
+    return response
 
+
+def _observe_latency(started: float, status_code: int) -> None:
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    REQUEST_LATENCY_MS.labels(
+        component="api", endpoint="/v1/fetch", method="POST", status_code=str(status_code)
+    ).observe(elapsed_ms)
+
+
+async def _create_fetch(
+    body: JobCreate, req: Request, api_key: ApiKey, db: AsyncSession
+) -> JSONResponse:
     if body.callback_url and not settings.enable_callbacks:
         raise HTTPException(status_code=422, detail="Callbacks are disabled")
 
@@ -178,11 +196,6 @@ async def create_fetch(
         )
 
     # 7. Async mode — 202 Accepted.
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
-    REQUEST_LATENCY_MS.labels(
-        component="api", endpoint="/v1/fetch", method="POST", status_code="202"
-    ).observe(elapsed_ms)
-
     return JSONResponse(
         status_code=202,
         content=JobResponse(

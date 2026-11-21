@@ -5,6 +5,7 @@ import json
 import os
 import unittest
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -17,6 +18,61 @@ from prometheus_client import REGISTRY
 
 def _hits(layer: str) -> float:
     return REGISTRY.get_sample_value("crawler_rate_limit_hits_total", {"layer": layer}) or 0.0
+
+
+def _observed(status_code: str) -> float:
+    labels = {
+        "component": "api",
+        "endpoint": "/v1/fetch",
+        "method": "POST",
+        "status_code": status_code,
+    }
+    return REGISTRY.get_sample_value("crawler_request_latency_ms_count", labels) or 0.0
+
+
+class FetchLatencyMetricTests(unittest.TestCase):
+    def _fetch(self, payload: dict[str, Any], *, allowed: bool = True, replay: bool = False) -> int:
+        from app.api.v1.endpoints.jobs import create_fetch
+        from app.schemas.job import JobCreate, JobResultResponse, JobStatus
+        from app.services.rate_limiter import _allowed, _denied
+
+        verdict = (_allowed if allowed else _denied)(limit=60, count=1, reset_at_ms=0, layer="key")
+        limiter = SimpleNamespace(check_all=mock.AsyncMock(return_value=verdict))
+        req: Any = SimpleNamespace(
+            headers={}, app=SimpleNamespace(state=mock.Mock(rate_limiter=limiter))
+        )
+        api_key: Any = SimpleNamespace(prefix="ck_test", application_id=uuid.uuid4())
+        job_svc = mock.AsyncMock()
+        job_svc.handle_idempotency.return_value = "job-1" if replay else None
+        job_svc.get_status.return_value = JobStatus.COMPLETED
+        job_svc.get_result.return_value = JobResultResponse(
+            job_id="job-1", status=JobStatus.COMPLETED, created_at=datetime.now(UTC)
+        )
+        body = JobCreate.model_validate({"url": "https://www.example.com/", **payload})
+        with (
+            mock.patch(
+                "app.services.policy_resolver.resolve_policy", mock.AsyncMock(return_value=None)
+            ),
+            mock.patch("app.services.job_service.JobService", return_value=job_svc),
+        ):
+            try:
+                status: int = asyncio.run(create_fetch(body, req, api_key, mock.Mock())).status_code
+            except HTTPException as exc:
+                status = exc.status_code
+        return status
+
+    def test_every_exit_is_observed_once_under_its_status_code(self) -> None:
+        exits: list[tuple[str, int, dict[str, Any], dict[str, bool]]] = [
+            ("completed sync fetch", 200, {"options": {"sync": True}}, {}),
+            ("idempotent replay", 200, {"idempotency_key": "k"}, {"replay": True}),
+            ("accepted async fetch", 202, {}, {}),
+            ("rate limited", 429, {}, {"allowed": False}),
+        ]
+        for name, status_code, payload, limits in exits:
+            with self.subTest(name):
+                before = _observed(str(status_code))
+                self.assertEqual(self._fetch(payload, **limits), status_code)
+                self.assertEqual(_observed(str(status_code)) - before, 1.0)
 
 
 class RateLimitHitsMetricTests(unittest.TestCase):
