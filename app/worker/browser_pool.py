@@ -61,7 +61,7 @@ class BrowserPool:
 
     The browser is created lazily on first use and reconnected if the
     process dies.  Contexts are isolated — no cookies or storage leak
-    between jobs (ADR-014 invariant).
+    between jobs.
     """
 
     def __init__(self, max_concurrent: int = MAX_CONCURRENT_BROWSERS) -> None:

@@ -3,7 +3,7 @@
 Uses structlog with JSONRenderer for consistent single-line JSON output.
 Standard library logging is captured and rendered as JSON via a bridge that
 writes directly to stderr — NOT back through stdlib logging — to avoid the
-infinite recursion described in ADR-013.
+infinite recursion.
 """
 
 import json
@@ -136,7 +136,7 @@ class _StructlogHandler(logging.Handler):
 
     Writes JSON directly to stderr rather than routing through structlog's
     LoggerFactory, which would feed back into the stdlib logging system and
-    cause infinite recursion (ADR-013).
+    cause infinite recursion.
 
     Non-standard attributes passed via ``extra={...}`` are merged into the
     JSON payload (with redaction) — they carry the structured fields needed

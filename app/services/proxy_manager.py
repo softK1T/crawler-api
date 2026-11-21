@@ -2,7 +2,6 @@
 
 Replaces the legacy SmartProxyPool / GeoProxyPool for all Stage 6+ code paths.
 Legacy pools were removed in Stage 14.
-backward compatibility with existing Celery worker tasks.
 """
 
 from __future__ import annotations

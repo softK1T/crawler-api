@@ -49,7 +49,7 @@
 | HTTP 202 after the wait expires | Continue polling; do not assume the job was cancelled |
 | HTTP 200 with `Idempotency-Key-Status: replayed` | Existing application-scoped submission was reused |
 
-Idempotency is implemented through the JSON field, not an arbitrary header. It is not an atomic exactly-once guarantee across enqueueing and side effects. Domain policy can override the requested engine. Do not infer support for arbitrary `headers`, `extract`, `wait_for`, timeout/delay fields, or a request pool selector from legacy schemas.
+Idempotency is implemented through the JSON field, not an arbitrary header. It is not an atomic exactly-once guarantee across enqueueing and side effects. Domain policy can override the requested engine. Do not infer support for arbitrary `headers`, `extract`, timeout/delay fields, or a request pool selector from legacy schemas.
 
 ### Read a result
 

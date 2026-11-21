@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # Comma-separated API keys, e.g. "key1,key2,key3"
-    # Leave empty to disable auth (dev/local only)
     api_keys_raw: str = ""
 
     # CORS allowed origins as comma-separated list, e.g. "http://localhost:3000,https://app.example.com"
@@ -51,7 +50,7 @@ class Settings(BaseSettings):
     max_batch_size: int = Field(default=20, ge=1, le=1000)
     batch_timeout_secs: int = 900
 
-    # Key rotation overlap window in hours (ADR-016 D4).
+    # Key rotation overlap window in hours.
     key_rotation_overlap_hours: int = 24
 
     # Rate limiter defaults

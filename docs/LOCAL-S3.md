@@ -1,7 +1,6 @@
 # Local S3 and WARC
 
-This is the authoritative archival guide for canonical `docker-compose.yml`;
-it supersedes the optional/default-off description in CONFIGURATION.md.
+This is the authoritative archival guide for canonical `docker-compose.yml`.
 
 ## Defaults and security
 
