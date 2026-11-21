@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import SCOPE_FETCH, require_scope
 from app.core.config import settings
 from app.core.db import get_db
+from app.core.observability import RATE_LIMIT_HITS_TOTAL
 from app.models.api_key import ApiKey
 from app.schemas.requests import BatchCrawlRequest
 from app.schemas.responses import BatchResponse, BatchStatusResponse
@@ -54,11 +55,13 @@ async def create_crawl_batch(
         api_key.application_id, settings.default_monthly_quota, cost=len(request.urls)
     )
     if not quota["allowed"]:
+        RATE_LIMIT_HITS_TOTAL.labels(layer=quota["layer"]).inc()
         raise HTTPException(status_code=429, detail="Application quota exceeded")
     admission = await limiter.check_key(
         api_key.prefix, limit=settings.key_rate_limit_rpm, cost=len(request.urls)
     )
     if not admission["allowed"]:
+        RATE_LIMIT_HITS_TOTAL.labels(layer=admission["layer"]).inc()
         raise HTTPException(
             status_code=429,
             detail="Key rate limit exceeded",
@@ -85,6 +88,7 @@ async def create_crawl_batch(
         _rps = float(getattr(_policy, "rate_limit_rps", None) or 1.0)
         result = await rate_limiter.check_domain(domain, rps=_rps)
         if not result["allowed"]:
+            RATE_LIMIT_HITS_TOTAL.labels(layer=result["layer"]).inc()
             raise HTTPException(
                 status_code=429,
                 detail={
