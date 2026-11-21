@@ -27,7 +27,7 @@ WEBSHARE_LIST_URL = "https://proxy.webshare.io/api/v2/proxy/list/"
 
 # Webshare plan.proxy_subtype -> our internal ProxyType (app/models/proxy.py).
 # "isp" is Webshare's name for static residential proxies; we treat it as
-# "residential" for escalation-tier purposes (ADR-019 ladder only knows
+# "residential" for escalation-tier purposes (the ladder only knows
 # datacenter/residential/mobile). If Webshare ever returns a genuine
 # rotating "residential" subtype, it maps 1:1.
 _SUBTYPE_TO_PROXY_TYPE: dict[str, str] = {

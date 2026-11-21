@@ -182,7 +182,7 @@ async def _run_fetch_task(
                     reason=result.block_reason or "unknown",
                 ).inc()
 
-            # 6. Normalize API response body (server-side decompression, ADR-018).
+            # 6. Normalize API response body (server-side decompression).
             from app.services.content_decoder import decode_body, integrity, normalize_headers
 
             raw_for_decode = result.raw_body or result.body

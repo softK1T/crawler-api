@@ -1,6 +1,6 @@
 """Playwright-based fetcher — uses the shared BrowserPool for efficiency.
 
-Fresh browser context per job (ADR-014 invariant).  The pool reuses a
+Fresh browser context per job.  The pool reuses a
 single Chromium process with a semaphore to cap concurrent contexts.
 """
 

@@ -6,7 +6,7 @@ Multi-tenant crawler-as-a-service. Clients: my own scraping pipelines
 ## Stack (FIXED — never add anything else)
 FastAPI, SQLAlchemy 2.x + Alembic, PostgreSQL, Redis, arq, httpx,
 curl_cffi>=0.15, Playwright, warcio, aioboto3, prometheus-client,
-opentelemetry, pytest + testcontainers, Docker Compose.
+pytest + testcontainers, Docker Compose.
 
 ## BANNED
 Kafka, Kubernetes, Celery, Scrapy, GraphQL, microservices, custom ORM,
@@ -24,16 +24,16 @@ any new dependency without justification in the commit body.
   Never leak internal messages to API responses.
 
 ## Layout
-app/api/          routers, dependencies, schemas
+app/api/          routers, dependencies
 app/core/         config, security, exceptions, logging
-app/db/           models, session, repositories
+app/models/       ORM models
+app/schemas/      Pydantic API schemas
 app/services/     business logic (proxy manager, policy resolver, limiter)
-app/fetchers/     engine implementations behind a Protocol
-app/storage/      WARC writer, S3 client, CDXJ index
-app/workers/      arq tasks
+app/services/fetchers/  engine implementations behind a Protocol
+app/services/warc/      WARC journal, S3 upload, index
+app/worker/       arq worker and tasks
 alembic/          migrations
 tests/            unit/, integration/
-docs/decisions/   ADRs
 
 ## Git
 - Conventional commits: `feat(proxy): weighted picker with health scoring`

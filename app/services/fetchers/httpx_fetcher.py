@@ -19,7 +19,7 @@ class HttpxFetcher:
     content-decoder module for API consumers.
 
     A new client is created per-fetch — connection pool sharing is
-    sacrificed for proxy isolation between requests (see ADR-007).
+    sacrificed for proxy isolation between requests.
     """
 
     async def fetch(
@@ -67,7 +67,7 @@ class HttpxFetcher:
                     raise guard_fetch_error(exc) from exc
 
                 # Stream to capture raw transport bytes before httpx
-                # applies content decoding (ADR-018).
+                # applies content decoding.
                 async with client.stream(
                     "GET",
                     current_url,
