@@ -1,0 +1,15 @@
+# One target per line: URL, a space, then marker text that only the real page contains.
+# All targets are public practice sites built for testing fetchers.
+
+# Server-rendered HTML
+https://books.toscrape.com/ product_pod
+https://quotes.toscrape.com/ class="quote"
+https://www.scrapingcourse.com/ecommerce/ woocommerce-loop-product__title
+
+# Content that exists only after JavaScript runs
+https://quotes.toscrape.com/js/ class="quote"
+https://www.scrapingcourse.com/javascript-rendering Chaz Kangeroo Hoodie
+
+# Anti-bot challenges; the marker is the text each page shows once the challenge is passed
+https://www.scrapingcourse.com/antibot-challenge You bypassed the Antibot challenge
+https://www.scrapingcourse.com/cloudflare-challenge You bypassed the Cloudflare challenge
