@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import SCOPE_FETCH, require_scope
 from app.core.config import settings
 from app.core.db import get_db
-from app.core.ssrf_guard import validate_url_against_ssrf
 from app.models.api_key import ApiKey
 from app.schemas.requests import BatchCrawlRequest
 from app.schemas.responses import BatchResponse, BatchStatusResponse
@@ -68,8 +67,13 @@ async def create_crawl_batch(
 
     # SSRF validation.
     if settings.ssrf_enabled:
+        from app.core.url_guard import URLGuardError, validate_url_async
+
         for url in request.urls:
-            validate_url_against_ssrf(str(url))
+            try:
+                await validate_url_async(str(url))
+            except URLGuardError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
 
     # Domain-level rate limiting: charge once per unique domain in the batch.
     rate_limiter = req.app.state.rate_limiter
