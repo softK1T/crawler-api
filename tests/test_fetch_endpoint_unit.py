@@ -134,3 +134,34 @@ class SharedRedisClientTests(unittest.TestCase):
         from_url.assert_not_called()
         job_id = json.loads(response.body)["job_id"]
         self.assertEqual(shared.set.await_args.args[0], f"job:{job_id}:status")
+
+    def test_job_poll_reads_through_the_app_client(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from app.api.v1.dependencies import resolve_api_key
+        from app.api.v1.endpoints import jobs
+        from app.schemas.job import JobResultResponse, JobStatus
+        from app.services.job_service import JobService
+
+        app = FastAPI()
+        app.include_router(jobs.router)
+        app.state.redis = shared = mock.AsyncMock()
+        app.dependency_overrides[resolve_api_key] = lambda: SimpleNamespace(
+            application_id=uuid.uuid4()
+        )
+        job_svc = mock.AsyncMock(spec=JobService)
+        job_svc.get_result.return_value = JobResultResponse(
+            job_id="job-1", status=JobStatus.PENDING, created_at=datetime.now(UTC)
+        )
+
+        with (
+            mock.patch("app.services.job_service.JobService", return_value=job_svc) as service,
+            mock.patch("redis.asyncio.from_url", return_value=mock.AsyncMock()) as from_url,
+        ):
+            response = TestClient(app).get("/v1/jobs/job-1")
+
+        self.assertEqual(response.status_code, 200)
+        from_url.assert_not_called()
+        service.assert_called_once_with(shared)
+        shared.aclose.assert_not_awaited()

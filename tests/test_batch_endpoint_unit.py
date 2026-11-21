@@ -74,3 +74,33 @@ class BatchQuotaChargedLastTests(unittest.TestCase):
                 limiter = _limiter(layer)
                 _rejected_batch(limiter)
                 limiter.check_application.assert_not_awaited()
+
+
+class BatchPollSharedRedisTests(unittest.TestCase):
+    def test_batch_polls_read_through_the_app_client(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from app.api.v1.dependencies import SCOPE_FETCH, resolve_api_key
+        from app.api.v1.endpoints import batches
+
+        app = FastAPI()
+        app.include_router(batches.router)
+        app.state.redis = shared = mock.AsyncMock()
+        api_key = SimpleNamespace(application_id=uuid.uuid4(), scopes=[SCOPE_FETCH])
+        app.dependency_overrides[resolve_api_key] = lambda: api_key
+        found = {"batch_id": "b-1", "total": 0, "completed": 0, "progress": 0.0, "jobs": []}
+
+        for name in ("status", "results"):
+            with (
+                self.subTest(name),
+                mock.patch.object(
+                    batches.BatchService, f"get_batch_{name}", mock.AsyncMock(return_value=found)
+                ) as service,
+                mock.patch("redis.asyncio.from_url", return_value=mock.AsyncMock()) as from_url,
+            ):
+                response = TestClient(app).get(f"/batches/b-1/{name}")
+                self.assertEqual(response.status_code, 200)
+                from_url.assert_not_called()
+                service.assert_awaited_once_with("b-1", shared, api_key.application_id)
+                shared.aclose.assert_not_awaited()
