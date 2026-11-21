@@ -51,16 +51,6 @@ async def create_crawl_batch(
 
     # Each URL consumes per-key admission, not just one token per batch.
     limiter = req.app.state.rate_limiter
-    quota = await limiter.check_application(
-        api_key.application_id, settings.default_monthly_quota, cost=len(request.urls)
-    )
-    if not quota["allowed"]:
-        RATE_LIMIT_HITS_TOTAL.labels(layer=quota["layer"]).inc()
-        raise HTTPException(
-            status_code=429,
-            detail="Application quota exceeded",
-            headers={"Retry-After": str(math.ceil(quota["retry_after_s"]))},
-        )
     admission = await limiter.check_key(
         api_key.prefix, limit=settings.key_rate_limit_rpm, cost=len(request.urls)
     )
@@ -103,6 +93,18 @@ async def create_crawl_batch(
                 },
                 headers={"Retry-After": str(math.ceil(result["retry_after_s"]))},
             )
+
+    # The quota is charged last, so a batch rejected above does not use it up.
+    quota = await limiter.check_application(
+        api_key.application_id, settings.default_monthly_quota, cost=len(request.urls)
+    )
+    if not quota["allowed"]:
+        RATE_LIMIT_HITS_TOTAL.labels(layer=quota["layer"]).inc()
+        raise HTTPException(
+            status_code=429,
+            detail="Application quota exceeded",
+            headers={"Retry-After": str(math.ceil(quota["retry_after_s"]))},
+        )
 
     # Enqueue one real fetch_task per URL via the shared JobService.
     redis_client = req.app.state.redis

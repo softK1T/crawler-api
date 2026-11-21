@@ -1,6 +1,6 @@
 """4-layer sliding-window rate limiter using Redis Lua scripts for atomicity.
 
-Layers (checked in order, returns on first denial):
+Layers (returns on first denial; L2 is charged last):
     L1 — per-API key       (window=60s)     per-key RPS
     L2 — per-application   (window=30 days)  monthly quota
     L3 — per-domain        (window=1s)      global domain politeness
@@ -11,7 +11,6 @@ Each layer uses the same sliding-window Lua script.  Redis down → fail-open
 rate-limiter is unavailable.
 """
 
-import asyncio
 import logging
 import time
 from typing import TypedDict
@@ -181,20 +180,14 @@ class RateLimiter:
         domain_rps: float,
         monthly_quota: int,
     ) -> RateLimitResult:
-        """Run L1→L2→L3→L4 in order.  Return the first layer that denies.
+        """Run L1→L3→L4→L2 in order.  Return the first layer that denies.
 
         If all layers pass, return the L3 (domain) result for X-RateLimit headers.
         *proxy_id* is optional — if ``None``, L4 is skipped.
         """
-        layers = [
-            self.check_key(api_key_prefix, limit=key_rpm),
-            self.check_application(application_id, monthly_quota),
-        ]
-        results = await asyncio.gather(*layers)
-
-        for result in results:
-            if not result["allowed"]:
-                return result
+        key_result = await self.check_key(api_key_prefix, limit=key_rpm)
+        if not key_result["allowed"]:
+            return key_result
 
         # L3: domain (charged inline)
         dom_result = await self.check_domain(domain, domain_rps)
@@ -206,5 +199,10 @@ class RateLimiter:
             proxy_result = await self.check_proxy(proxy_id)
             if not proxy_result["allowed"]:
                 return proxy_result
+
+        # L2: quota, charged only when every other layer allowed the request
+        app_result = await self.check_application(application_id, monthly_quota)
+        if not app_result["allowed"]:
+            return app_result
 
         return dom_result

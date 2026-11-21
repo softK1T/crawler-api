@@ -1,6 +1,7 @@
 """Unit tests for 4-layer rate limiter — Lua semantics and concurrency."""
 
 import asyncio
+from uuid import uuid4
 
 import pytest
 
@@ -46,6 +47,30 @@ async def test_proxy_layer_skipped_when_none(limiter):
         monthly_quota=100_000,
     )
     assert result["allowed"] is True
+
+
+@pytest.mark.parametrize(
+    ("layer", "key_rpm", "domain_rps"), [("key", 1, 100.0), ("domain", 60, 1.0)]
+)
+async def test_rejected_request_does_not_use_monthly_quota(
+    limiter, redis_client, layer, key_rpm, domain_rps
+):
+    app_id = uuid4()
+
+    async def request():
+        return await limiter.check_all(
+            api_key_prefix="quota-last",
+            application_id=app_id,
+            domain="quota-last.example.com",
+            proxy_id=None,
+            key_rpm=key_rpm,
+            domain_rps=domain_rps,
+            monthly_quota=100,
+        )
+
+    assert (await request())["allowed"] is True
+    assert (await request())["layer"] == layer
+    assert await redis_client.zcard(f"rl:app:{app_id}") == 1
 
 
 async def test_redis_unavailable_fail_open():

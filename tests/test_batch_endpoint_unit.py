@@ -18,19 +18,24 @@ def _hits(layer: str) -> float:
     return REGISTRY.get_sample_value("crawler_rate_limit_hits_total", {"layer": layer}) or 0.0
 
 
-def _rejected_batch(layer: str) -> HTTPException:
-    """Submit a batch that the given limiter layer rejects; return the error."""
-    from app.api.v1.endpoints.batches import create_crawl_batch
-    from app.schemas.requests import BatchCrawlRequest
+def _limiter(layer: str) -> SimpleNamespace:
+    """A limiter whose given layer rejects while the others allow."""
     from app.services.rate_limiter import _allowed, _denied
 
     def check(name: str) -> mock.AsyncMock:
         verdict = _denied if name == layer else _allowed
         return mock.AsyncMock(return_value=verdict(limit=1, count=1, reset_at_ms=0, layer=name))
 
-    limiter = SimpleNamespace(
+    return SimpleNamespace(
         check_application=check("app"), check_key=check("key"), check_domain=check("domain")
     )
+
+
+def _rejected_batch(limiter: SimpleNamespace) -> HTTPException:
+    """Submit a batch that the limiter rejects; return the error."""
+    from app.api.v1.endpoints.batches import create_crawl_batch
+    from app.schemas.requests import BatchCrawlRequest
+
     req: Any = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(rate_limiter=limiter)))
     api_key: Any = SimpleNamespace(prefix="ck_test", application_id=uuid.uuid4())
     body = BatchCrawlRequest.model_validate({"urls": ["https://www.example.com/"]})
@@ -50,7 +55,7 @@ class BatchRateLimitHitsTests(unittest.TestCase):
         for layer in ("app", "key", "domain"):
             with self.subTest(layer=layer):
                 before = _hits(layer)
-                self.assertEqual(_rejected_batch(layer).status_code, 429)
+                self.assertEqual(_rejected_batch(_limiter(layer)).status_code, 429)
                 self.assertEqual(_hits(layer) - before, 1.0)
 
 
@@ -58,5 +63,14 @@ class BatchRetryAfterTests(unittest.TestCase):
     def test_rejected_batch_says_when_to_retry(self) -> None:
         for layer in ("app", "key", "domain"):
             with self.subTest(layer=layer):
-                headers = _rejected_batch(layer).headers or {}
+                headers = _rejected_batch(_limiter(layer)).headers or {}
                 self.assertEqual(headers.get("Retry-After"), "1")
+
+
+class BatchQuotaChargedLastTests(unittest.TestCase):
+    def test_rejected_batch_does_not_use_the_quota(self) -> None:
+        for layer in ("key", "domain"):
+            with self.subTest(layer=layer):
+                limiter = _limiter(layer)
+                _rejected_batch(limiter)
+                limiter.check_application.assert_not_awaited()
