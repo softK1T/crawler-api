@@ -6,7 +6,7 @@ Multi-tenant crawler-as-a-service. Clients: my own scraping pipelines
 ## Stack (FIXED — never add anything else)
 FastAPI, SQLAlchemy 2.x + Alembic, PostgreSQL, Redis, arq, httpx,
 curl_cffi>=0.15, Playwright, warcio, aioboto3, prometheus-client,
-opentelemetry, pytest + testcontainers, Docker Compose, Terraform.
+opentelemetry, pytest + testcontainers, Docker Compose.
 
 ## BANNED
 Kafka, Kubernetes, Celery, Scrapy, GraphQL, microservices, custom ORM,
@@ -34,7 +34,6 @@ app/workers/      arq tasks
 alembic/          migrations
 tests/            unit/, integration/
 docs/decisions/   ADRs
-infra/            terraform, docker
 
 ## Git
 - Conventional commits: `feat(proxy): weighted picker with health scoring`
