@@ -79,6 +79,13 @@ class UrlRejectedError(FetchError):
     """The URL guard refused the URL by policy; no retry or other proxy changes that."""
 
 
+class RedirectError(FetchError):
+    """The site answered with a redirect that cannot be followed: a loop or no Location header.
+
+    No retry or other proxy changes that.
+    """
+
+
 def guard_fetch_error(exc: URLGuardError) -> FetchError:
     """Map a URL guard error: a failed DNS lookup stays retryable, the rest is final."""
     kind = FetchError if isinstance(exc, DNSResolutionError) else UrlRejectedError
@@ -674,10 +681,11 @@ async def fetch_with_retry(
             # would decay perfectly healthy proxies on every worker restart.
             raise
 
-        except (WaitForError, UrlRejectedError) as exc:
+        except (WaitForError, UrlRejectedError, RedirectError) as exc:
             # The page loaded without the awaited element: the proxy did its job, and
             # another attempt would spend a full browser timeout on the same page.
             # A URL refused by the guard was never requested, so no proxy is at fault.
+            # A redirect loop or a redirect without Location is the site's own answer.
             outcome = classify_fetch_error(exc)
             error_type = type(exc).__name__
             error_message = str(exc)

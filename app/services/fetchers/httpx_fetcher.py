@@ -6,7 +6,7 @@ import time
 import httpx
 
 from app.services.block_detector import detect_block_reason
-from app.services.fetchers.base import FetchError, FetchResult, guard_fetch_error
+from app.services.fetchers.base import FetchError, FetchResult, RedirectError, guard_fetch_error
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class HttpxFetcher:
                 if status_code in (301, 302, 303, 307, 308) and follow_redirects:
                     location = raw_headers.get("location")
                     if not location:
-                        raise FetchError(f"Redirect ({status_code}) with no Location header")
+                        raise RedirectError(f"Redirect ({status_code}) with no Location header")
                     from urllib.parse import urljoin
 
                     current_url = urljoin(current_url, location)
@@ -132,7 +132,7 @@ class HttpxFetcher:
                 )
 
             # Exhausted redirect budget.
-            raise FetchError(f"Too many redirects from {url}")
+            raise RedirectError(f"Too many redirects from {url}")
 
     async def fetch_with_timeout(self, *args, **kwargs) -> FetchResult:
         try:

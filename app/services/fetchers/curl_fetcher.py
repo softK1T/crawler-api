@@ -11,7 +11,7 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.url_guard import MAX_BODY_BYTES
 from app.services.block_detector import detect_block_reason
-from app.services.fetchers.base import FetchError, FetchResult, guard_fetch_error
+from app.services.fetchers.base import FetchError, FetchResult, RedirectError, guard_fetch_error
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,9 @@ class CurlFetcher:
                 if resp.status_code in (301, 302, 303, 307, 308) and follow_redirects:
                     location = resp.headers.get("location")
                     if not location:
-                        raise FetchError(f"Redirect ({resp.status_code}) with no Location header")
+                        raise RedirectError(
+                            f"Redirect ({resp.status_code}) with no Location header"
+                        )
                     from urllib.parse import urljoin
 
                     current_url = urljoin(current_url, location)
@@ -151,7 +153,7 @@ class CurlFetcher:
                     200 <= resp.status_code < 300,
                 )
 
-            raise FetchError(f"Too many redirects from {url}")
+            raise RedirectError(f"Too many redirects from {url}")
 
         def _sync_fetch() -> tuple:
             """One session per fetch: cookies set on a redirect reach the next hop."""
