@@ -63,6 +63,12 @@ def _check_static(url: str) -> tuple[str, int]:
     if not host:
         raise URLGuardError("Invalid URL: cannot extract hostname.")
 
+    # getaddrinfo encodes the host with this codec and lets its UnicodeError escape.
+    try:
+        host.encode("idna")
+    except UnicodeError:
+        raise URLGuardError(f"Invalid hostname: {host}") from None
+
     if host.lower() in _BLOCKED_HOSTNAMES:
         raise URLGuardError(f"Hostname '{host}' is a known metadata endpoint.")
 
