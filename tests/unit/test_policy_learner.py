@@ -155,13 +155,13 @@ async def test_block_increments_consecutive_blocks():
 
 
 @pytest.mark.asyncio
-async def test_vendor_detected_persists_antibot_type():
+async def test_vendor_detected_on_block_persists_antibot_type():
     row = _make_row(antibot_type=None)
     db = _make_db(row)
 
     with patch("app.services.block_detector.detect_vendor", return_value="cloudflare"):
         await record_outcome(
-            result=_make_result(blocked=False),
+            result=_make_result(blocked=True, status_code=403, block_reason="cloudflare"),
             policy=row,
             db=db,
             engine_used="httpx",

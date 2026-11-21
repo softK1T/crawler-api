@@ -72,3 +72,49 @@ class CloudflareBlockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VendorFloorTests(unittest.TestCase):
+    """Cloudflare marks every response it proxies; only a block teaches the vendor floor."""
+
+    def _learn(self, *, status_code: int, blocked: bool, stored: str | None = None) -> Any:
+        from app.models.domain_policy import DomainPolicy
+        from app.services.fetchers.base import FetchResult
+        from app.services.policy_learner import record_outcome
+
+        row = DomainPolicy(
+            domain="blog.example",
+            escalation_tier=0,
+            tier_locked=False,
+            antibot_type=stored,
+            consecutive_blocks=0,
+        )
+        found = mock.Mock()
+        found.scalar_one_or_none.return_value = row
+        db = mock.AsyncMock()
+        db.execute.return_value = found
+        result = FetchResult(
+            url="https://blog.example/a",
+            status_code=status_code,
+            headers=CLOUDFLARE_HEADERS,
+            blocked=blocked,
+        )
+        asyncio.run(
+            record_outcome(result=result, policy=row, db=db, engine_used="httpx", tier_used=0)
+        )
+        return row
+
+    def test_served_page_leaves_the_vendor_unset_and_the_start_tier_direct(self) -> None:
+        from app.services.escalation import initial_tier
+
+        row = self._learn(status_code=200, blocked=False)
+        self.assertIsNone(row.antibot_type)
+        self.assertEqual(initial_tier(row), 0)
+
+    def test_block_stores_the_vendor(self) -> None:
+        row = self._learn(status_code=403, blocked=True)
+        self.assertEqual(row.antibot_type, "cloudflare")
+
+    def test_served_page_keeps_a_stored_vendor(self) -> None:
+        row = self._learn(status_code=200, blocked=False, stored="cloudflare")
+        self.assertEqual(row.antibot_type, "cloudflare")
