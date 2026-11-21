@@ -10,7 +10,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 from app.services.block_detector import detect_block_reason
-from app.services.fetchers.base import FetchError, FetchResult, WaitForError
+from app.services.fetchers.base import FetchError, FetchResult, WaitForError, guard_fetch_error
 from app.services.fetchers.challenge import NavigationTracker, settle_page, wait_for_selector
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ class PlaywrightFetcher:
         try:
             await validate_url_async(url)
         except URLGuardError as exc:
-            raise FetchError(str(exc), blocked=False) from exc
+            raise guard_fetch_error(exc) from exc
 
         proxy_config = None
         proxy_id = None

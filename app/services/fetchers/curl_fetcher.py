@@ -11,7 +11,7 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.url_guard import MAX_BODY_BYTES
 from app.services.block_detector import detect_block_reason
-from app.services.fetchers.base import FetchError, FetchResult
+from app.services.fetchers.base import FetchError, FetchResult, guard_fetch_error
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class CurlFetcher:
         try:
             validate_url_sync(url)
         except URLGuardError as exc:
-            raise FetchError(str(exc), blocked=False) from exc
+            raise guard_fetch_error(exc) from exc
 
         proxy_url = None
         if proxy is not None:
@@ -167,6 +167,8 @@ class CurlFetcher:
             )
         except FetchError:
             raise
+        except URLGuardError as exc:
+            raise guard_fetch_error(exc) from exc
         except Exception as exc:
             raise FetchError(f"curl_cffi fetch failed: {exc}") from exc
 

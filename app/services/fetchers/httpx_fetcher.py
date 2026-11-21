@@ -6,7 +6,7 @@ import time
 import httpx
 
 from app.services.block_detector import detect_block_reason
-from app.services.fetchers.base import FetchError, FetchResult
+from app.services.fetchers.base import FetchError, FetchResult, guard_fetch_error
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class HttpxFetcher:
         try:
             await validate_url_async(url)
         except URLGuardError as exc:
-            raise FetchError(str(exc), blocked=False) from exc
+            raise guard_fetch_error(exc) from exc
 
         # 2. Build client.
         proxy_url = None
@@ -64,7 +64,7 @@ class HttpxFetcher:
                 try:
                     await validate_url_async(current_url)
                 except URLGuardError as exc:
-                    raise FetchError(str(exc), blocked=False) from exc
+                    raise guard_fetch_error(exc) from exc
 
                 # Stream to capture raw transport bytes before httpx
                 # applies content decoding (ADR-018).
