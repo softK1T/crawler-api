@@ -23,6 +23,8 @@ from app.services.policy_resolver import normalize_domain
 
 router = APIRouter(prefix="")
 
+_OPTION_FIELDS = ("headers", "cookies", "user_agent", "impersonate", "wait_for", "use_policy")
+
 
 # ── New arq-backed fetch ─────────────────────────────────────────────────────
 
@@ -44,7 +46,7 @@ async def create_fetch(
     from app.services.fetchers.request_options import RequestOptions
 
     request_level = dict(body.options)
-    for option_name in ("headers", "cookies", "user_agent", "impersonate", "use_policy"):
+    for option_name in _OPTION_FIELDS:
         option_value = getattr(body, option_name)
         if option_value is not None:
             request_level[option_name] = option_value
@@ -140,7 +142,7 @@ async def create_fetch(
     if body.session_key is not None:
         merged_options["session_key"] = body.session_key
 
-    for option_name in ("headers", "cookies", "user_agent", "impersonate", "use_policy"):
+    for option_name in _OPTION_FIELDS:
         option_value = getattr(body, option_name)
         if option_value is not None:
             merged_options[option_name] = option_value

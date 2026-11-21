@@ -62,9 +62,12 @@ class RequestOptions:
     cookies: Mapping[str, str] = field(default_factory=dict)
     user_agent: str | None = None
     impersonate: str | None = None
+    wait_for: str | None = None
 
     def __bool__(self) -> bool:
-        return bool(self.headers or self.cookies or self.user_agent or self.impersonate)
+        return bool(
+            self.headers or self.cookies or self.user_agent or self.impersonate or self.wait_for
+        )
 
     def __repr__(self) -> str:
         return (
@@ -127,12 +130,24 @@ class RequestOptions:
         ):
             raise ValueError("impersonate must be a curl_cffi browser profile such as chrome124")
 
+        wait_for = options.get("wait_for")
+        if wait_for is not None and (
+            not isinstance(wait_for, str) or not wait_for.strip() or len(wait_for) > 512
+        ):
+            raise ValueError("wait_for must be a CSS selector of at most 512 characters")
+
         total = sum(len(name) + len(value) for name, value in headers.items())
         total += sum(len(name) + len(value) for name, value in cookies.items())
         total += len(user_agent or "")
         if total > MAX_TOTAL_BYTES:
             raise ValueError("request options are too large")
-        return cls(headers=headers, cookies=cookies, user_agent=user_agent, impersonate=impersonate)
+        return cls(
+            headers=headers,
+            cookies=cookies,
+            user_agent=user_agent,
+            impersonate=impersonate,
+            wait_for=wait_for,
+        )
 
     def cookie_header(self) -> str | None:
         if not self.cookies:

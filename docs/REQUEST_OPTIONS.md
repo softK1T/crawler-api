@@ -3,8 +3,8 @@
 ## Request options
 
 `POST /v1/fetch` accepts optional `headers`, `cookies`, `user_agent`,
-`impersonate` and `use_policy`. `POST /batches/` accepts the same keys inside
-`options`.
+`impersonate`, `wait_for` and `use_policy`. `POST /batches/` accepts the same
+keys inside `options`.
 
     {
       "url": "https://www.example.com/",
@@ -30,6 +30,22 @@ A `user_agent` that disagrees with the TLS profile is a detectable
 inconsistency; pair it with a matching `impersonate` value. With `impersonate`
 and no `user_agent`, the pinned Chrome 120 UA is not sent. An `impersonate`
 value the installed curl_cffi does not know fails the job.
+
+## Waiting for content
+
+`wait_for` is a CSS selector of at most 512 characters, for pages that fill in
+their content after load. A browser engine keeps the page open until a matching
+element is in the DOM, visible or not, and only then returns the HTML.
+
+    {"url": "https://www.example.com/", "mode": "browser", "wait_for": ".product-name"}
+
+- The wait shares the 60-second budget of one browser attempt.
+- If nothing matches in time, or the selector is not valid, the job fails with
+  `wait_for failed: ...` after that one attempt: no retry, and the proxy is
+  not penalized.
+- Block pages and responses with status 400 or higher are returned as before,
+  without waiting.
+- httpx and curl_cffi ignore `wait_for`.
 
 ## Safety rules
 

@@ -10,8 +10,8 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 from app.services.block_detector import detect_block_reason
-from app.services.fetchers.base import FetchError, FetchResult
-from app.services.fetchers.challenge import NavigationTracker, settle_page
+from app.services.fetchers.base import FetchError, FetchResult, WaitForError
+from app.services.fetchers.challenge import NavigationTracker, settle_page, wait_for_selector
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,13 @@ class PlaywrightFetcher:
                 check_browser_body(body)
 
                 block_reason = detect_block_reason(status_code, {}, body)
+                # No waiting on a block page or an error status: the element will not appear there.
+                wait_for = request_options.wait_for if request_options else None
+                if wait_for and block_reason is None and status_code < 400:
+                    body = await wait_for_selector(
+                        page, wait_for, budget_s=timeout_s - (time.perf_counter() - start) - 5.0
+                    )
+                    check_browser_body(body)
                 blocked = block_reason is not None
 
                 elapsed_ms = int((time.perf_counter() - start) * 1000)
@@ -152,6 +159,8 @@ class PlaywrightFetcher:
                     raw_headers={},
                 )
 
+        except WaitForError:
+            raise
         except Exception as exc:
             msg = str(exc)
             if "ERR_" in msg or "net::" in msg:
