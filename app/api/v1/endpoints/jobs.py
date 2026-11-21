@@ -159,6 +159,7 @@ async def _create_fetch(
     proxy_pool_id = None
 
     await job_svc.enqueue(
+        arq_pool=req.app.state.arq_pool,
         job_id=job_id,
         url=str(body.url),
         mode=body.mode,

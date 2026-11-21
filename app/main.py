@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
         redis_client = getattr(app.state, "redis", None)
         if redis_client is not None:
             await redis_client.aclose()
+        await app.state.arq_pool.aclose()
 
     # Graceful shutdown.
     try:
@@ -42,6 +43,7 @@ async def _init_services(app: FastAPI) -> None:
     """Initialize services before accepting requests; archive remains opt-in."""
     try:
         import redis.asyncio as aioredis
+        from arq.connections import ArqRedis
 
         from app.core.db import AsyncSessionLocal
         from app.services.proxy_manager import ProxyManager
@@ -50,6 +52,11 @@ async def _init_services(app: FastAPI) -> None:
         redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
         app.state.rate_limiter = RateLimiter(redis_client)
         app.state.redis = redis_client
+        # Built without connecting, like the client above: the API starts while Redis is down.
+        # The 1 s connect timeout is what arq.create_pool applied.
+        app.state.arq_pool = ArqRedis.from_url(
+            settings.arq_redis_url or settings.redis_url, socket_connect_timeout=1
+        )
         app.state.proxy_manager = ProxyManager(
             db_session_factory=AsyncSessionLocal,
             redis_client=redis_client,

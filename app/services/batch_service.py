@@ -35,6 +35,7 @@ class BatchService:
         mode: str,
         api_key,
         redis_client,
+        arq_pool,
         callback_url: str | None = None,
         options: dict | None = None,
     ) -> BatchResponse:
@@ -47,6 +48,7 @@ class BatchService:
             domain = normalize_domain(urlparse(url).hostname or url)
             job_id = str(uuid.uuid4())
             await job_svc.enqueue(
+                arq_pool=arq_pool,
                 job_id=job_id,
                 url=url,
                 mode=mode,

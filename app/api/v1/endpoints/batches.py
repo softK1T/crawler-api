@@ -113,6 +113,7 @@ async def create_crawl_batch(
         mode=request.mode,
         api_key=api_key,
         redis_client=redis_client,
+        arq_pool=req.app.state.arq_pool,
         callback_url=str(request.callback_url) if request.callback_url else None,
         options=request.options,
     )

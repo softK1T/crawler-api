@@ -30,6 +30,7 @@ class JobService:
     async def enqueue(
         self,
         *,
+        arq_pool,
         job_id: str,
         url: str,
         mode: str,
@@ -41,14 +42,6 @@ class JobService:
         trace_id: str | None = None,
     ) -> str:
         """Enqueue a fetch_task via arq and set initial status in Redis."""
-        import arq
-
-        arq_redis = await arq.create_pool(
-            arq.connections.RedisSettings.from_dsn(
-                self._settings.arq_redis_url or self._settings.redis_url
-            )
-        )
-
         now = datetime.now(UTC).isoformat()
         status_data = {
             "status": "pending",
@@ -61,7 +54,7 @@ class JobService:
             ex=self._settings.job_result_ttl_s,
         )
 
-        await arq_redis.enqueue_job(
+        await arq_pool.enqueue_job(
             "fetch_task",
             job_id=job_id,
             url=url,
@@ -79,7 +72,6 @@ class JobService:
             trace_id=trace_id,
             _queue_name="arq:crawler",
         )
-        await arq_redis.aclose()
 
         logger.info(
             "job_enqueued",
