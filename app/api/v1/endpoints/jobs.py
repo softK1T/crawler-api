@@ -71,8 +71,6 @@ async def create_fetch(
     # 1. Domain normalization.
     from urllib.parse import urlparse
 
-    import redis.asyncio as aioredis
-
     from app.services.job_service import JobService
 
     domain = normalize_domain(urlparse(str(body.url)).hostname or str(body.url))
@@ -109,8 +107,7 @@ async def create_fetch(
         )
 
     # 3. Idempotency.
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    job_svc = JobService(redis_client)
+    job_svc = JobService(req.app.state.redis)
 
     if body.idempotency_key:
         existing_job_id = await job_svc.handle_idempotency(
