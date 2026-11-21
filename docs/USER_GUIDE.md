@@ -112,13 +112,13 @@ Drop `--no-proxy` once the proxy pool has healthy proxies; with an empty pool ev
 
 ## 7. Collect an OLX listing
 
-`scripts/olx_dataset.py` walks an OLX category or search page by page in `static` mode and writes one row per ad to stdout as JSON lines. Progress and the totals go to stderr. Rows follow `Listing` in `scripts/olx_parser.py`; seller names, contact details and descriptions are not collected.
+`scripts/olx_dataset.py` walks an OLX category or search page by page in `static` mode and writes one row per ad to stdout: JSON lines, or CSV with `--csv`. Progress and the quality report go to stderr. Rows follow `Listing` in `scripts/olx_parser.py`; seller names, contact details and descriptions are not collected.
 
 ```bash
 docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/olx_dataset.py https://www.olx.pl/elektronika/telefony/ --pages 3 --no-proxy > phones.jsonl
 ```
 
-The totals count the repeats dropped: the same ad shows up in paid slots on several pages, in a paid slot and in the organic list, or twice in the organic list when it shifts between page requests. A page that is blocked, fails or has no listing ends the walk: the rows collected before it are still written and the exit code is 1. OLX serves at most 25 pages for one listing: 40 ads a page plus up to 12 paid slots.
+The report counts the repeats dropped: the same ad shows up in paid slots on several pages, in a paid slot and in the organic list, or twice in the organic list when it shifts between page requests. It then says how often each field is empty and why a price is missing: a free item, an exchange offer, or no price given, as in jobs and services. A page that is blocked, fails or has no listing ends the walk: the rows collected before it are still written and the exit code is 1. OLX serves at most 25 pages for one listing: 40 ads a page plus up to 12 paid slots.
 
 ## Next tasks
 
