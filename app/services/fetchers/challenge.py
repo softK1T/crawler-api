@@ -8,6 +8,8 @@ import re
 import time
 from typing import Any
 
+from app.services.fetchers.base import WaitForError
+
 CHALLENGE_WAIT_S = float(os.getenv("BROWSER_CHALLENGE_WAIT_S", "20"))
 _POLL_MS = 1000
 
@@ -73,4 +75,17 @@ async def settle_page(page: Any, *, budget_s: float) -> bytes:
         await page.wait_for_timeout(_POLL_MS)
     if not body:
         body = (await page.content()).encode("utf-8")
+    return body
+
+
+async def wait_for_selector(page: Any, selector: str, *, budget_s: float) -> bytes:
+    """Return the serialized DOM once *selector* is in it, visible or not."""
+    try:
+        # Playwright reads a timeout of 0 as no limit, so a spent budget still gets a second.
+        timeout_ms = int(max(budget_s, 1.0) * 1000)
+        await page.wait_for_selector(selector, state="attached", timeout=timeout_ms)
+    except Exception as exc:
+        reason = str(exc).partition("\n")[0]
+        raise WaitForError(f"wait_for failed: {reason}") from exc
+    body: bytes = (await page.content()).encode("utf-8")
     return body

@@ -21,7 +21,7 @@ from uuid import UUID
 
 from app.services.block_detector import detect_block_reason
 from app.services.fetchers.base import FetchError, FetchResult
-from app.services.fetchers.challenge import NavigationTracker, settle_page
+from app.services.fetchers.challenge import NavigationTracker, settle_page, wait_for_selector
 from app.services.fetchers.playwright_fetcher import _split_proxy_credentials
 from app.services.fetchers.request_options import current_request_options
 
@@ -185,8 +185,9 @@ class CamoufoxFetcher:
                 context = await browser.new_context(service_workers="block", accept_downloads=False)
                 from app.services.fetchers.browser_guard import prepare_browser_context
 
+                request_options = current_request_options()
                 await prepare_browser_context(
-                    context, current_request_options(), url, native_transport=native
+                    context, request_options, url, native_transport=native
                 )
                 page = await context.new_page()
 
@@ -231,6 +232,13 @@ class CamoufoxFetcher:
                         raw_headers = {}
 
                 block_reason = detect_block_reason(status_code, raw_headers, body)
+                # No waiting on a block page or an error status: the element will not appear there.
+                wait_for = request_options.wait_for if request_options else None
+                if wait_for and block_reason is None and status_code < 400:
+                    body = await wait_for_selector(
+                        page, wait_for, budget_s=timeout_s - (time.perf_counter() - start) - 5.0
+                    )
+                    check_browser_body(body)
                 blocked = block_reason is not None
 
                 elapsed_ms = int((time.perf_counter() - start) * 1000)

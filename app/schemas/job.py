@@ -29,6 +29,8 @@ class JobCreate(BaseModel):
     cookies: dict[str, str] | None = None
     user_agent: str | None = Field(None, min_length=1, max_length=512)
     impersonate: str | None = Field(None, min_length=2, max_length=32)
+    # CSS selector the browser engines wait for before they read the page.
+    wait_for: str | None = Field(None, min_length=1, max_length=512)
     # False skips the domain policy and policy learning for this job only.
     use_policy: bool | None = None
     options: dict[str, Any] = {}

@@ -69,6 +69,10 @@ class FetchError(Exception):
         self.blocked = blocked
 
 
+class WaitForError(FetchError):
+    """The page loaded, but the ``wait_for`` selector was not found on it."""
+
+
 # ── FetcherProtocol ───────────────────────────────────────────────────────────
 
 
@@ -656,6 +660,14 @@ async def fetch_with_retry(
             # Deliberately NO proxy health report: a cancelled attempt carries
             # no signal about the proxy's health — counting it as a timeout
             # would decay perfectly healthy proxies on every worker restart.
+            raise
+
+        except WaitForError as exc:
+            # The page loaded without the awaited element: the proxy did its job, and
+            # another attempt would spend a full browser timeout on the same page.
+            outcome = classify_fetch_error(exc)
+            error_type = type(exc).__name__
+            error_message = str(exc)
             raise
 
         except FetchError as exc:
