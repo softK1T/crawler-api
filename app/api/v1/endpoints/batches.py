@@ -121,15 +121,12 @@ async def create_crawl_batch(
 @router.get("/{batch_id}/status", response_model=BatchStatusResponse)
 async def get_batch_status(
     batch_id: str,
+    req: Request,
     api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
 ):
-    import redis.asyncio as aioredis
-
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    try:
-        result = await BatchService.get_batch_status(batch_id, redis_client, api_key.application_id)
-    finally:
-        await redis_client.aclose()
+    result = await BatchService.get_batch_status(
+        batch_id, req.app.state.redis, api_key.application_id
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Batch not found")
     return result
@@ -138,17 +135,12 @@ async def get_batch_status(
 @router.get("/{batch_id}/results")
 async def get_batch_results(
     batch_id: str,
+    req: Request,
     api_key: ApiKey = Depends(require_scope(SCOPE_FETCH)),
 ):
-    import redis.asyncio as aioredis
-
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    try:
-        results = await BatchService.get_batch_results(
-            batch_id, redis_client, api_key.application_id
-        )
-    finally:
-        await redis_client.aclose()
+    results = await BatchService.get_batch_results(
+        batch_id, req.app.state.redis, api_key.application_id
+    )
     if not results:
         raise HTTPException(status_code=404, detail="Batch not found")
     return results

@@ -218,17 +218,12 @@ async def _create_fetch(
 @router.get("/v1/jobs/{job_id}")
 async def get_job(
     job_id: str,
+    req: Request,
     _api_key: ApiKey = Depends(resolve_api_key),
 ):
     """Get job status and result."""
-    import redis.asyncio as aioredis
-
     from app.services.job_service import JobService
 
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-    job_svc = JobService(redis_client)
-    try:
-        await job_svc.assert_owner(job_id, _api_key.application_id)
-        return await job_svc.get_result(job_id)
-    finally:
-        await redis_client.aclose()
+    job_svc = JobService(req.app.state.redis)
+    await job_svc.assert_owner(job_id, _api_key.application_id)
+    return await job_svc.get_result(job_id)
