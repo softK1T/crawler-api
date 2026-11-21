@@ -24,6 +24,28 @@ class _DenyingRedis:
         return [0, args[2], 0]
 
 
+class DomainRateBelowOneTests(unittest.TestCase):
+    def _assert_window(self, rps: float, window_s: int, limit: int) -> None:
+        from app.services.rate_limiter import RateLimiter
+
+        limiter = RateLimiter(None)
+        with mock.patch.object(limiter, "_check", mock.AsyncMock()) as check:
+            asyncio.run(limiter.check_domain("example.com", rps))
+        check.assert_awaited_once_with(
+            key="rl:dom:example.com", window_s=window_s, limit=limit, layer="domain"
+        )
+
+    def test_rate_below_one_a_second_is_one_request_per_longer_window(self) -> None:
+        for rps, window_s in ((0.5, 2), (0.3, 4), (0.2, 5), (0.1, 10)):
+            with self.subTest(rps=rps):
+                self._assert_window(rps, window_s, 1)
+
+    def test_other_rates_keep_the_one_second_window(self) -> None:
+        for rps, limit in ((-1.0, 1), (0.0, 1), (1.0, 1), (2.9, 2), (100.0, 100)):
+            with self.subTest(rps=rps):
+                self._assert_window(rps, 1, limit)
+
+
 class KeyRateLimitSettingTests(unittest.TestCase):
     def test_fetch_applies_the_configured_per_key_limit(self) -> None:
         from app.api.v1.endpoints.jobs import create_fetch

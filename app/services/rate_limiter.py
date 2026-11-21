@@ -3,7 +3,7 @@
 Layers (returns on first denial; L2 is charged last):
     L1 — per-API key       (window=60s)     per-key RPS
     L2 — per-application   (window=30 days)  monthly quota
-    L3 — per-domain        (window=1s)      global domain politeness
+    L3 — per-domain        (window>=1s)     global domain politeness
     L4 — per-proxy         (window=1s)      per-proxy cooldown
 
 Each layer uses the same sliding-window Lua script.  Redis down → fail-open
@@ -12,6 +12,7 @@ rate-limiter is unavailable.
 """
 
 import logging
+import math
 import time
 from typing import TypedDict
 from uuid import UUID
@@ -157,8 +158,10 @@ class RateLimiter:
 
     async def check_domain(self, domain: str, rps: float) -> RateLimitResult:
         domain_norm = normalize_domain(domain)
+        # The limit cannot go below 1, so a rate below 1 a second widens the window.
+        window_s = math.ceil(1 / rps) if 0 < rps < 1 else 1
         return await self._check(
-            key=f"rl:dom:{domain_norm}", window_s=1, limit=max(1, int(rps)), layer="domain"
+            key=f"rl:dom:{domain_norm}", window_s=window_s, limit=max(1, int(rps)), layer="domain"
         )
 
     async def check_proxy(self, proxy_id: UUID, rps: float = 2.0) -> RateLimitResult:
