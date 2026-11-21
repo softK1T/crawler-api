@@ -114,7 +114,9 @@ class SharedRedisClientTests(unittest.TestCase):
         shared.llen.return_value = 0
         req: Any = SimpleNamespace(
             headers={},
-            app=SimpleNamespace(state=SimpleNamespace(rate_limiter=limiter, redis=shared)),
+            app=SimpleNamespace(
+                state=SimpleNamespace(rate_limiter=limiter, redis=shared, arq_pool=mock.AsyncMock())
+            ),
         )
         api_key: Any = SimpleNamespace(
             id=uuid.uuid4(), prefix="ck_test", application_id=uuid.uuid4()
@@ -125,7 +127,6 @@ class SharedRedisClientTests(unittest.TestCase):
             mock.patch(
                 "app.services.policy_resolver.resolve_policy", mock.AsyncMock(return_value=None)
             ),
-            mock.patch("arq.create_pool", mock.AsyncMock()),
             mock.patch("redis.asyncio.from_url", return_value=mock.AsyncMock()) as from_url,
         ):
             response = asyncio.run(create_fetch(body, req, api_key, mock.Mock()))
