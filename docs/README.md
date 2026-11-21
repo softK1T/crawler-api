@@ -15,7 +15,7 @@
 
 ## Design and maintenance
 
-[Architecture](ARCHITECTURE.md) · [Security boundaries](SECURITY.md) ·
+[Architecture](ARCHITECTURE.md) · [Design decisions](DESIGN.md) · [Security boundaries](SECURITY.md) ·
 [Development](DEVELOPMENT.md) · [CI policy](CI.md)
 
 The guides above describe canonical `docker-compose.yml` on `master`. Read them in this order for a first installation: deployment, usage, API. Commands assume the repository root and Compose project `crawler-current`, unless explicitly stated otherwise.

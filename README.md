@@ -60,4 +60,4 @@ WARC/local S3 are enabled. Provider sync, premium proxy tiers, callbacks, and tr
 
 All project documentation, code comments, user-facing messages, and commit messages must be written in English.
 
-[Documentation index](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Development](docs/DEVELOPMENT.md)
+[Documentation index](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Design decisions](docs/DESIGN.md) · [Development](docs/DEVELOPMENT.md)
