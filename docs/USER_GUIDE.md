@@ -110,6 +110,16 @@ docker compose -p crawler-current -f docker-compose.yml exec -T api python scrip
 
 Drop `--no-proxy` once the proxy pool has healthy proxies; with an empty pool every mode above `static` fails with `PROXY_POOL_EMPTY`. The default run submits 84 jobs to public practice sites under the bootstrap key's rate limits and takes several minutes; `--runs`, `--modes` and `--targets` narrow it. The numbers describe this host and its network at that moment, so quote only a run you made.
 
+## 7. Collect an OLX listing
+
+`scripts/olx_dataset.py` walks an OLX category or search page by page in `static` mode and writes one row per ad to stdout as JSON lines. Progress and the totals go to stderr. Rows follow `Listing` in `scripts/olx_parser.py`; seller names, contact details and descriptions are not collected.
+
+```bash
+docker compose -p crawler-current -f docker-compose.yml exec -T api python scripts/olx_dataset.py https://www.olx.pl/elektronika/telefony/ --pages 3 --no-proxy > phones.jsonl
+```
+
+The totals count the repeats dropped: the same ad shows up in paid slots on several pages, in a paid slot and in the organic list, or twice in the organic list when it shifts between page requests. A page that is blocked, fails or has no listing ends the walk: the rows collected before it are still written and the exit code is 1. OLX serves at most 25 pages for one listing: 40 ads a page plus up to 12 paid slots.
+
 ## Next tasks
 
 - Routing and real proxy acceptance: [Proxy candidates](PROXY_CANDIDATES.md).
