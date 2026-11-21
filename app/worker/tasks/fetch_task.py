@@ -23,6 +23,10 @@ MODE_TO_ENGINE: dict[str, str] = {
     "camoufox": "camoufox",
 }
 
+# Kept back from WORKER_JOB_TIMEOUT_S so the task records its own failure before arq
+# cancels it: browser teardown, the attempt row, then status and usage writes.
+_JOB_DEADLINE_MARGIN_S = 5
+
 
 async def fetch_task(
     ctx: dict,
@@ -143,34 +147,47 @@ async def _run_fetch_task(
 
             set_request_options(RequestOptions.from_options(options) or None)
 
-            result = await fetch_with_retry(
-                fetcher=fetcher,
-                url=url,
-                policy=policy,
-                proxy_manager=ctx.get("proxy_manager"),
-                db=db,
-                sticky_key=job_id,
-                trace_id=job_id,
-                use_proxy=req_use_proxy,
-                proxy_country=req_proxy_country,
-                proxy_city=req_proxy_city,
-                proxy_type=req_proxy_type,
-                session_key=_session_scope(application_id, req_session_key),
-                browser_pool=ctx.get("browser_pool"),
-                # An explicit mode must actually run its engine — otherwise
-                # the ladder starts at tier 0 (httpx) and stealth/browser/
-                # camoufox requests silently degrade to httpx.  Static stays
-                # on the ladder path (tier 0 for an empty policy).
-                requested_engine=engine if engine != "httpx" else None,
-                camoufox_ready=ctx.get("camoufox_ready"),
-                attempt_recorder=_build_attempt_recorder(
-                    ctx["db_factory"],
-                    job_id=job_id,
-                    api_key_id=api_key_uuid,
-                    application_id=application_uuid,
-                    trace_id=trace_id or job_id,
-                ),
-            )
+            try:
+                async with asyncio.timeout(
+                    settings.worker_job_timeout_s
+                    - _JOB_DEADLINE_MARGIN_S
+                    - (time.perf_counter() - started)
+                ) as deadline:
+                    result = await fetch_with_retry(
+                        fetcher=fetcher,
+                        url=url,
+                        policy=policy,
+                        proxy_manager=ctx.get("proxy_manager"),
+                        db=db,
+                        sticky_key=job_id,
+                        trace_id=job_id,
+                        use_proxy=req_use_proxy,
+                        proxy_country=req_proxy_country,
+                        proxy_city=req_proxy_city,
+                        proxy_type=req_proxy_type,
+                        session_key=_session_scope(application_id, req_session_key),
+                        browser_pool=ctx.get("browser_pool"),
+                        # An explicit mode must actually run its engine — otherwise
+                        # the ladder starts at tier 0 (httpx) and stealth/browser/
+                        # camoufox requests silently degrade to httpx.  Static stays
+                        # on the ladder path (tier 0 for an empty policy).
+                        requested_engine=engine if engine != "httpx" else None,
+                        camoufox_ready=ctx.get("camoufox_ready"),
+                        attempt_recorder=_build_attempt_recorder(
+                            ctx["db_factory"],
+                            job_id=job_id,
+                            api_key_id=api_key_uuid,
+                            application_id=application_uuid,
+                            trace_id=trace_id or job_id,
+                        ),
+                    )
+            except TimeoutError as exc:
+                # An engine's own TimeoutError is not the job deadline.
+                if not deadline.expired():
+                    raise
+                raise TimeoutError(
+                    f"Job timed out (limit {settings.worker_job_timeout_s} s)"
+                ) from exc
 
             # 5. Block detection metric.
             if result.blocked:
