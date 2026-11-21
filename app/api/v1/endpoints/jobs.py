@@ -73,6 +73,16 @@ async def _create_fetch(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    if settings.ssrf_enabled:
+        from app.core.url_guard import DNSResolutionError, URLGuardError, validate_url_async
+
+        try:
+            await validate_url_async(str(body.url))
+        except DNSResolutionError:
+            pass  # Not a policy rejection: the worker retries the lookup.
+        except URLGuardError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+
     trace_id = req.headers.get("X-Correlation-ID")
 
     bind_context(trace_id=trace_id, application_id=str(api_key.application_id))
