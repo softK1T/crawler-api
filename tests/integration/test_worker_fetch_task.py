@@ -33,6 +33,7 @@ def _make_ctx(redis_client, db_factory=None):
         "db_factory": db_factory,
         "settings": SimpleNamespace(
             job_result_ttl_s=60,
+            worker_job_timeout_s=120,
             ssrf_enabled=False,
             enable_warc=False,
             enable_callbacks=False,
