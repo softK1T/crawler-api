@@ -131,7 +131,15 @@ class PlaywrightFetcher:
 
                 check_browser_body(body)
 
-                block_reason = detect_block_reason(status_code, {}, body)
+                # Capture response headers for WARC and block detection.
+                raw_headers: dict[str, str] = {}
+                if response is not None:
+                    try:
+                        raw_headers = dict(await response.all_headers())
+                    except Exception:
+                        raw_headers = {}
+
+                block_reason = detect_block_reason(status_code, raw_headers, body)
                 # No waiting on a block page or an error status: the element will not appear there.
                 wait_for = request_options.wait_for if request_options else None
                 if wait_for and block_reason is None and status_code < 400:
@@ -146,7 +154,7 @@ class PlaywrightFetcher:
                 return FetchResult(
                     url=final_url,
                     status_code=status_code,
-                    headers={},
+                    headers=raw_headers,
                     body=body,
                     encoding="utf-8",
                     elapsed_ms=elapsed_ms,
@@ -156,7 +164,7 @@ class PlaywrightFetcher:
                     block_reason=block_reason,
                     retries_used=0,
                     raw_body=body,  # Rendered DOM — no raw transport bytes in browser mode.
-                    raw_headers={},
+                    raw_headers=raw_headers,
                 )
 
         except WaitForError:
