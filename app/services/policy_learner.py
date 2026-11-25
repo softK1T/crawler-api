@@ -59,9 +59,10 @@ async def record_outcome(
 
     Vendor detection
     ----------------
-    detect_vendor() runs on every response (200s included) to update
-    antibot_type in the background.  Only overwrites if a vendor is detected
-    (None does not overwrite a previously learned value).
+    detect_vendor() runs on every response, but antibot_type is written only
+    when the response was a block: Cloudflare marks every response it proxies,
+    and a vendor that served the page at this tier did not need its floor.
+    A stored value is never cleared (no vendor or no block leaves it as is).
 
     tier_locked
     -----------
@@ -96,7 +97,8 @@ async def record_outcome(
         now = datetime.now(UTC)
 
         # ── Vendor detection ─────────────────────────────────────────────────
-        if vendor is not None and row.antibot_type != vendor:
+        # Only a block teaches the vendor: it sets the start tier (ANTIBOT_FLOOR).
+        if result.blocked and vendor is not None and row.antibot_type != vendor:
             logger.info(
                 "policy_learner.vendor_detected",
                 extra={"domain": row.domain, "vendor": vendor, "previous": row.antibot_type},
