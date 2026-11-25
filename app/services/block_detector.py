@@ -92,7 +92,9 @@ def detect_block_reason(
     if any(pattern.search(sample) for pattern in _WAF_PATTERNS):
         return BlockReason.WAF
 
-    if status_code in {401, 403, 407, 451}:
+    # 401 is not here: the URL needs credentials, and no other exit IP has them,
+    # so rotating proxies cannot help. It passes through like a 404.
+    if status_code in {403, 407, 451}:
         return BlockReason.IP_BAN
 
     # Any other non-2xx (404, 500, ...) is a plain HTTP failure of the site,
